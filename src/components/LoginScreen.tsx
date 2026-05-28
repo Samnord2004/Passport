@@ -1,4 +1,4 @@
-import React, { useState, useTransition } from "react";
+import React, { useState, useTransition, useEffect } from "react";
 import { User, UserRole } from "../types";
 import { LogIn, Shield, UserCheck, HardHat, UserPlus, Phone, Building, Fingerprint, ScanFace, Check, AlertCircle, RefreshCw, Key, Smartphone, Monitor } from "lucide-react";
 
@@ -12,14 +12,34 @@ interface LoginScreenProps {
 
 export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, logoUrl, customLogoEnabled }: LoginScreenProps) {
   const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [isResetMode, setIsResetMode] = useState(false);
+  const [isForgotState, setIsForgotState] = useState(true); // true = email input, false = token + password input
+  const [receivedToken, setReceivedToken] = useState("");
+  const [resetEmail, setResetEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [fullname, setFullname] = useState("");
-  const [role, setRole] = useState<UserRole>("owner");
+  const [role, setRole] = useState<UserRole>("specialist"); // Default key role to specialist
   const [phone, setPhone] = useState("");
   const [company, setCompany] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [, startTransition] = useTransition();
+
+  // Check URL parameters for reset flow
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const emailParam = params.get("reset_email");
+    const tokenParam = params.get("reset_token");
+    if (emailParam && tokenParam) {
+      setResetEmail(emailParam);
+      setReceivedToken(tokenParam);
+      setIsResetMode(true);
+      setIsForgotState(false);
+      setSuccess("Код восстановления успешно скан из ссылки! Пожалуйста, задайте новый пароль ниже.");
+    }
+  }, []);
 
   // WebAuthn / Biometrics state variables
   const [isScanning, setIsScanning] = useState(false);
@@ -79,6 +99,11 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
           });
           const verifyJson = await verifyRes.json();
           if (verifyRes.ok && verifyJson.success) {
+            if (verifyJson.accessToken) {
+              localStorage.setItem("accessToken", verifyJson.accessToken);
+              localStorage.setItem("refreshToken", verifyJson.refreshToken);
+              localStorage.setItem("user_session", JSON.stringify(verifyJson.user));
+            }
             setScanState('success');
             await new Promise(r => setTimeout(r, 800));
             setIsScanning(false);
@@ -123,6 +148,11 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
       });
       const authData = await authRes.json();
       if (authRes.ok && authData.success) {
+        if (authData.accessToken) {
+          localStorage.setItem("accessToken", authData.accessToken);
+          localStorage.setItem("refreshToken", authData.refreshToken);
+          localStorage.setItem("user_session", JSON.stringify(authData.user));
+        }
         startTransition(() => {
           onLoginSuccess(authData.user);
         });
@@ -223,11 +253,15 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
     setSuccess(`Готово! Добавили отпечаток пальца и FaceID к аккаунту: ${targetUser.fullname}.`);
   };
 
-  const handleLoginByEmail = async (submitEmail: string) => {
+  const handleLoginByEmail = async (submitEmail: string, submitPassword = password) => {
     setError("");
     setSuccess("");
     if (!submitEmail.trim()) {
       setError("Пожалуйста, введите ваш email.");
+      return;
+    }
+    if (!submitPassword.trim()) {
+      setError("Пожалуйста, введите ваш пароль.");
       return;
     }
 
@@ -235,17 +269,22 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: submitEmail.trim() })
+        body: JSON.stringify({ email: submitEmail.trim(), password: submitPassword.trim() })
       });
       const data = await response.json();
       
       if (response.ok && data.success) {
+        if (data.accessToken) {
+          localStorage.setItem("accessToken", data.accessToken);
+          localStorage.setItem("refreshToken", data.refreshToken);
+          localStorage.setItem("user_session", JSON.stringify(data.user));
+        }
         setSuccess("Вход выполнен успешно!");
         startTransition(() => {
           onLoginSuccess(data.user);
         });
       } else {
-        setError(data.error || "Пользователь с таким email не зарегистрирован.");
+        setError(data.error || "Неверный логин или пароль.");
       }
     } catch (e) {
       setError("Ошибка соединения с сервером при попытке входа.");
@@ -262,6 +301,11 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
       return;
     }
 
+    if (!password.trim() || password.length < 4) {
+      setError("Пароль должен состоять минимум из 4 символов.");
+      return;
+    }
+
     // Simple email validation
     if (!email.includes("@")) {
       setError("Пожалуйста, введите корректный адрес электронной почты.");
@@ -274,7 +318,7 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
         u => u.email.trim().toLowerCase() === email.trim().toLowerCase()
       );
       if (alreadyExists) {
-        setError("Пользователь с таким ईमेल уже существует. Вы можете сразу войти в систему.");
+        setError("Пользователь с таким email уже существует. Вы можете сразу войти в систему.");
         return;
       }
 
@@ -288,6 +332,7 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
           role,
           phone: phone.trim() || undefined,
           company: company.trim() || undefined,
+          password: password.trim()
         })
       });
 
@@ -302,7 +347,7 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
       const authResponse = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: createdUser.email })
+        body: JSON.stringify({ email: createdUser.email, password: password.trim() })
       });
       const authData = await authResponse.json();
 
@@ -316,6 +361,77 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
       }
     } catch (err: any) {
       setError(err.message || "Произошла техническая ошибка на сервере.");
+    }
+  };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setSuccess("");
+
+    if (!resetEmail.trim()) {
+      setError("Укажите ваш зарегистрированный Email.");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: resetEmail.trim() })
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setSuccess(data.message);
+        setIsForgotState(false);
+        if (data.resetLink) {
+          const tokenOnly = data.resetLink.split("reset_token=")[1] || "";
+          setSuccess(`Ссылка для сброса пароля отправлена! Для быстрого тестирования введите полученный код: ${tokenOnly}`);
+        }
+      } else {
+        setError(data.error || "Не удалось отправить письмо со ссылкой.");
+      }
+    } catch (err) {
+      setError("Ошибка сети при отправке письма.");
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setSuccess("");
+
+    if (!resetEmail.trim() || !receivedToken.trim() || !newPassword.trim()) {
+      setError("Все поля обязательны для заполнения.");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: resetEmail.trim(),
+          token: receivedToken.trim(),
+          password: newPassword.trim(),
+          confirmPassword: newPassword.trim()
+        })
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setSuccess("Пароль успешно сброшен! Выполняется автоматический вход...");
+        setEmail(resetEmail);
+        setPassword(newPassword);
+        setIsResetMode(false);
+        setIsForgotState(true);
+        setReceivedToken("");
+        setNewPassword("");
+        await handleLoginByEmail(resetEmail.trim(), newPassword.trim());
+      } else {
+        setError(data.error || "Неверный код сброса или ошибка ввода пароля.");
+      }
+    } catch (err) {
+      setError("Ошибка сети при изменении пароля.");
     }
   };
 
@@ -502,7 +618,7 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
         )}
 
         {/* Regular Login Mode */}
-        {!isRegisterMode ? (
+        {!isRegisterMode && !isResetMode ? (
           <div className="space-y-4">
             <div>
               <label className="block text-[10px] font-black uppercase tracking-wider mb-1 opacity-80">
@@ -513,37 +629,53 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
                 placeholder="ivan@owner.ru"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleLoginByEmail(email)}
+                onKeyDown={(e) => e.key === 'Enter' && handleLoginByEmail(email, password)}
                 className={getInputClasses()}
               />
             </div>
 
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-wider mb-1 opacity-80">
+                Пароль для входа
+              </label>
+              <div className="relative">
+                <input
+                  type="password"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleLoginByEmail(email, password)}
+                  className={`${getInputClasses()} pr-16`}
+                />
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 z-10">
+                  <button
+                    type="button"
+                    title="Войти через TouchID"
+                    onClick={() => handleBiometricLogin(email)}
+                    className="p-1 hover:bg-neutral-500/15 rounded-full text-rose-500 transition-all hover:scale-110 cursor-pointer"
+                  >
+                    <Fingerprint className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Войти через FaceID"
+                    onClick={() => handleBiometricLogin(email)}
+                    className="p-1 hover:bg-neutral-500/15 rounded-full text-sky-500 transition-all hover:scale-110 cursor-pointer"
+                  >
+                    <ScanFace className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <button
-              onClick={() => handleLoginByEmail(email)}
+              onClick={() => handleLoginByEmail(email, password)}
               className={getBtnClasses()}
             >
               Войти в систему ➔
             </button>
 
-            <div className="relative my-3 flex items-center justify-center">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-dashed border-neutral-300/30"></div>
-              </div>
-              <span className={`relative px-3 text-[9px] font-black uppercase tracking-widest text-neutral-400 ${
-                currentTheme === 'modern' ? 'bg-zinc-950' : currentTheme === 'terminal' ? 'bg-black' : currentTheme === 'warm' ? 'bg-[#fdf6e2]' : 'bg-white'
-              }`}>Или беспарольный вход</span>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => handleBiometricLogin()}
-              className="w-full py-2.5 px-3 border border-rose-500/30 hover:bg-rose-500/5 text-rose-500 dark:text-rose-400 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
-            >
-              <Fingerprint className="w-4.5 h-4.5 text-rose-500 animate-pulse" />
-              <span>Войти через TouchID / FaceID / Робот-ключ</span>
-            </button>
-
-            <div className="text-center pt-1">
+            <div className="text-center pt-1 flex flex-col gap-1.5 font-sans">
               <button 
                 onClick={() => {
                   setError("");
@@ -552,6 +684,142 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
                 className="text-xs text-blue-500 hover:underline font-bold"
               >
                 Нет аккаунта? Зарегистрироваться бесплатно
+              </button>
+              <button 
+                onClick={() => {
+                  setError("");
+                  setSuccess("");
+                  setResetEmail(email);
+                  setIsResetMode(true);
+                  setIsForgotState(true);
+                }}
+                className="text-xs text-amber-600 hover:underline font-bold mt-1 block"
+              >
+                Забыли пароль? ➔
+              </button>
+            </div>
+          </div>
+        ) : isResetMode ? (
+          /* Reset Password Mode */
+          <div className="space-y-4">
+            {isForgotState ? (
+              /* Step A: Request password reset link */
+              <form onSubmit={handleForgotPassword} className="space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold text-amber-600 uppercase tracking-wide mb-2">Шаг 1: Заявка на сброс пароля</h3>
+                  <label className="block text-[10px] font-black uppercase tracking-wider mb-1 opacity-80">
+                    Введите ваш зарегистрированный Email
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="ivan@owner.ru"
+                    value={resetEmail}
+                    onChange={(e) => setResetEmail(e.target.value)}
+                    className={getInputClasses()}
+                  />
+                  <p className="text-[10px] opacity-70 mt-1.5 leading-normal">
+                    На указанный Email будет направлена конфиденциальная ссылка с проверочным токеном для безопасного изменения пароля аккаунта.
+                  </p>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setError("");
+                      setSuccess("");
+                      setIsForgotState(false);
+                    }}
+                    className="flex-1 py-2 border border-neutral-350 hover:bg-neutral-100 text-[11px] font-bold rounded"
+                  >
+                    У меня есть код
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] rounded"
+                  >
+                    Выслать ссылку
+                  </button>
+                </div>
+              </form>
+            ) : (
+              /* Step B: Fill the token confirmation and assign the new password */
+              <form onSubmit={handleResetPassword} className="space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold text-emerald-600 uppercase tracking-wide mb-2">Шаг 2: Ввод кода и нового пароля</h3>
+                  <label className="block text-[10px] font-black uppercase tracking-wider mb-1 opacity-80">
+                    Ваш Email
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="ivan@owner.ru"
+                    value={resetEmail}
+                    onChange={(e) => setResetEmail(e.target.value)}
+                    className={getInputClasses()}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-wider mb-1 opacity-80">
+                    Введите Проверочный Код (Токен из письма)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Например: abc123xyz"
+                    value={receivedToken}
+                    onChange={(e) => setReceivedToken(e.target.value)}
+                    className={getInputClasses()}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-wider mb-1 opacity-80">
+                    Придумайте Новый Пароль (не менее 4 симв.)
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Введите новый надежный пароль"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className={getInputClasses()}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsForgotState(true);
+                    }}
+                    className="py-2 border border-neutral-350 hover:bg-neutral-100 text-[11px] font-bold rounded"
+                  >
+                    Назад в Шаг 1
+                  </button>
+                  <button
+                    type="submit"
+                    className="py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] rounded"
+                  >
+                    Сохранить пароль ➔
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <div className="text-center pt-2 font-sans border-t border-dashed border-neutral-300/30 mt-3">
+              <button 
+                type="button"
+                onClick={() => {
+                  setError("");
+                  setSuccess("");
+                  setIsResetMode(false);
+                }}
+                className="text-xs text-blue-500 hover:underline font-bold"
+              >
+                Вернуться к стандартному входу
               </button>
             </div>
           </div>
@@ -586,6 +854,20 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
               />
             </div>
 
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-wider mb-1 opacity-80">
+                Придумайте Пароль * (мин. 4 симв.)
+              </label>
+              <input
+                type="password"
+                required
+                placeholder="Ваш надежный пароль"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className={getInputClasses()}
+              />
+            </div>
+
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-[10px] font-black uppercase tracking-wider mb-1 opacity-80">
@@ -614,43 +896,21 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
               </div>
             </div>
 
-            <div>
-              <label className="block text-[10px] font-black uppercase tracking-wider mb-1 opacity-85">
-                Роль в системе *
-              </label>
-              <div className="grid grid-cols-2 gap-2 mt-1">
-                <button
-                  type="button"
-                  onClick={() => setRole("owner")}
-                  className={`p-2.5 border text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 ${
-                    role === 'owner' 
-                      ? "bg-sky-500/10 border-sky-500 text-sky-600" 
-                      : "bg-white hover:bg-neutral-50 text-neutral-600 border-neutral-200"
-                  }`}
-                >
-                  <UserCheck className="w-4 h-4" />
-                  <span>Собственник</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRole("specialist")}
-                  className={`p-2.5 border text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 ${
-                    role === 'specialist' 
-                      ? "bg-amber-500/10 border-amber-500 text-amber-600" 
-                      : "bg-white hover:bg-neutral-50 text-neutral-600 border-neutral-200"
-                  }`}
-                >
-                  <HardHat className="w-4 h-4" />
-                  <span>Инженер (Специалист)</span>
-                </button>
+            <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-amber-700">
+                <Shield className="w-4 h-4 text-amber-600" />
+                <span>Автономная регистрация специалистов</span>
               </div>
+              <p className="text-[10px] text-amber-800 mt-1 leading-normal">
+                Вы регистрируетесь с ролью <strong>Инженер (Сервисный специалист)</strong>. Создание учетных записей Собственников выполняется исключительно Администратором системы.
+              </p>
             </div>
 
             <button
               type="submit"
               className={getBtnClasses()}
             >
-              Создать профиль и Войти
+              Создать профиль Специалиста и Войти
             </button>
 
             <div className="text-center pt-2">
@@ -673,64 +933,68 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
           <div className="flex items-center justify-between mb-3 text-[10px] font-black uppercase tracking-widest opacity-60">
             <span>Быстрый вход для тестирования</span>
             <span className="text-[9px] text-rose-500 font-semibold flex items-center gap-1">
-              <Fingerprint className="w-3.5 h-3.5" /> Биометрия готова
+               <Fingerprint className="w-3.5 h-3.5" /> Биометрия готова
             </span>
           </div>
 
           <div className="grid grid-cols-1 gap-2">
-            {usersList.slice(0, 5).map((demoUser) => (
-              <div
-                key={demoUser.id}
-                className="flex items-center justify-between p-2.5 rounded-lg border border-neutral-300/20 bg-neutral-100/5 hover:bg-neutral-100/15 text-left transition-all group gap-2"
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEmail(demoUser.email);
-                    handleLoginByEmail(demoUser.email);
-                  }}
-                  className="flex-1 flex items-center gap-2.5 text-left cursor-pointer"
+            {usersList.slice(0, 5).map((demoUser) => {
+              const demoPassword = demoUser.role === 'admin' ? 'admin' : demoUser.role === 'owner' ? 'owner' : 'spec';
+              return (
+                <div
+                  key={demoUser.id}
+                  className="flex items-center justify-between p-2.5 rounded-lg border border-neutral-300/20 bg-neutral-100/5 hover:bg-neutral-100/15 text-left transition-all group gap-2"
                 >
-                  <div className="p-1 rounded bg-neutral-150 group-hover:scale-105 transition-all">
-                    {getRoleIcon(demoUser.role)}
-                  </div>
-                  <div>
-                    <div className="font-bold text-xs text-slate-800 dark:text-slate-200 leading-tight flex items-center gap-1.5">
-                      {demoUser.fullname}
-                      {demoUser.hasBiometrics && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title="Биометрия привязана" />
-                      )}
-                    </div>
-                    <div className="text-[10px] opacity-60 leading-none mt-0.5">{demoUser.email}</div>
-                  </div>
-                </button>
-
-                <div className="flex items-center gap-1.5">
                   <button
                     type="button"
-                    title={demoUser.hasBiometrics ? "Войти по FaceID/TouchID" : "Привязать биометрию и войти"}
                     onClick={() => {
-                      if (demoUser.hasBiometrics) {
-                        handleBiometricLogin(demoUser.email);
-                      } else {
-                        registerBiometricsForUser(demoUser);
-                      }
+                      setEmail(demoUser.email);
+                      setPassword(demoPassword);
+                      handleLoginByEmail(demoUser.email, demoPassword);
                     }}
-                    className={`p-1.5 rounded-md border transition-all flex items-center justify-center gap-1 cursor-pointer hover:scale-105 ${
-                      demoUser.hasBiometrics 
-                        ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/20" 
-                        : "bg-rose-500/10 border-rose-500/30 text-rose-500 hover:bg-rose-500/20"
-                    }`}
+                    className="flex-1 flex items-center gap-2.5 text-left cursor-pointer"
                   >
-                    <Fingerprint className="w-3.5 h-3.5 animate-pulse" />
-                    <span className="text-[8px] font-bold uppercase hidden sm:inline">
-                      {demoUser.hasBiometrics ? "FaceID" : "Связать"}
-                    </span>
+                    <div className="p-1 rounded bg-neutral-150 group-hover:scale-105 transition-all">
+                      {getRoleIcon(demoUser.role)}
+                    </div>
+                    <div>
+                      <div className="font-bold text-xs text-slate-800 dark:text-slate-200 leading-tight flex items-center gap-1.5">
+                        {demoUser.fullname}
+                        {demoUser.hasBiometrics && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title="Биометрия привязана" />
+                        )}
+                      </div>
+                      <div className="text-[10px] opacity-60 leading-none mt-0.5">{demoUser.email} (пароль: {demoPassword})</div>
+                    </div>
                   </button>
-                  {getRoleBadge(demoUser.role)}
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      title={demoUser.hasBiometrics ? "Войти по FaceID/TouchID" : "Привязать биометрию и войти"}
+                      onClick={() => {
+                        if (demoUser.hasBiometrics) {
+                          handleBiometricLogin(demoUser.email);
+                        } else {
+                          registerBiometricsForUser(demoUser);
+                        }
+                      }}
+                      className={`p-1.5 rounded-md border transition-all flex items-center justify-center gap-1 cursor-pointer hover:scale-105 ${
+                        demoUser.hasBiometrics 
+                          ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/20" 
+                          : "bg-rose-500/10 border-rose-500/30 text-rose-500 hover:bg-rose-500/20"
+                      }`}
+                    >
+                      <Fingerprint className="w-3.5 h-3.5 animate-pulse" />
+                      <span className="text-[8px] font-bold uppercase hidden sm:inline">
+                        {demoUser.hasBiometrics ? "FaceID" : "Связать"}
+                      </span>
+                    </button>
+                    {getRoleBadge(demoUser.role)}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

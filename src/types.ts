@@ -14,6 +14,9 @@ export interface User {
   biometricCredentialId?: string;
   biometricPublicKey?: string;
   biometricDeviceName?: string;
+  keySkills?: string;
+  rating?: number;
+  ratingCount?: number;
 }
 
 export interface BuildingObject {
@@ -23,6 +26,7 @@ export interface BuildingObject {
   description: string;
   ownerId?: string; // Links to User.id (owner)
   yandexDiskPath: string; // Folder path on Yandex.Disk
+  allowedSpecialistIds?: string[]; // Allowed specialist IDs
 }
 
 export interface ScheduleItem {
@@ -35,6 +39,8 @@ export interface ScheduleItem {
   responsibleUserId?: string; // Specialist who is responsible
   notes?: string;
   checklistTemplateId: string; // Reference to checklist template
+  commissioningDate?: string | null; // Date of commissioning
+  lastNotificationDate?: string | null; // ISO Date "yyyy-mm-dd" of last sent alert
 }
 
 export type QuestionType = 'boolean' | 'number' | 'text' | 'select' | 'photo';
@@ -75,6 +81,9 @@ export interface CompletedChecklist {
   };
   specialistUserId: string;
   pdfUrl?: string;
+  approvedByOwner?: boolean;
+  ownerRating?: number; // 1-5 stars
+  ownerRatingComment?: string;
 }
 
 export interface NotificationLog {
@@ -93,6 +102,9 @@ export interface SystemSettings {
   reminderDaysBefore: number; // e.g. 3 days notice
   logoUrl?: string; // URL or Base64 of the custom logo
   customLogoEnabled?: boolean; // Whether custom logo is enabled
+  emailBotAddress?: string; // Email of the custom email bot for notifications
+  telegramBotUsername?: string; // Real telegram bot name
+  maxBotUsername?: string; // Real MAX chat bot name
   notificationChannels: {
     admin: { telegram: boolean; max: boolean; vk: boolean; email: boolean };
     owner: { telegram: boolean; max: boolean; vk: boolean; email: boolean };
