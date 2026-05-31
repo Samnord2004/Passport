@@ -17,6 +17,7 @@ export interface User {
   keySkills?: string;
   rating?: number;
   ratingCount?: number;
+  avatarUrl?: string;
 }
 
 export interface BuildingObject {
@@ -26,6 +27,7 @@ export interface BuildingObject {
   description: string;
   ownerId?: string; // Links to User.id (owner)
   yandexDiskPath: string; // Folder path on Yandex.Disk
+  yandexDiskUrl?: string; // Direct Web link to Yandex.Disk folders
   allowedSpecialistIds?: string[]; // Allowed specialist IDs
 }
 
@@ -105,8 +107,30 @@ export interface SystemSettings {
   emailBotAddress?: string; // Email of the custom email bot for notifications
   telegramBotUsername?: string; // Real telegram bot name
   maxBotUsername?: string; // Real MAX chat bot name
+  supportPhone?: string; // Support contact phone number
+  supportEmail?: string; // Support contact email to send feedback to
+  supportTelegram?: string; // Support Telegram username/link
+  supportWhatsapp?: string; // Support WhatsApp number/link
+  supportMax?: string; // Support MAX messenger username/link
   notificationChannels: {
     admin: { telegram: boolean; max: boolean; vk: boolean; email: boolean };
     owner: { telegram: boolean; max: boolean; vk: boolean; email: boolean };
   };
+  appBackgroundType?: 'default' | 'villa' | 'blueprint' | 'custom' | 'sakura';
+  appBackgroundUrl?: string; // Standard URL, Base64 or Unsplash image of custom background
+  cardOpacity?: number; // percentage from 10 to 100
+}
+
+export interface SupportTicket {
+  id: string;
+  timestamp: string;
+  userId: string;
+  userRole: 'specialist' | 'owner' | 'admin' | 'operator';
+  userName: string;
+  userEmail: string;
+  userPhone: string;
+  subject: string;
+  message: string;
+  adminNotes?: string;
+  status: 'new' | 'in_progress' | 'resolved';
 }

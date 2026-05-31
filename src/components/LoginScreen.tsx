@@ -1,6 +1,7 @@
 import React, { useState, useTransition, useEffect } from "react";
 import { User, UserRole } from "../types";
-import { LogIn, Shield, UserCheck, HardHat, UserPlus, Phone, Building, Fingerprint, ScanFace, Check, AlertCircle, RefreshCw, Key, Smartphone, Monitor } from "lucide-react";
+import { LogIn, Shield, UserCheck, HardHat, UserPlus, Phone, Building, Fingerprint, ScanFace, Check, AlertCircle, RefreshCw, Key, Smartphone, Monitor, Scale } from "lucide-react";
+import { LegalDocumentsModal } from "./LegalAgreements";
 
 interface LoginScreenProps {
   onLoginSuccess: (user: User) => void;
@@ -8,9 +9,10 @@ interface LoginScreenProps {
   currentTheme: 'modern' | 'terminal' | 'cleanroom' | 'warm' | 'japanese' | 'crisp_minimal';
   logoUrl?: string;
   customLogoEnabled?: boolean;
+  backgroundType?: string;
 }
 
-export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, logoUrl, customLogoEnabled }: LoginScreenProps) {
+export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, logoUrl, customLogoEnabled, backgroundType }: LoginScreenProps) {
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [isResetMode, setIsResetMode] = useState(false);
   const [isForgotState, setIsForgotState] = useState(true); // true = email input, false = token + password input
@@ -26,6 +28,13 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [, startTransition] = useTransition();
+
+  // Legal agreement checkbox states
+  const [agreeAgreement, setAgreeAgreement] = useState(false);
+  const [agreePrivacy, setAgreePrivacy] = useState(false);
+  const [agreeConsent, setAgreeConsent] = useState(false);
+  const [agreeOffer, setAgreeOffer] = useState(false);
+  const [modalDocType, setModalDocType] = useState<'user_agreement' | 'privacy_policy' | 'data_consent' | 'public_offer' | null>(null);
 
   // Check URL parameters for reset flow
   useEffect(() => {
@@ -301,6 +310,11 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
       return;
     }
 
+    if (!agreeAgreement || !agreePrivacy || !agreeConsent || !agreeOffer) {
+      setError("Вы обязаны ознакомиться и принять все юридические соглашения для регистрации.");
+      return;
+    }
+
     if (!password.trim() || password.length < 4) {
       setError("Пароль должен состоять минимум из 4 символов.");
       return;
@@ -459,20 +473,31 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
 
   // Card classes depending on active theme
   const getCardClasses = () => {
+    const isBgActive = backgroundType && backgroundType !== 'default';
     switch (currentTheme) {
       case 'japanese':
-        return 'bg-white border-2 border-[#d6cfbe] rounded-none p-8 shadow-sm relative after:absolute after:bottom-2 after:right-2 after:w-2 after:h-2 after:bg-[#bc1c24] text-[#2d2d2d]';
+        return isBgActive 
+          ? 'bg-white/90 backdrop-blur-md border-2 border-[#d6cfbe] rounded-none p-8 shadow-sm relative after:absolute after:bottom-2 after:right-2 after:w-2 after:h-2 after:bg-[#bc1c24] text-[#2d2d2d]'
+          : 'bg-white border-2 border-[#d6cfbe] rounded-none p-8 shadow-sm relative after:absolute after:bottom-2 after:right-2 after:w-2 after:h-2 after:bg-[#bc1c24] text-[#2d2d2d]';
       case 'crisp_minimal':
-        return 'bg-white border border-neutral-300 rounded-none p-8 text-neutral-900';
+        return isBgActive 
+          ? 'bg-white/95 backdrop-blur-md border border-neutral-300 rounded-none p-8 text-neutral-900 shadow-xl'
+          : 'bg-white border border-neutral-300 rounded-none p-8 text-neutral-900 shadow-sm';
       case 'modern':
-        return 'bg-zinc-950 border border-zinc-800 rounded-2xl p-8 text-zinc-100 shadow-2xl';
+        return isBgActive 
+          ? 'bg-zinc-950/80 backdrop-blur-md border border-zinc-800 rounded-2xl p-8 text-zinc-100 shadow-2xl shadow-black/45'
+          : 'bg-zinc-950 border border-zinc-800 rounded-2xl p-8 text-zinc-100 shadow-2xl';
       case 'terminal':
-        return 'bg-black border border-green-500 rounded-none p-8 font-mono text-green-400';
+        return 'bg-black/90 border border-green-500 rounded-none p-8 font-mono text-green-400 backdrop-blur-sm';
       case 'warm':
-        return 'bg-[#fdf6e2] border-2 border-amber-900/10 rounded-2xl p-8 text-amber-950';
+        return isBgActive 
+          ? 'bg-[#fdf6e2]/90 backdrop-blur-md border-2 border-amber-900/10 rounded-2xl p-8 text-amber-950 shadow-md'
+          : 'bg-[#fdf6e2] border-2 border-amber-900/10 rounded-2xl p-8 text-amber-950';
       case 'cleanroom':
       default:
-        return 'bg-white border border-slate-200 rounded-3xl p-8 shadow-2xl text-slate-800';
+        return isBgActive 
+          ? 'bg-white/85 backdrop-blur-md border border-slate-200 rounded-3xl p-8 shadow-2xl text-slate-800'
+          : 'bg-white border border-slate-200 rounded-3xl p-8 shadow-2xl text-slate-800';
     }
   };
 
@@ -587,7 +612,7 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
             <img 
               src={logoUrl} 
               alt="Логотип" 
-              className="w-16 h-16 object-contain rounded-xl shadow-md border border-neutral-300 bg-white mb-3"
+              className="w-24 h-24 object-contain rounded-2xl shadow-lg border border-neutral-300 bg-white mb-3"
               referrerPolicy="no-referrer"
             />
           ) : (
@@ -906,6 +931,99 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
               </p>
             </div>
 
+            {/* Блок согласия с юридическими документами */}
+            <div className="space-y-2 px-3 py-2 border rounded-xl bg-slate-50 dark:bg-zinc-950/40 border-neutral-300/15">
+              <span className="text-[9px] font-black uppercase text-zinc-500 block mb-1">
+                Согласие и юридические документы:
+              </span>
+              
+              <div className="space-y-1.5 text-neutral-700 dark:text-neutral-300">
+                <label className="flex items-start gap-2 cursor-pointer text-[11px] select-none">
+                  <input 
+                    type="checkbox" 
+                    required 
+                    checked={agreeAgreement}
+                    onChange={(e) => setAgreeAgreement(e.target.checked)}
+                    className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 text-xs shadow-none border-neutral-300"
+                  />
+                  <span className="leading-tight">
+                    Согласен с{" "}
+                    <button 
+                      type="button" 
+                      onClick={() => setModalDocType('user_agreement')}
+                      className="text-blue-500 hover:underline font-bold inline hover:text-blue-600 dark:text-sky-400"
+                    >
+                      Пользовательским соглашением
+                    </button>{" "}
+                    *
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-2 cursor-pointer text-[11px] select-none">
+                  <input 
+                    type="checkbox" 
+                    required 
+                    checked={agreePrivacy}
+                    onChange={(e) => setAgreePrivacy(e.target.checked)}
+                    className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 text-xs shadow-none border-neutral-300"
+                  />
+                  <span className="leading-tight">
+                    Принимаю{" "}
+                    <button 
+                      type="button" 
+                      onClick={() => setModalDocType('privacy_policy')}
+                      className="text-blue-500 hover:underline font-bold inline hover:text-blue-600 dark:text-sky-400"
+                    >
+                      Политику конфиденциальности
+                    </button>{" "}
+                    *
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-2 cursor-pointer text-[11px] select-none">
+                  <input 
+                    type="checkbox" 
+                    required 
+                    checked={agreeConsent}
+                    onChange={(e) => setAgreeConsent(e.target.checked)}
+                    className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 text-xs shadow-none border-neutral-300"
+                  />
+                  <span className="leading-tight">
+                    Даю{" "}
+                    <button 
+                      type="button" 
+                      onClick={() => setModalDocType('data_consent')}
+                      className="text-blue-500 hover:underline font-bold inline hover:text-blue-600 dark:text-sky-400"
+                    >
+                      Согласие на обработку перс. данных
+                    </button>{" "}
+                    *
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-2 cursor-pointer text-[11px] select-none">
+                  <input 
+                    type="checkbox" 
+                    required 
+                    checked={agreeOffer}
+                    onChange={(e) => setAgreeOffer(e.target.checked)}
+                    className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 text-xs shadow-none border-neutral-300"
+                  />
+                  <span className="leading-tight">
+                    Ознакомлен с{" "}
+                    <button 
+                      type="button" 
+                      onClick={() => setModalDocType('public_offer')}
+                      className="text-blue-500 hover:underline font-bold inline hover:text-blue-600 dark:text-sky-400"
+                    >
+                      Публичной офертой услуг
+                    </button>{" "}
+                    *
+                  </span>
+                </label>
+              </div>
+            </div>
+
             <button
               type="submit"
               className={getBtnClasses()}
@@ -999,6 +1117,13 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
         </div>
 
       </div>
+
+      {modalDocType && (
+        <LegalDocumentsModal 
+          docType={modalDocType} 
+          onClose={() => setModalDocType(null)} 
+        />
+      )}
     </div>
   );
 }

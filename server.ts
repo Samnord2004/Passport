@@ -14,8 +14,10 @@ import {
   ScheduleItem, 
   ChecklistTemplate, 
   CompletedChecklist, 
-  NotificationLog 
+  NotificationLog,
+  SupportTicket
 } from "./src/types";
+import nodemailer from "nodemailer";
 import { notificationQueue } from "./server/notification-service";
 
 import cors from "cors";
@@ -629,13 +631,14 @@ app.put("/api/auth/me", async (req, res) => {
     return res.status(401).json({ error: "Вы не авторизованы" });
   }
 
-  const { fullname, phone, company, telegramChatId, maxChatId, vkUserId, email, oldPassword, newPassword, confirmNewPassword, keySkills } = req.body;
+  const { fullname, phone, company, telegramChatId, maxChatId, vkUserId, email, oldPassword, newPassword, confirmNewPassword, keySkills, avatarUrl } = req.body;
   const payload: any = { fullname, phone, company };
   if (telegramChatId !== undefined) payload.telegramChatId = telegramChatId;
   if (maxChatId !== undefined) payload.maxChatId = maxChatId;
   if (vkUserId !== undefined) payload.vkUserId = vkUserId;
   if (email !== undefined) payload.email = email;
   if (keySkills !== undefined) payload.keySkills = keySkills;
+  if (avatarUrl !== undefined) payload.avatarUrl = avatarUrl;
 
   if (newPassword && newPassword.trim() !== "") {
     if (!oldPassword || oldPassword.trim() === "") {
@@ -805,6 +808,7 @@ app.post("/api/objects", objectValidators, async (req, res) => {
     description: req.body.description || "",
     ownerId: req.body.ownerId || "",
     yandexDiskPath: yPath,
+    yandexDiskUrl: req.body.yandexDiskUrl || "",
     allowedSpecialistIds: req.body.allowedSpecialistIds || []
   };
   await dbStore.addObject(newObj);
@@ -1173,6 +1177,150 @@ app.put("/api/settings", async (req, res) => {
 
 app.get("/api/notifications/logs", async (req, res) => {
   res.json(await dbStore.getNotificationLogs());
+});
+
+
+// ---------------- SUPPORT TICKETS API ----------------
+
+const sendSupportEmail = async (settings: any, ticket: SupportTicket) => {
+  const adminEmail = settings.supportEmail || "support@commercial-passport.ru";
+  const botEmail = settings.emailBotAddress || "notify-bot@commercial-passport.ru";
+  const bodyText = `Новое обращение в техподдержку #${ticket.id}
+
+Отправитель: ${ticket.userName} (${ticket.userRole})
+Email: ${ticket.userEmail}
+Телефон: ${ticket.userPhone || "Не указан"}
+Тема: ${ticket.subject}
+
+Сообщение:
+${ticket.message}
+
+--
+Commercial Passport Support System`;
+
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    console.warn("[Support] SMTP variables are not configured. Emulating dispatch via sandbox logs.");
+    return;
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT) || 465,
+      secure: process.env.SMTP_SECURE === "true" || (Number(process.env.SMTP_PORT) || 465) === 465,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      from: `"${botEmail}" <${process.env.SMTP_USER}>`,
+      to: adminEmail,
+      subject: `[Техподдержка #${ticket.id}] Тема: ${ticket.subject}`,
+      text: bodyText,
+    });
+    console.log(`[Support] Direct email notification sent successfully to ${adminEmail}`);
+  } catch (err: any) {
+    console.error("[Support] Error sending direct support email:", err.message);
+  }
+};
+
+app.post("/api/support/tickets", async (req, res) => {
+  try {
+    const userId = (req.session as any).userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Для отправки обращения необходимо авторизоваться" });
+    }
+    const user = await dbStore.getUserById(userId);
+    if (!user) {
+      return res.status(401).json({ error: "Пользователь не найден" });
+    }
+
+    const { subject, message, contactEmail, contactPhone, contactName } = req.body;
+    if (!subject || !message) {
+      return res.status(400).json({ error: "Тема и сообщение обязательны к заполнению" });
+    }
+
+    const ticketId = "tkt_" + Math.random().toString(36).substring(2, 11);
+    const ticket: SupportTicket = {
+      id: ticketId,
+      timestamp: new Date().toISOString(),
+      userId: user.id,
+      userRole: user.role,
+      userName: contactName || user.fullname,
+      userEmail: contactEmail || user.email,
+      userPhone: contactPhone || user.phone || "",
+      subject,
+      message,
+      status: "new"
+    };
+
+    // Save support ticket
+    await dbStore.addSupportTicket(ticket);
+
+    // Fetch settings for support email destination
+    const settings = await dbStore.getSettings();
+
+    // Send direct SMTP email to administrator email
+    await sendSupportEmail(settings, ticket);
+
+    // Notify administrators internal accounts
+    const allUsers = await dbStore.getUsers();
+    const admins = allUsers.filter(u => u.role === "admin");
+    const adminMessage = `⚠️ [Новая Поддержка #${ticketId}] От ${ticket.userName} (${ticket.userRole}): "${ticket.subject}". Сообщение: "${ticket.message.slice(0, 100)}"`;
+    for (const adminUser of admins) {
+      triggerNotification("incoming_report", adminUser, adminMessage).catch(err => {
+        console.error(`[Support] Fail admin notify:`, err);
+      });
+    }
+
+    res.json({ success: true, ticket });
+  } catch (error: any) {
+    console.error("[Support API] Failed creating ticket:", error);
+    res.status(500).json({ error: "Ошибка при отправке обращения: " + error.message });
+  }
+});
+
+app.get("/api/support/tickets", async (req, res) => {
+  try {
+    const userId = (req.session as any).userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Требуется авторизация" });
+    }
+    const user = await dbStore.getUserById(userId);
+    if (!user) {
+      return res.status(401).json({ error: "Пользователь не найден" });
+    }
+
+    const tickets = await dbStore.getSupportTickets();
+    if (user.role === "admin") {
+      return res.json(tickets);
+    }
+    // Only return tickets owned by this user
+    res.json(tickets.filter(t => t.userId === user.id));
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put("/api/support/tickets/:id", async (req, res) => {
+  try {
+    const userId = (req.session as any).userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Требуется авторизация" });
+    }
+    const user = await dbStore.getUserById(userId);
+    if (!user || user.role !== "admin") {
+      return res.status(403).json({ error: "Доступ запрещен" });
+    }
+
+    const { status, adminNotes } = req.body;
+    const ticket = await dbStore.updateSupportTicketStatus(req.params.id, status, adminNotes);
+    res.json({ success: true, ticket });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 

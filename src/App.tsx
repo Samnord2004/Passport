@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, startTransition, useTransition } from "react";
+import React, { useState, useEffect, useRef, startTransition, useTransition, useMemo } from "react";
 import { 
   BuildingObject, 
   ScheduleItem, 
@@ -7,10 +7,13 @@ import {
   NotificationLog, 
   User, 
   UserRole, 
-  Question 
+  Question,
+  SystemSettings
 } from "./types";
 import ThemeSelector, { ThemeStyle } from "./components/ThemeSelector";
 import LoginScreen from "./components/LoginScreen";
+import { LegalTabContent } from "./components/LegalAgreements";
+import SupportTab from "./components/SupportTab";
 import { 
   Building, 
   Calendar, 
@@ -44,7 +47,14 @@ import {
   Fingerprint,
   ScanFace,
   Camera,
-  Wrench
+  Wrench,
+  Menu,
+  ShieldCheck,
+  Users,
+  Star,
+  Palette,
+  Phone,
+  User as UserIcon
 } from "lucide-react";
 
 // Intercept native fetch to seamlessly append JWT Bearer tokens and handle silent token rotations (refresh tokens)
@@ -158,9 +168,18 @@ try {
 
 export default function App() {
   // Theme & Layout state
-  const [theme, setTheme] = useState<ThemeStyle>('cleanroom');
-  const [activeTab, setActiveTab] = useState<'objects' | 'schedule' | 'templates' | 'reports' | 'users' | 'settings' | 'ratings'>('objects');
+  const [theme, setTheme] = useState<ThemeStyle>(() => {
+    return (localStorage.getItem("app_theme") as ThemeStyle) || 'cleanroom';
+  });
+
+  const [activeTab, setActiveTab] = useState<string>('objects');
   const [qrModalSchedule, setQrModalSchedule] = useState<ScheduleItem | null>(null);
+  
+  // Reports Filter states
+  const [selectedReportObjectId, setSelectedReportObjectId] = useState<string>('all');
+  const [selectedReportYear, setSelectedReportYear] = useState<string>('all');
+  const [selectedMyReportObjectId, setSelectedMyReportObjectId] = useState<string>('all');
+  const [selectedMyReportYear, setSelectedMyReportYear] = useState<string>('all');
   
   // Data State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -170,17 +189,66 @@ export default function App() {
   const [templates, setTemplates] = useState<ChecklistTemplate[]>([]);
   const [reports, setReports] = useState<CompletedChecklist[]>([]);
   const [logs, setLogs] = useState<NotificationLog[]>([]);
-  const [systemSettings, setSystemSettings] = useState({
+  const [systemSettings, setSystemSettings] = useState<SystemSettings>({
     yandexDiskToken: "",
     yandexDiskConnected: false,
     reminderDaysBefore: 3,
     logoUrl: "",
     customLogoEnabled: false,
+    appBackgroundType: "default",
+    appBackgroundUrl: "",
     notificationChannels: {
       admin: { telegram: true, max: true, vk: false, email: true },
       owner: { telegram: true, max: false, vk: false, email: true }
     }
   });
+
+  // Track loaded user email to avoid redundant load/save cascades
+  const loadedUserEmailRef = useRef<string>("");
+
+  useEffect(() => {
+    const userEmail = currentUser?.email || "guest";
+    if (loadedUserEmailRef.current !== userEmail) {
+      // User changed! Load their customized settings
+      const userTheme = localStorage.getItem("theme_" + userEmail) as ThemeStyle | null;
+      if (userTheme) {
+        setTheme(userTheme);
+      } else if (userEmail === "guest") {
+        const appTheme = localStorage.getItem("app_theme") as ThemeStyle | null;
+        if (appTheme) setTheme(appTheme);
+      }
+
+      const userBgType = localStorage.getItem("bg_type_" + userEmail);
+      const userBgUrl = localStorage.getItem("bg_url_" + userEmail);
+      const userOpacity = localStorage.getItem("opacity_" + userEmail);
+
+      setSystemSettings(prev => ({
+        ...prev,
+        appBackgroundType: (userBgType as any) || prev.appBackgroundType || 'default',
+        appBackgroundUrl: userBgUrl || prev.appBackgroundUrl || '',
+        cardOpacity: userOpacity !== null ? parseInt(userOpacity, 10) : (prev.cardOpacity !== undefined ? prev.cardOpacity : 85)
+      }));
+
+      loadedUserEmailRef.current = userEmail;
+    } else {
+      // Same user, so this is an interactive change! Let's save it.
+      if (userEmail === "guest" && theme) {
+        localStorage.setItem("app_theme", theme);
+      }
+      if (theme) {
+        localStorage.setItem("theme_" + userEmail, theme);
+      }
+      if (systemSettings.appBackgroundType) {
+        localStorage.setItem("bg_type_" + userEmail, systemSettings.appBackgroundType);
+      }
+      if (systemSettings.appBackgroundUrl) {
+        localStorage.setItem("bg_url_" + userEmail, systemSettings.appBackgroundUrl);
+      }
+      if (systemSettings.cardOpacity !== undefined) {
+        localStorage.setItem("opacity_" + userEmail, systemSettings.cardOpacity.toString());
+      }
+    }
+  }, [currentUser?.email, theme, systemSettings.appBackgroundType, systemSettings.appBackgroundUrl, systemSettings.cardOpacity]);
 
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
 
@@ -190,6 +258,35 @@ export default function App() {
   
   // Create / Edit Modals and Form states
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
+
+  const getBackgroundStyle = () => {
+    let bgUrl = "";
+    if (systemSettings.appBackgroundType === 'villa') {
+      bgUrl = "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=80";
+    } else if (systemSettings.appBackgroundType === 'blueprint') {
+      bgUrl = "https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=2000&q=80";
+    } else if (systemSettings.appBackgroundType === 'sakura' || theme === 'japanese_calligraphy') {
+      bgUrl = "https://images.unsplash.com/photo-1524413840807-0c3cb6fa808d?auto=format&fit=crop&w=2000&q=80";
+    } else if (systemSettings.appBackgroundType === 'custom' && systemSettings.appBackgroundUrl) {
+      bgUrl = systemSettings.appBackgroundUrl;
+    }
+
+    if (bgUrl) {
+      const isDark = theme === 'modern' || theme === 'terminal';
+      const overlayColor = isDark 
+        ? "rgba(10, 10, 12, 0.70)" 
+        : theme === 'japanese_calligraphy'
+          ? "rgba(253, 248, 240, 0.45)"
+          : "rgba(240, 244, 248, 0.50)";
+      return {
+        backgroundImage: `linear-gradient(${overlayColor}, ${overlayColor}), url("${bgUrl}")`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundAttachment: 'fixed',
+      };
+    }
+    return {};
+  };
   const [isPending, startTransition] = useTransition();
 
   // Specialist Flow States
@@ -222,6 +319,9 @@ export default function App() {
   const [profileSuccessMsg, setProfileSuccessMsg] = useState("");
   const [profileErrorMsg, setProfileErrorMsg] = useState("");
   const [profileKeySkills, setProfileKeySkills] = useState("");
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState("");
+  const [settingsSuccessMsg, setSettingsSuccessMsg] = useState("");
+  const [settingsErrorMsg, setSettingsErrorMsg] = useState("");
 
   // Owner profile notification settings editor states
   const [isOwnerEditing, setIsOwnerEditing] = useState(false);
@@ -233,6 +333,12 @@ export default function App() {
   const [ownerPhone, setOwnerPhone] = useState("");
   const [ownerEditMsg, setOwnerEditMsg] = useState("");
   const [ownerEditError, setOwnerEditError] = useState("");
+
+  const [ownerActiveTab, setOwnerActiveTab] = useState<'characteristics' | 'profile' | 'reports' | 'specialists' | 'settings' | 'legal' | 'support'>('characteristics');
+  const [isOwnerMenuOpen, setIsOwnerMenuOpen] = useState(false);
+  const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
+  const [isSpecMenuOpen, setIsSpecMenuOpen] = useState(false);
+  const [objDiskUrl, setObjDiskUrl] = useState("");
 
   // Specialist rating states
   const [ratingReport, setRatingReport] = useState<CompletedChecklist | null>(null);
@@ -427,6 +533,7 @@ export default function App() {
     setProfilePhone(currentUser.phone || "");
     setProfileCompany(currentUser.company || "");
     setProfileKeySkills(currentUser.keySkills || "");
+    setProfileAvatarUrl(currentUser.avatarUrl || "");
     setProfilePassword("");
     setProfileSuccessMsg("");
     setProfileErrorMsg("");
@@ -442,6 +549,7 @@ export default function App() {
       return;
     }
     try {
+      // First, update User Profile particulars
       const response = await fetch("/api/auth/me", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -450,13 +558,23 @@ export default function App() {
           phone: profilePhone.trim(),
           company: profileCompany.trim(),
           keySkills: profileKeySkills.trim(),
+          avatarUrl: profileAvatarUrl.trim(),
           password: profilePassword.trim() || undefined
         })
       });
       const data = await response.json();
+      
       if (response.ok && data.success) {
+        // Next, save background and layout theme settings to global database
+        await fetch("/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(systemSettings)
+        });
+
         localStorage.setItem("user_session", JSON.stringify(data.user));
-        setProfileSuccessMsg("Профиль успешно изменен!");
+        // Auto-close modal on successful save
+        setIsProfileOpen(false);
         setCurrentUser(data.user);
         setRefreshTrigger(prev => prev + 1);
       } else {
@@ -464,6 +582,28 @@ export default function App() {
       }
     } catch (err) {
       setProfileErrorMsg("Не удалось связаться с сервером.");
+    }
+  };
+
+  const handleSaveVisualSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSettingsSuccessMsg("");
+    setSettingsErrorMsg("");
+    try {
+      const response = await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(systemSettings)
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setSettingsSuccessMsg("Настройки оформления и фонов успешно сохранены!");
+        setRefreshTrigger(prev => prev + 1);
+      } else {
+        setSettingsErrorMsg(data.error || "Произошла ошибка при сохранении настроек.");
+      }
+    } catch (err) {
+      setSettingsErrorMsg("Не удалось связаться с сервером.");
     }
   };
 
@@ -540,6 +680,30 @@ export default function App() {
     }
   };
 
+  const handleAssignOwner = async (objectId: string, newOwnerId: string) => {
+    try {
+      const obj = objects.find(o => o.id === objectId);
+      if (!obj) return;
+      const payload = {
+        name: obj.name,
+        address: obj.address,
+        description: obj.description,
+        ownerId: newOwnerId === "" ? null : newOwnerId,
+        yandexDiskPath: obj.yandexDiskPath,
+        yandexDiskUrl: obj.yandexDiskUrl,
+        allowedSpecialistIds: obj.allowedSpecialistIds || []
+      };
+      await fetch(`/api/objects/${objectId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      setRefreshTrigger(prev => prev + 1);
+    } catch (err: any) {
+      console.error("Ошибка привязки собственника к объекту:", err);
+    }
+  };
+
   // --- CRUD API Calls ---
   // Users CRUD
   const saveUserSubmit = async (e: React.FormEvent) => {
@@ -591,6 +755,9 @@ export default function App() {
     setUsrTelegram(u.telegramChatId || "");
     setUsrMax(u.maxChatId || "");
     setUsrVk(u.vkUserId || "");
+    setTimeout(() => {
+      document.getElementById("user-form-container")?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
   };
 
   const resetUserForm = () => {
@@ -614,6 +781,7 @@ export default function App() {
       description: objDesc,
       ownerId: objOwnerId,
       yandexDiskPath: objDiskPath,
+      yandexDiskUrl: objDiskUrl,
       allowedSpecialistIds: objAllowedSpecialistIds
     };
 
@@ -650,6 +818,7 @@ export default function App() {
     setObjDesc(o.description);
     setObjOwnerId(o.ownerId || "");
     setObjDiskPath(o.yandexDiskPath);
+    setObjDiskUrl(o.yandexDiskUrl || "");
     setObjAllowedSpecialistIds(o.allowedSpecialistIds || []);
 
     // Smooth scroll to object form
@@ -665,6 +834,7 @@ export default function App() {
     setObjDesc("");
     setObjOwnerId("");
     setObjDiskPath("");
+    setObjDiskUrl("");
     setObjAllowedSpecialistIds([]);
   };
 
@@ -1255,6 +1425,44 @@ export default function App() {
     }
   };
 
+  const getCardBgColorWithOpacity = () => {
+    const opacityVal = (systemSettings.cardOpacity !== undefined ? systemSettings.cardOpacity : 85) / 100;
+    switch (theme) {
+      case 'modern':
+        return `rgba(9, 9, 11, ${opacityVal})`;
+      case 'terminal':
+        return `rgba(0, 0, 0, ${opacityVal})`;
+      case 'warm':
+        return `rgba(253, 246, 226, ${opacityVal})`;
+      case 'japanese':
+      case 'japanese_calligraphy':
+        return `rgba(253, 251, 247, ${opacityVal})`;
+      case 'crisp_minimal':
+      case 'cleanroom':
+      default:
+        return `rgba(255, 255, 255, ${opacityVal})`;
+    }
+  };
+
+  const getInputBgColorWithOpacity = () => {
+    const opacityVal = (systemSettings.cardOpacity !== undefined ? systemSettings.cardOpacity : 85) / 100;
+    switch (theme) {
+      case 'modern':
+        return `rgba(39, 39, 42, ${opacityVal})`;
+      case 'terminal':
+        return `rgba(0, 0, 0, ${opacityVal})`;
+      case 'warm':
+        return `rgba(250, 246, 235, ${opacityVal})`;
+      case 'japanese':
+      case 'japanese_calligraphy':
+        return `rgba(255, 255, 255, ${opacityVal})`;
+      case 'crisp_minimal':
+      case 'cleanroom':
+      default:
+        return `rgba(248, 250, 252, ${opacityVal})`;
+    }
+  };
+
   // If not initialized yet, show setup/loading screen
   if (!isInitialized) {
     return (
@@ -1272,6 +1480,7 @@ export default function App() {
   if (!currentUser) {
     const loginThemeWrapper = 
       theme === 'japanese' ? 'bg-[#faf7f0] text-[#2d2d2d] font-sans min-h-screen selection:bg-[#bc1c24]/15 py-10' :
+      theme === 'japanese_calligraphy' ? 'bg-[#fcfbf9] text-[#1c1c1c] font-serif min-h-screen selection:bg-[#bc1c24]/20 py-10 font-medium' :
       theme === 'crisp_minimal' ? 'bg-[#fafafa] text-neutral-900 font-sans min-h-screen selection:bg-neutral-200 py-10' :
       theme === 'modern' ? 'bg-zinc-950 text-zinc-100 font-sans min-h-screen selection:bg-sky-500/30 py-10' :
       theme === 'terminal' ? 'bg-black text-green-400 font-mono min-h-screen selection:bg-green-500/40 py-10' :
@@ -1279,12 +1488,24 @@ export default function App() {
       'bg-slate-50 text-slate-800 font-sans min-h-screen selection:bg-blue-100 py-10';
 
     return (
-      <div className={loginThemeWrapper}>
+      <div className={loginThemeWrapper} style={getBackgroundStyle()}>
+        {/* Dynamic Glassmorphic Opacity overrides */}
+        <style>{`
+          .theme-custom-card-bg {
+            background-color: ${getCardBgColorWithOpacity()} !important;
+            backdrop-filter: blur(12px) !important;
+            -webkit-backdrop-filter: blur(12px) !important;
+          }
+          .theme-custom-input-bg {
+            background-color: ${getInputBgColorWithOpacity()} !important;
+          }
+        `}</style>
         <LoginScreen 
           usersList={users} 
           currentTheme={theme}
           logoUrl={systemSettings.logoUrl}
           customLogoEnabled={systemSettings.customLogoEnabled}
+          backgroundType={systemSettings.appBackgroundType}
           onLoginSuccess={(user) => {
             localStorage.setItem("user_session", JSON.stringify(user));
             setCurrentUser(user);
@@ -1358,39 +1579,66 @@ export default function App() {
 
   // Styles based on theme
   const getThemeWrapperStyle = () => {
+    const isBgActive = (systemSettings.appBackgroundType && systemSettings.appBackgroundType !== 'default') || theme === 'japanese_calligraphy';
+    
     switch (theme) {
       case 'modern':
         return 'bg-zinc-950 text-zinc-100 font-sans min-h-screen selection:bg-sky-500/30';
       case 'terminal':
         return 'bg-black text-green-400 font-mono min-h-screen selection:bg-green-500/40';
       case 'warm':
-        return 'bg-[#f8f1e5] text-amber-950 font-serif min-h-screen selection:bg-amber-100';
+        return `${isBgActive ? '' : 'bg-[#f8f1e5]'} text-[#543b17] font-serif min-h-screen selection:bg-amber-100`;
       case 'japanese':
-        return 'bg-[#faf7f0] text-[#2d2d2d] font-sans min-h-screen selection:bg-[#bc1c24]/15';
+        return `${isBgActive ? '' : 'bg-[#faf7f0]'} text-[#2d2d2d] font-sans min-h-screen selection:bg-[#bc1c24]/15`;
+      case 'japanese_calligraphy':
+        return `${isBgActive ? '' : 'bg-[#fcfbf9]'} text-[#1c1c1c] font-serif min-h-screen selection:bg-[#bc1c24]/20 font-medium`;
       case 'crisp_minimal':
-        return 'bg-[#fafafa] text-neutral-900 font-sans min-h-screen selection:bg-neutral-200';
+        return `${isBgActive ? '' : 'bg-[#fafafa]'} text-neutral-900 font-sans min-h-screen selection:bg-neutral-200`;
       case 'cleanroom':
       default:
-        return 'bg-slate-50 text-slate-800 font-sans min-h-screen selection:bg-blue-100';
+        return `${isBgActive ? 'text-slate-800' : 'bg-slate-50 text-slate-800'} font-sans min-h-screen selection:bg-blue-100`;
     }
   };
 
   const getCardStyle = () => {
+    const isBgActive = (systemSettings.appBackgroundType && systemSettings.appBackgroundType !== 'default') || theme === 'japanese_calligraphy';
+    
+    let baseStyle = "";
     switch (theme) {
       case 'modern':
-        return 'bg-zinc-900/40 border border-zinc-800 rounded-xl p-5 shadow-lg';
+        baseStyle = isBgActive 
+          ? 'bg-[#09090b]/75 border border-zinc-800/80 backdrop-blur-md rounded-xl p-5 shadow-lg shadow-black/30' 
+          : 'bg-[#18181b]/95 border border-zinc-800 rounded-xl p-5 shadow-lg';
+        break;
       case 'terminal':
-        return 'bg-black border border-green-500/30 rounded-none p-5 text-green-400';
+        baseStyle = 'bg-black/95 border border-green-500/30 rounded-none p-5 text-green-400 font-mono backdrop-blur-xs';
+        break;
       case 'warm':
-        return 'bg-[#fdf6e2] border border-amber-900/15 rounded-2xl p-6 shadow-sm';
+        baseStyle = isBgActive 
+          ? 'bg-[#fdf6e2]/90 border border-amber-900/20 backdrop-blur-md rounded-2xl p-6 shadow-sm' 
+          : 'bg-[#fdf6e2] border border-amber-900/15 rounded-2xl p-6 shadow-sm';
+        break;
       case 'japanese':
-        return 'bg-white border border-[#d6cfbe] rounded-none p-6 shadow-sm relative after:absolute after:bottom-1.5 after:right-1.5 after:w-1.5 after:h-1.5 after:bg-[#bc1c24]';
+        baseStyle = isBgActive 
+          ? 'bg-[#fdfbf7]/92 border border-[#d6cfbe] backdrop-blur-xs rounded-none p-6 shadow-sm relative after:absolute after:bottom-1.5 after:right-1.5 after:w-1.5 after:h-1.5 after:bg-[#bc1c24]'
+          : 'bg-[#fdfbf7] border border-[#d6cfbe] rounded-none p-6 shadow-sm relative after:absolute after:bottom-1.5 after:right-1.5 after:w-1.5 after:h-1.5 after:bg-[#bc1c24]';
+        break;
+      case 'japanese_calligraphy':
+        baseStyle = 'bg-[#fdfbf7]/92 border-2 border-[#8a7a5d] rounded-none p-6 shadow-lg relative outline outline-offset-4 outline-1 outline-[#8a7a5d]/30 after:absolute after:bottom-2.5 after:right-2.5 after:w-2.5 after:h-2.5 after:bg-[#bc1c24] after:rounded-xs';
+        break;
       case 'crisp_minimal':
-        return 'bg-white border border-neutral-200 rounded-sm p-5 shadow-none';
+        baseStyle = isBgActive 
+          ? 'bg-white/95 border border-neutral-300 rounded-sm p-5 shadow-none backdrop-blur-xs'
+          : 'bg-white border border-neutral-200 rounded-sm p-5 shadow-none';
+        break;
       case 'cleanroom':
       default:
-        return 'bg-white border border-slate-200 rounded-xl p-5 shadow-sm';
+        baseStyle = isBgActive 
+          ? 'bg-white/80 dark:bg-slate-900/80 border border-slate-200/50 dark:border-slate-800/50 rounded-xl p-5 shadow-md backdrop-blur-md'
+          : 'bg-white border border-slate-200 rounded-xl p-5 shadow-sm';
+        break;
     }
+    return baseStyle + " theme-custom-card-bg";
   };
 
   const getSubHeaderStyle = () => {
@@ -1403,6 +1651,8 @@ export default function App() {
         return 'border-b-2 border-amber-900/10 pb-4 mb-5';
       case 'japanese':
         return 'border-b border-[#bc1c24]/20 pb-3 mb-4';
+      case 'japanese_calligraphy':
+        return 'border-b-2 border-double border-[#bc1c24]/30 pb-3 mb-[18px] text-center italic font-bold tracking-wide';
       case 'crisp_minimal':
         return 'border-b border-neutral-200 pb-3 mb-4';
       case 'cleanroom':
@@ -1421,6 +1671,8 @@ export default function App() {
         return 'bg-amber-900 hover:bg-amber-950 text-white font-medium rounded-xl px-4 py-2.5 shadow-sm';
       case 'japanese':
         return 'bg-[#bc1c24] hover:bg-[#a01319] text-white font-semibold rounded-none px-4 py-2 transition-colors duration-200';
+      case 'japanese_calligraphy':
+        return 'bg-[#bc1c24] hover:bg-[#a01319] text-white font-bold rounded-none px-5 py-2.5 border-b-4 border-[#7a0d11] transition-all duration-150 uppercase tracking-widest text-xs hover:translate-y-[1px] hover:border-b-2';
       case 'crisp_minimal':
         return 'bg-neutral-900 hover:bg-neutral-800 text-white font-semibold rounded-sm px-4 py-2 transition-colors duration-200';
       case 'cleanroom':
@@ -1439,6 +1691,8 @@ export default function App() {
         return 'bg-amber-100/60 hover:bg-amber-200/60 text-amber-900 rounded-lg px-3 py-2';
       case 'japanese':
         return 'bg-[#f4efe2] hover:bg-[#eae2cf] text-[#4a3a29] border border-[#d6cfbe] rounded-none px-3 py-1.5 text-xs font-semibold';
+      case 'japanese_calligraphy':
+        return 'bg-[#f5ebd6] hover:bg-[#ebd9bc] text-amber-950 border border-[#b2a591] rounded-none px-3 py-1.5 text-xs font-bold uppercase tracking-wider';
       case 'crisp_minimal':
         return 'bg-white hover:bg-neutral-100 text-neutral-700 border border-neutral-200 rounded-sm px-3 py-1.5 text-xs font-semibold';
       case 'cleanroom':
@@ -1452,21 +1706,32 @@ export default function App() {
   };
 
   const getInputStyle = () => {
+    let baseStyle = "";
     switch (theme) {
       case 'modern':
-        return 'bg-zinc-800/60 border border-zinc-700 text-white rounded-lg p-2 focus:ring-1 focus:ring-sky-500 focus:outline-none';
+        baseStyle = 'bg-zinc-800/60 border border-zinc-700 text-white rounded-lg p-2 focus:ring-1 focus:ring-sky-500 focus:outline-none';
+        break;
       case 'terminal':
-        return 'bg-black border border-green-500 text-green-400 rounded-none p-2 focus:outline-none placeholder-green-700';
+        baseStyle = 'bg-black border border-green-500 text-green-400 rounded-none p-2 focus:outline-none placeholder-green-700';
+        break;
       case 'warm':
-        return 'bg-[#faf6eb] border border-amber-900/20 text-amber-950 rounded-xl p-3 focus:outline-none focus:border-amber-900/50';
+        baseStyle = 'bg-[#faf6eb] border border-amber-900/20 text-amber-950 rounded-xl p-3 focus:outline-none focus:border-amber-900/50';
+        break;
       case 'japanese':
-        return 'bg-white border border-[#d6cfbe] text-[#2d2d2d] rounded-none p-2 focus:border-[#bc1c24] focus:outline-none';
+        baseStyle = 'bg-white border border-[#d6cfbe] text-[#2d2d2d] rounded-none p-2 focus:border-[#bc1c24] focus:outline-none';
+        break;
+      case 'japanese_calligraphy':
+        baseStyle = 'bg-white border border-[#b2a591] text-[#1c1c1c] rounded-none p-2 focus:border-[#bc1c24] focus:ring-1 focus:ring-[#bc1c24] focus:outline-none font-serif';
+        break;
       case 'crisp_minimal':
-        return 'bg-white border border-neutral-300 text-neutral-900 rounded-sm p-2 focus:ring-1 focus:ring-neutral-400 focus:outline-none';
+        baseStyle = 'bg-white border border-neutral-300 text-neutral-900 rounded-sm p-2 focus:ring-1 focus:ring-neutral-400 focus:outline-none';
+        break;
       case 'cleanroom':
       default:
-        return 'bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2 focus:ring-1 focus:ring-blue-400 focus:outline-none';
+        baseStyle = 'bg-slate-50 border border-slate-200 text-slate-800 rounded-lg p-2 focus:ring-1 focus:ring-blue-400 focus:outline-none';
+        break;
     }
+    return baseStyle + " theme-custom-input-bg";
   };
 
   const getTableHeadStyle = () => {
@@ -1479,6 +1744,8 @@ export default function App() {
         return 'bg-amber-100/40 text-amber-900 font-serif text-sm border-b border-amber-900/10';
       case 'japanese':
         return 'bg-[#f4efe2] text-[#4a3a29] text-xs font-semibold uppercase tracking-widest border-b border-[#d6cfbe]';
+      case 'japanese_calligraphy':
+        return 'bg-[#faf4e8] text-[#543b17] text-xs font-extrabold uppercase tracking-widest border-b-2 border-[#b2a591]';
       case 'crisp_minimal':
         return 'bg-neutral-100 text-neutral-600 text-[11px] font-semibold uppercase tracking-wider border-b border-neutral-200';
       case 'cleanroom':
@@ -1490,7 +1757,7 @@ export default function App() {
   if (currentUser && currentUser.id === 'anonymous_specialist') {
     // Render the beautiful isolated check-list page for unregistered guest specialist scanning QR
     return (
-      <div className={getThemeWrapperStyle()}>
+      <div className={getThemeWrapperStyle()} style={getBackgroundStyle()}>
         <div className="max-w-4xl mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
           
           {/* Header of isolated QR check sheet */}
@@ -1749,10 +2016,21 @@ export default function App() {
   }
 
   return (
-    <div className={getThemeWrapperStyle()}>
+    <div className={getThemeWrapperStyle()} style={getBackgroundStyle()}>
+      {/* Dynamic Glassmorphic Opacity overrides */}
+      <style>{`
+        .theme-custom-card-bg {
+          background-color: ${getCardBgColorWithOpacity()} !important;
+          backdrop-filter: blur(12px) !important;
+          -webkit-backdrop-filter: blur(12px) !important;
+        }
+        .theme-custom-input-bg {
+          background-color: ${getInputBgColorWithOpacity()} !important;
+        }
+      `}</style>
       
       {/* Main Structural Container */}
-      <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
+      <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
         
         {/* Navigation & Brand Header */}
         <header className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 pb-6 border-b border-black/5 dark:border-white/5">
@@ -1761,19 +2039,19 @@ export default function App() {
               <img 
                 src={systemSettings.logoUrl} 
                 alt="Логотип" 
-                className="w-10 h-10 object-contain rounded-xl shadow-md border border-neutral-250 bg-white"
+                className="w-14 h-14 md:w-16 md:h-16 object-contain rounded-2xl shadow-md border border-neutral-250 bg-white"
                 referrerPolicy="no-referrer"
               />
             ) : theme === 'japanese' ? (
-              <div className="w-10 h-10 bg-[#bc1c24] rounded-none flex items-center justify-center text-white font-bold text-xl shadow-md">
+              <div className="w-14 h-14 md:w-16 md:h-16 bg-[#bc1c24] rounded-none flex items-center justify-center text-white font-bold text-2xl shadow-md">
                 ⛩️
               </div>
             ) : theme === 'crisp_minimal' ? (
-              <div className="w-10 h-10 bg-black rounded-none border border-black flex items-center justify-center text-white font-bold text-base">
+              <div className="w-14 h-14 md:w-16 md:h-16 bg-black rounded-none border border-black flex items-center justify-center text-white font-bold text-lg">
                 ЦП
               </div>
             ) : (
-              <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-md">
+              <div className="w-14 h-14 md:w-16 md:h-16 bg-blue-600 rounded-2xl flex items-center justify-center text-white font-bold text-2xl shadow-md">
                 S
               </div>
             )}
@@ -1782,45 +2060,399 @@ export default function App() {
                 Цифровой паспорт объекта
               </h1>
               <p className="text-xs opacity-60">
-                Замена Telegram-бота • Система инспекций & графиков ТО
+                Система инспекций & графиков ТО
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-            {/* Theme Selector inclusion */}
-            <ThemeSelector currentTheme={theme} onChangeTheme={(t) => setTheme(t)} />
-
-            {/* Account quick badge */}
-            <div className={`p-2 px-3 rounded-lg border text-xs flex items-center gap-2.5 ${
-              theme === 'modern' ? 'bg-zinc-900 border-zinc-800' : theme === 'terminal' ? 'border-green-500/20' : theme === 'warm' ? 'bg-[#fdf6e2] border-amber-900/10' : 'bg-white border-slate-200'
-            }`}>
+          <div className="flex flex-wrap items-center justify-end gap-3 w-full md:w-auto">
+            {/* Role-based Popup Menus */}
+            {currentUser.role === 'owner' && (
               <div className="relative">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 absolute -top-0.5 -right-0.5 animate-pulse"></span>
-                {currentUser.role === 'admin' ? <Shield className="w-3.5 h-3.5 text-emerald-500" /> : currentUser.role === 'owner' ? <UserCheck className="w-3.5 h-3.5 text-sky-500" /> : <HardHat className="w-3.5 h-3.5 text-amber-500" />}
-              </div>
-              <div className="text-left">
-                <div className="font-bold leading-none">{currentUser.fullname}</div>
-                <div className="text-[10px] opacity-60 mt-1 uppercase tracking-wider">{currentUser.role === 'admin' ? 'Администратор' : currentUser.role === 'owner' ? 'Собственник здания' : 'Тех. Специалист'}</div>
-              </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <button 
-                  onClick={openUserProfile} 
-                  title="Редактировать профиль и сменить пароль" 
-                  className="hover:text-amber-500 transition-colors p-1"
-                  id="btn-edit-profile"
+                <button
+                  id="owner-menu-toggle-btn"
+                  onClick={() => setIsOwnerMenuOpen(!isOwnerMenuOpen)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-extrabold rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-md transition-all cursor-pointer"
                 >
-                  <Settings className="w-4 h-4" />
+                  <Menu className="w-4 h-4" />
+                  <span>📂 Кабинет Владельца</span>
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isOwnerMenuOpen ? 'rotate-180' : ''}`} />
                 </button>
-                <button 
-                  onClick={handleLogout} 
-                  title="Сменить профиль" 
-                  className="hover:text-red-500 transition-colors p-1"
-                >
-                  <LogOut className="w-4.5 h-4.5" />
-                </button>
+                
+                {isOwnerMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40 bg-black/10" onClick={() => setIsOwnerMenuOpen(false)} />
+                    <div className={`absolute right-0 mt-2 w-72 max-w-[calc(100vw-32px)] rounded-2xl shadow-2xl border p-4 z-50 animate-scaleUp text-neutral-800 dark:text-neutral-100 ${
+                      theme === 'modern' ? 'bg-zinc-950 border-zinc-800' : theme === 'terminal' ? 'bg-black border-green-500' : theme === 'warm' ? 'bg-[#fdf6e2] border-amber-900/10' : 'bg-white border-slate-200'
+                    }`}>
+                      <div className="pb-3 border-b border-black/5 dark:border-white/10 mb-3 flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <div>
+                          <div className="font-extrabold text-xs tracking-wide uppercase opacity-55">Авторизован как</div>
+                          <div className="font-black text-sm text-neutral-900 dark:text-neutral-50 truncate max-w-[200px]" title={currentUser.fullname}>
+                            {currentUser.fullname}
+                          </div>
+                          <div className="text-[10px] opacity-65">Собственник объектов</div>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-1">
+                        <button
+                          onClick={() => { setOwnerActiveTab('profile'); setIsOwnerMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            ownerActiveTab === 'profile' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <UserIcon className="w-4 h-4" />
+                          <span>👤 Мой профиль</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setOwnerActiveTab('characteristics'); setIsOwnerMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            ownerActiveTab === 'characteristics' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <Building className="w-4 h-4" />
+                          <span>📋 Мои характеристики</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setOwnerActiveTab('reports'); setIsOwnerMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            ownerActiveTab === 'reports' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <FileText className="w-4 h-4" />
+                          <span>📂 Мои акты</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setOwnerActiveTab('specialists'); setIsOwnerMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            ownerActiveTab === 'specialists' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <Wrench className="w-4 h-4" />
+                          <span>🔧 Сервисные службы</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setOwnerActiveTab('settings'); setIsOwnerMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            ownerActiveTab === 'settings' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <Settings className="w-4 h-4" />
+                          <span>⚙️ Настройки и Стиль</span>
+                        </button>
+
+                        <button
+                          onClick={() => { setOwnerActiveTab('support'); setIsOwnerMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            ownerActiveTab === 'support' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <Phone className="w-4 h-4" />
+                          <span>📞 Поддержка</span>
+                        </button>
+
+                        <button
+                          onClick={() => { setOwnerActiveTab('legal'); setIsOwnerMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            ownerActiveTab === 'legal' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <ShieldCheck className="w-4 h-4" />
+                          <span>⚖️ Юр. соглашения</span>
+                        </button>
+                        
+                        <div className="border-t border-black/5 dark:border-white/10 my-2 pt-2" />
+                        
+                        <button
+                          onClick={() => { handleLogout(); setIsOwnerMenuOpen(false); }}
+                          className="w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 text-rose-500 hover:bg-rose-500/10 transition-all cursor-pointer"
+                        >
+                          <LogOut className="w-4 h-4" />
+                          <span>Выход</span>
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
-            </div>
+            )}
+
+            {currentUser.role === 'admin' && (
+              <div className="relative">
+                <button
+                  id="admin-menu-toggle-btn"
+                  onClick={() => setIsAdminMenuOpen(!isAdminMenuOpen)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-extrabold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-md transition-all cursor-pointer"
+                >
+                  <Menu className="w-4 h-4" />
+                  <span>⚙️ Панель Управления</span>
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isAdminMenuOpen ? 'rotate-180' : ''}`} />
+                </button>
+                
+                {isAdminMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40 bg-black/10" onClick={() => setIsAdminMenuOpen(false)} />
+                    <div className={`absolute right-0 mt-2 w-72 max-w-[calc(100vw-32px)] rounded-2xl shadow-2xl border p-4 z-50 animate-scaleUp text-neutral-800 dark:text-neutral-100 ${
+                      theme === 'modern' ? 'bg-zinc-950 border-zinc-800' : theme === 'terminal' ? 'bg-black border-indigo-500' : theme === 'warm' ? 'bg-[#fdf6e2] border-amber-900/10' : 'bg-white border-slate-200'
+                    }`}>
+                      <div className="pb-3 border-b border-black/5 dark:border-white/10 mb-3 flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <div>
+                          <div className="font-extrabold text-xs tracking-wide uppercase opacity-55">Системный вход</div>
+                          <div className="font-black text-sm text-neutral-900 dark:text-neutral-50 truncate max-w-[200px]" title={currentUser.fullname}>
+                            {currentUser.fullname}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-1">
+                        <button
+                          onClick={() => { setActiveTab('objects'); setIsAdminMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            activeTab === 'objects' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <Building className="w-4 h-4" />
+                          <span>🏢 Объекты</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setActiveTab('schedule'); setIsAdminMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            activeTab === 'schedule' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <Calendar className="w-4 h-4" />
+                          <span>📅 График ТО</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setActiveTab('templates'); setIsAdminMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            activeTab === 'templates' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <FileSpreadsheet className="w-4 h-4" />
+                          <span>📝 Чек-листы</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setActiveTab('reports'); setIsAdminMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            activeTab === 'reports' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <FileText className="w-4 h-4" />
+                          <span>📂 Накопленные акты</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setActiveTab('users'); setIsAdminMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            activeTab === 'users' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <Users className="w-4 h-4" />
+                          <span>👥 Пользователи</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setActiveTab('ratings'); setIsAdminMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            activeTab === 'ratings' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <Star className="w-4 h-4" />
+                          <span>⭐ Рейтинг специалистов</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setActiveTab('settings'); setIsAdminMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            activeTab === 'settings' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <Settings className="w-4 h-4" />
+                          <span>⚙️ Каналы связи</span>
+                        </button>
+
+                        <button
+                          onClick={() => { setActiveTab('branding'); setIsAdminMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            activeTab === 'branding' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <Palette className="w-4 h-4" />
+                          <span>🎨 Оформление приложения</span>
+                        </button>
+
+                        <button
+                          onClick={async () => {
+                            // Safely type-cast the state or add support for legal
+                            (setActiveTab as any)('legal'); 
+                            setIsAdminMenuOpen(false); 
+                          }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            (activeTab as any) === 'legal' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <ShieldCheck className="w-4 h-4" />
+                          <span>⚖️ Юр. соглашения</span>
+                        </button>
+                        
+                        <div className="border-t border-black/5 dark:border-white/10 my-2 pt-2" />
+                        
+                        <button
+                          onClick={() => { handleLogout(); setIsAdminMenuOpen(false); }}
+                          className="w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 text-rose-500 hover:bg-rose-500/10 transition-all cursor-pointer"
+                        >
+                          <LogOut className="w-4 h-4" />
+                          <span>Выход</span>
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {currentUser.role === 'specialist' && (
+              <div className="relative">
+                <button
+                  id="spec-menu-toggle-btn"
+                  onClick={() => setIsSpecMenuOpen(!isSpecMenuOpen)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-extrabold rounded-xl bg-amber-600 hover:bg-amber-700 text-white shadow-md transition-all cursor-pointer"
+                >
+                  <Menu className="w-4 h-4" />
+                  <span>🔧 Кабинет Исполнителя</span>
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isSpecMenuOpen ? 'rotate-180' : ''}`} />
+                </button>
+                
+                {isSpecMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40 bg-black/10" onClick={() => setIsSpecMenuOpen(false)} />
+                    <div className={`absolute right-0 mt-2 w-72 max-w-[calc(100vw-32px)] rounded-2xl shadow-2xl border p-4 z-50 animate-scaleUp text-neutral-800 dark:text-neutral-100 ${
+                      theme === 'modern' ? 'bg-zinc-950 border-zinc-800' : theme === 'terminal' ? 'bg-black border-amber-500' : theme === 'warm' ? 'bg-[#fdf6e2] border-amber-900/10' : 'bg-white border-slate-200'
+                    }`}>
+                      <div className="pb-3 border-b border-black/5 dark:border-white/10 mb-3 flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <div>
+                          <div className="font-extrabold text-xs tracking-wide uppercase opacity-55">Авторизован как</div>
+                          <div className="font-black text-sm text-neutral-900 dark:text-neutral-50 truncate max-w-[200px]" title={currentUser.fullname}>
+                            {currentUser.fullname}
+                          </div>
+                          <div className="text-[10px] opacity-65">Тех. Специалист</div>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-1">
+                         <button
+                           onClick={() => { 
+                             setActiveTab('workplace'); 
+                             setIsSpecMenuOpen(false); 
+                           }}
+                           className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                             activeTab === 'workplace' || activeTab === 'objects' ? 'bg-amber-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                           }`}
+                         >
+                           <Wrench className="w-4 h-4" />
+                           <span>🔧 Рабочее место</span>
+                         </button>
+
+                         <button
+                           onClick={() => { 
+                             setActiveTab('my-acts'); 
+                             setIsSpecMenuOpen(false); 
+                           }}
+                           className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                             activeTab === 'my-acts' ? 'bg-amber-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                           }`}
+                         >
+                           <FileText className="w-4 h-4" />
+                           <span>📂 Мои акты</span>
+                         </button>
+
+                         <button
+                           onClick={() => { 
+                             setActiveTab('my-ratings'); 
+                             setIsSpecMenuOpen(false); 
+                           }}
+                           className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                             activeTab === 'my-ratings' ? 'bg-amber-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                           }`}
+                         >
+                           <Star className="w-4 h-4" />
+                           <span>⭐ Мой рейтинг и отзывы</span>
+                         </button>
+
+                         <button
+                           onClick={() => { 
+                             setActiveTab('spec-branding'); 
+                             setIsSpecMenuOpen(false); 
+                           }}
+                           className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                             activeTab === 'spec-branding' ? 'bg-amber-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                           }`}
+                         >
+                           <Palette className="w-4 h-4" />
+                           <span>🎨 Оформление приложения</span>
+                          </button>
+
+                          <button
+                            onClick={() => { 
+                              setActiveTab('support'); 
+                              setIsSpecMenuOpen(false); 
+                            }}
+                            className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                              activeTab === 'support' ? "bg-amber-600 text-white" : "hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200"
+                            }`}
+                          >
+                            <Phone className="w-4 h-4" />
+                            <span>📞 Поддержка</span>
+                          </button>
+
+                         <button
+                           onClick={() => { 
+                             (setActiveTab as any)('legal'); 
+                             setIsSpecMenuOpen(false); 
+                           }}
+                           className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                             activeTab === 'legal' ? 'bg-amber-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                           }`}
+                         >
+                           <ShieldCheck className="w-4 h-4" />
+                           <span>⚖️ Юр. соглашения</span>
+                         </button>
+                         
+                         <div className="border-t border-black/5 dark:border-white/10 my-2 pt-2" />
+
+                         <button
+                           onClick={() => { openUserProfile(); setIsSpecMenuOpen(false); }}
+                           className="w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200 transition-all cursor-pointer"
+                         >
+                           <UserIcon className="w-4 h-4" />
+                           <span>👤 Мой профиль</span>
+                         </button>
+                         
+                         <button
+                           onClick={() => { handleLogout(); setIsSpecMenuOpen(false); }}
+                           className="w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 text-rose-500 hover:bg-rose-500/10 transition-all cursor-pointer"
+                         >
+                           <LogOut className="w-4 h-4" />
+                           <span>Выход</span>
+                         </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </header>
 
@@ -1830,33 +2462,52 @@ export default function App() {
             
             {/* Status Bento Row */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className={getCardStyle()}>
+              <div 
+                onClick={() => setActiveTab('objects')}
+                title="Перейти к списку объектов"
+                className={`${getCardStyle()} cursor-pointer transition-all duration-200 hover:scale-[1.02] hover:shadow-md hover:border-blue-500/30 group select-none`}
+              >
                 <div className="flex justify-between items-start text-neutral-500">
-                  <span className="text-xs font-semibold uppercase tracking-wider">Всего объектов</span>
-                  <Building className="w-4.5 h-4.5 text-blue-500" />
+                  <span className="text-xs font-semibold uppercase tracking-wider group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">Всего объектов</span>
+                  <Building className="w-4.5 h-4.5 text-blue-500 group-hover:scale-110 transition-transform" />
                 </div>
-                <div className="text-3xl font-black mt-2">{objects.length}</div>
-                <div className="text-[10px] opacity-60 mt-1">Коммерческие комплексы на Яндекс.Диске</div>
-              </div>
-
-              <div className={getCardStyle()}>
-                <div className="flex justify-between items-start text-neutral-500">
-                  <span className="text-xs font-semibold uppercase tracking-wider">Пунктов регламента</span>
-                  <Calendar className="w-4.5 h-4.5 text-teal-500" />
-                </div>
-                <div className="text-3xl font-black mt-2">{schedules.length}</div>
-                <div className="text-[10px] text-red-500 font-semibold mt-1">
-                  {schedules.filter(s => getScheduleStatus(s).overdue).length} пунктов просрочено
+                <div className="text-3xl font-black mt-2 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{objects.length}</div>
+                <div className="text-[10px] opacity-60 mt-1 flex items-center gap-1">
+                  <span>Коммерческие комплексы на Яндекс.Диске</span>
+                  <span className="text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity font-bold">➔</span>
                 </div>
               </div>
 
-              <div className={getCardStyle()}>
+              <div 
+                onClick={() => setActiveTab('schedule')}
+                title="Перейти к календарному графику ТО"
+                className={`${getCardStyle()} cursor-pointer transition-all duration-200 hover:scale-[1.02] hover:shadow-md hover:border-teal-500/30 group select-none`}
+              >
                 <div className="flex justify-between items-start text-neutral-500">
-                  <span className="text-xs font-semibold uppercase tracking-wider">Пройдено чек-листов</span>
-                  <CheckSquare className="w-4.5 h-4.5 text-emerald-500" />
+                  <span className="text-xs font-semibold uppercase tracking-wider group-hover:text-teal-600 dark:group-hover:text-teal-400 transition-colors">Пунктов регламента</span>
+                  <Calendar className="w-4.5 h-4.5 text-teal-500 group-hover:scale-110 transition-transform" />
                 </div>
-                <div className="text-3xl font-black mt-2">{reports.length}</div>
-                <div className="text-[10px] opacity-60 mt-1">С актами контроля в PDF</div>
+                <div className="text-3xl font-black mt-2 group-hover:text-teal-600 dark:group-hover:text-teal-400 transition-colors">{schedules.length}</div>
+                <div className="text-[10px] text-red-500 font-semibold mt-1 flex items-center justify-between gap-1">
+                  <span>{schedules.filter(s => getScheduleStatus(s).overdue).length} пунктов просрочено</span>
+                  <span className="text-teal-500 opacity-0 group-hover:opacity-100 transition-opacity font-bold">➔</span>
+                </div>
+              </div>
+
+              <div 
+                onClick={() => setActiveTab('reports')}
+                title="Перейти к выполненным чек-листам и актам"
+                className={`${getCardStyle()} cursor-pointer transition-all duration-200 hover:scale-[1.02] hover:shadow-md hover:border-emerald-500/30 group select-none`}
+              >
+                <div className="flex justify-between items-start text-neutral-500">
+                  <span className="text-xs font-semibold uppercase tracking-wider group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">Пройдено чек-листов</span>
+                  <CheckSquare className="w-4.5 h-4.5 text-emerald-500 group-hover:scale-110 transition-transform" />
+                </div>
+                <div className="text-3xl font-black mt-2 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">{reports.length}</div>
+                <div className="text-[10px] opacity-60 mt-1 flex items-center justify-between gap-1">
+                  <span>С актами контроля в PDF</span>
+                  <span className="text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity font-bold">➔</span>
+                </div>
               </div>
 
               {/* Yandex.Disk Status controller Box */}
@@ -1866,11 +2517,11 @@ export default function App() {
                   <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
                 </div>
                 <p className="text-[11px] leading-snug opacity-75">{systemSettings.yandexDiskConnected ? "Диск подключен (.env)" : "Облачное хранилище активно"}</p>
-                <div className="mt-4 flex gap-2">
+                <div className="mt-4 flex flex-col gap-2">
                   <button 
                     onClick={triggerDiskSync}
                     disabled={syncing}
-                    className="flex-1 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="w-full py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
                   >
                     <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
                     {syncing ? 'Поиск...' : 'Синхронизировать'}
@@ -1878,7 +2529,7 @@ export default function App() {
                   <button 
                     onClick={checkCronNow}
                     title="Запустить утренний планировщик напоминаний"
-                    className="p-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 text-slate-800 dark:text-white rounded-lg border text-xs flex items-center gap-1 cursor-pointer"
+                    className="w-full py-2 bg-slate-100 hover:bg-slate-200 dark:bg-zinc-805/10 dark:hover:bg-zinc-800 text-slate-800 dark:text-white rounded-lg border dark:border-zinc-700/50 text-xs flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap"
                   >
                     <Bell className="w-3.5 h-3.5 text-amber-500" />
                     Проверить Сроки
@@ -1932,11 +2583,23 @@ export default function App() {
                 ⚙️ Каналы связи
               </button>
               <button 
+                onClick={() => setActiveTab('branding')}
+                className={`py-2 px-4 rounded-lg font-bold text-xs transition-colors cursor-pointer ${activeTab === 'branding' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-200/50 opacity-80'}`}
+              >
+                🎨 Оформление приложения
+              </button>
+              <button 
                 onClick={() => setActiveTab('ratings')}
                 id="tab-btn-ratings"
                 className={`py-2 px-4 rounded-lg font-bold text-xs transition-colors cursor-pointer ${activeTab === 'ratings' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-200/50 opacity-80'}`}
               >
                 ⭐ Рейтинг специалистов
+              </button>
+              <button 
+                onClick={() => setActiveTab('support')}
+                className={`py-2 px-4 rounded-lg font-bold text-xs transition-colors cursor-pointer ${activeTab === 'support' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-200/50 opacity-80'}`}
+              >
+                📞 Обращения
               </button>
             </div>
 
@@ -2099,6 +2762,18 @@ export default function App() {
                           className={getInputStyle()} 
                         />
                         <span className="text-[10px] opacity-50">При синхронизации в этой папке будут автоматически созданы служебные файлы schedule.json</span>
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-bold uppercase opacity-75">Прямая ссылка на Яндекс.Диск (Необязательно)</label>
+                        <input 
+                          type="url" 
+                          value={objDiskUrl}
+                          onChange={(e) => setObjDiskUrl(e.target.value)}
+                          placeholder="https://disk.yandex.ru/d/..."
+                          className={getInputStyle()} 
+                        />
+                        <span className="text-[10px] opacity-50">Сервис перенаправит собственника по этой веб-ссылке на Яндекс.Диск</span>
                       </div>
 
                       <div className="pt-2 flex gap-2">
@@ -2344,9 +3019,9 @@ export default function App() {
                                             </div>
                                           </button>
 
-                                          {/* LEVEL 3: DETAILED COLLAPSIBLE LIST */}
+                                          {/* LEVEL 3: DETAILED COLLAPSIBLE LIST - Responsive stretch to section layout */}
                                           {isCatExpanded && (
-                                            <div className="p-3 space-y-3">
+                                            <div className="p-3 grid grid-cols-1 gap-4">
                                               {catSchedules.map((sch, schIdx) => {
                                                 const isSchExpanded = expandedSchedules[sch.id] === true; // collapsed by default
                                                 const status = getScheduleStatus(sch);
@@ -2356,141 +3031,115 @@ export default function App() {
                                                 return (
                                                   <div 
                                                     key={sch.id} 
-                                                    className={`p-3 rounded-xl border transition-all shadow-xs ${
+                                                    className={`p-4 rounded-xl border transition-all shadow-sm flex flex-col justify-between relative w-full ${
                                                       isSchExpanded 
-                                                        ? 'bg-blue-500/[0.03] border-blue-500/30 dark:border-blue-500/20' 
-                                                        : 'bg-white dark:bg-zinc-900/60 border-neutral-200 dark:border-zinc-800/80 hover:border-slate-300 dark:hover:border-zinc-700'
+                                                        ? 'bg-blue-500/[0.02] border-blue-500/35 dark:border-blue-500/20 ring-1 ring-blue-500/5' 
+                                                        : 'bg-white dark:bg-zinc-900/60 border-neutral-250 dark:border-zinc-800/80 hover:border-blue-500/30 dark:hover:border-blue-500/30'
                                                     }`}
                                                   >
                                                     
-                                                    {/* Collapsible item row summaries */}
-                                                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs w-full">
-                                                      
-                                                      {/* 3. Регламент / Задача */}
+                                                    {/* Card Head: Title & Action Controls */}
+                                                    <div className="flex items-start justify-between gap-3 text-xs w-full pb-3 border-b border-neutral-100 dark:border-zinc-800/50">
                                                       <div className="min-w-0 flex-1">
-                                                        <div className="flex items-start gap-2">
-                                                          <button
-                                                            type="button"
-                                                            onClick={() => setExpandedSchedules(prev => ({ ...prev, [sch.id]: !isSchExpanded }))}
-                                                            className="p-1 hover:bg-neutral-200/30 dark:hover:bg-white/5 rounded cursor-pointer transition-colors mt-0.5 shrink-0"
-                                                          >
-                                                            {isSchExpanded ? (
-                                                              <ChevronDown className="w-4 h-4 text-zinc-400" />
-                                                            ) : (
-                                                              <ChevronRight className="w-4 h-4 text-zinc-400" />
-                                                            )}
-                                                          </button>
-                                                          <div 
-                                                            onClick={() => setExpandedSchedules(prev => ({ ...prev, [sch.id]: !isSchExpanded }))}
-                                                            className="cursor-pointer select-none min-w-0 flex-1"
-                                                          >
-                                                            <h4 className="font-extrabold text-sm text-neutral-800 dark:text-neutral-100 hover:text-blue-500 transition-colors break-words">
-                                                              {sch.title}
-                                                            </h4>
-                                                            <p className="text-[10px] text-neutral-400 dark:text-neutral-500 mt-1 uppercase tracking-widest font-mono">
-                                                              Ответственный: <span className="text-zinc-500 font-bold font-sans normal-case">{sch.responsibleUserId ? getUserFullname(sch.responsibleUserId) : "Свободный выбор инженером"}</span>
-                                                            </p>
-                                                          </div>
-                                                        </div>
-                                                      </div>
-
-                                                      {/* Attributes & Quick expand details */}
-                                                      <div className="flex flex-wrap items-center gap-2 lg:gap-2.5 shrink-0">
-                                                        
-                                                        {/* 3.5 Ввод в эксплуатацию */}
-                                                        <div className="flex flex-col items-center justify-center min-w-[95px] px-2 py-1 rounded bg-neutral-100 dark:bg-zinc-800/80 border border-neutral-200/60 dark:border-zinc-700/50 text-center shrink-0">
-                                                          <span className="text-[8px] uppercase tracking-wider text-neutral-400 dark:text-neutral-500 font-bold leading-none">Ввод в экспл.</span>
-                                                          <span className="font-extrabold text-[10.5px] text-neutral-600 dark:text-neutral-300 font-mono mt-1 leading-none">
-                                                            {sch.commissioningDate ? new Date(sch.commissioningDate).toLocaleDateString('ru-RU') : "—"}
-                                                          </span>
-                                                        </div>
-
-                                                        {/* 4. Интервал */}
-                                                        <div className="flex flex-col items-center justify-center min-w-[70px] px-2 py-1 rounded bg-neutral-100 dark:bg-zinc-800/80 border border-neutral-200/60 dark:border-zinc-700/50 text-center shrink-0">
-                                                          <span className="text-[8px] uppercase tracking-wider text-neutral-400 dark:text-neutral-500 font-bold leading-none">Интервал</span>
-                                                          <span className="font-extrabold text-[10.5px] text-neutral-600 dark:text-neutral-300 mt-1 leading-none">{sch.intervalDays} дн.</span>
-                                                        </div>
-
-                                                        {/* 5. Последний запуск */}
-                                                        <div className="flex flex-col items-center justify-center min-w-[95px] px-2 py-1 rounded bg-neutral-100 dark:bg-zinc-800/80 border border-neutral-200/60 dark:border-zinc-700/50 text-center shrink-0">
-                                                          <span className="text-[8px] uppercase tracking-wider text-neutral-400 dark:text-neutral-500 font-bold leading-none">Посл. запуск</span>
-                                                          <span className="font-extrabold text-[10.5px] text-neutral-600 dark:text-neutral-300 font-mono mt-1 leading-none">
-                                                            {sch.lastDoneDate ? new Date(sch.lastDoneDate).toLocaleDateString('ru-RU') : "—"}
-                                                          </span>
-                                                        </div>
-
-                                                        {/* 6. Предельный статус */}
-                                                        <div className="flex flex-col items-center justify-center min-w-[100px] px-2 py-1 rounded bg-neutral-100 dark:bg-zinc-800/80 border border-neutral-200/60 dark:border-zinc-700/50 text-center shrink-0">
-                                                          <span className="text-[8px] uppercase tracking-wider text-neutral-400 dark:text-neutral-500 font-bold leading-none">Статус</span>
-                                                          <span className={`px-1.5 py-0.5 rounded text-[8.5px] border font-black uppercase tracking-wider mt-1 leading-none ${status.class}`}>
+                                                        <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+                                                          <span className={`px-1.5 py-0.5 rounded text-[8px] border font-black uppercase tracking-wider leading-none ${status.class}`}>
                                                             {status.label}
                                                           </span>
+                                                          {sch.category && (
+                                                            <span className="text-[8px] bg-neutral-100 dark:bg-zinc-800/60 text-neutral-500 dark:text-neutral-400 px-1.5 py-0.5 rounded uppercase tracking-wider font-bold leading-none">
+                                                              {sch.category}
+                                                            </span>
+                                                          )}
                                                         </div>
-
-                                                        {/* 7. Элементы */}
-                                                        <button 
-                                                          type="button"
+                                                        <h4 
                                                           onClick={() => setExpandedSchedules(prev => ({ ...prev, [sch.id]: !isSchExpanded }))}
-                                                          className="flex flex-col items-center justify-center min-w-[85px] px-2 py-1 rounded bg-blue-500/5 hover:bg-blue-500/10 border border-blue-500/15 cursor-pointer transition-colors text-center shrink-0"
+                                                          className="font-extrabold text-sm text-neutral-800 dark:text-neutral-100 hover:text-blue-500 cursor-pointer transition-colors leading-snug break-words"
                                                         >
-                                                          <span className="text-[8px] uppercase tracking-wider text-blue-500 font-bold leading-none">Элементы</span>
-                                                          <span className="font-extrabold text-[10.5px] text-blue-600 dark:text-blue-400 mt-1 underline decoration-dotted leading-none">
-                                                            {elementsCount} вопр.
-                                                          </span>
-                                                        </button>
-
-                                                        {/* Action Controls */}
-                                                        <div className="flex gap-1 pl-2 border-l border-neutral-300/20 shrink-0">
-                                                          <button 
-                                                            type="button"
-                                                            onClick={() => startEditSchedule(sch)}
-                                                            className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 p-1.5 rounded transition-colors cursor-pointer border border-amber-500/10"
-                                                            title="Редактировать регламент графика"
-                                                          >
-                                                            <Edit3 className="w-3.5 h-3.5" />
-                                                          </button>
-                                                          <button 
-                                                            type="button"
-                                                            onClick={() => deleteSchedule(sch.id)}
-                                                            className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 p-1.5 rounded transition-colors cursor-pointer border border-rose-500/10"
-                                                            title="Удалить регламент"
-                                                          >
-                                                            <Trash2 className="w-3.5 h-3.5" />
-                                                          </button>
+                                                          {sch.title}
+                                                        </h4>
+                                                        <div className="text-[10px] text-neutral-450 dark:text-neutral-500 mt-1 uppercase tracking-widest font-mono">
+                                                          Ответственный: <span className="text-zinc-600 dark:text-zinc-400 font-bold font-sans normal-case">{sch.responsibleUserId ? getUserFullname(sch.responsibleUserId) : "Свободный выбор инженером"}</span>
                                                         </div>
-
                                                       </div>
 
+                                                      {/* Action Controls */}
+                                                      <div className="flex gap-1.5 shrink-0 ml-2">
+                                                        <button 
+                                                          type="button"
+                                                          onClick={() => startEditSchedule(sch)}
+                                                          className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 p-2 rounded-lg transition-colors cursor-pointer border border-amber-500/10"
+                                                          title="Редактировать регламент графика"
+                                                        >
+                                                          <Edit3 className="w-3.5 h-3.5" />
+                                                        </button>
+                                                        <button 
+                                                          type="button"
+                                                          onClick={() => deleteSchedule(sch.id)}
+                                                          className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 p-2 rounded-lg transition-colors cursor-pointer border border-rose-500/10"
+                                                          title="Удалить регламент"
+                                                        >
+                                                          <Trash2 className="w-3.5 h-3.5" />
+                                                        </button>
+                                                      </div>
                                                     </div>
 
-                                                    {/* 7. Развернутый перечень контролируемых элементов и инструкции */}
+                                                    {/* Central 2x2 Grid with properties */}
+                                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 my-3 text-[11px]">
+                                                      <div className="p-2 rounded-lg bg-neutral-50 dark:bg-zinc-850/20 border border-neutral-150 dark:border-zinc-800/40">
+                                                        <span className="text-[8px] uppercase tracking-wider text-neutral-400 dark:text-neutral-500 font-bold block mb-0.5 leading-none">Ввод в экспл.</span>
+                                                        <span className="font-extrabold text-neutral-700 dark:text-neutral-300 font-mono text-[10.5px]">
+                                                          {sch.commissioningDate ? new Date(sch.commissioningDate).toLocaleDateString('ru-RU') : "—"}
+                                                        </span>
+                                                      </div>
+
+                                                      <div className="p-2 rounded-lg bg-neutral-50 dark:bg-zinc-850/20 border border-neutral-150 dark:border-zinc-800/40">
+                                                        <span className="text-[8px] uppercase tracking-wider text-neutral-400 dark:text-neutral-500 font-bold block mb-0.5 leading-none">Интервал</span>
+                                                        <span className="font-extrabold text-neutral-700 dark:text-neutral-300 text-[10.5px]">{sch.intervalDays} дн.</span>
+                                                      </div>
+
+                                                      <div className="p-2 rounded-lg bg-neutral-50 dark:bg-zinc-850/20 border border-neutral-150 dark:border-zinc-800/40">
+                                                        <span className="text-[8px] uppercase tracking-wider text-neutral-400 dark:text-neutral-500 font-bold block mb-0.5 leading-none">Посл. запуск</span>
+                                                        <span className="font-extrabold text-neutral-700 dark:text-neutral-300 font-mono text-[10.5px]">
+                                                          {sch.lastDoneDate ? new Date(sch.lastDoneDate).toLocaleDateString('ru-RU') : "—"}
+                                                        </span>
+                                                      </div>
+
+                                                      <button 
+                                                        type="button"
+                                                        onClick={() => setExpandedSchedules(prev => ({ ...prev, [sch.id]: !isSchExpanded }))}
+                                                        className="p-2 rounded-lg bg-blue-500/5 hover:bg-blue-500/10 border border-blue-500/10 text-left transition-colors flex flex-col justify-between cursor-pointer"
+                                                      >
+                                                        <span className="text-[8px] uppercase tracking-wider text-blue-500 font-bold block leading-none">Элементы контроля</span>
+                                                        <span className="font-extrabold text-blue-600 dark:text-blue-400 mt-0.5 text-[10.5px] underline decoration-dotted leading-none">
+                                                          {elementsCount} вопр.
+                                                        </span>
+                                                      </button>
+                                                    </div>
+
+                                                    {/* Expanded checklist contents in standard responsive block */}
                                                     {isSchExpanded && (
-                                                      <div className="mt-3.5 ml-7 pl-3 border-l-2 border-slate-500/20 space-y-3.5 animate-fadeIn">
+                                                      <div className="mt-2.5 pt-3 border-t border-neutral-100 dark:border-zinc-800/60 text-xs animate-fadeIn space-y-2">
                                                         {tpl ? (
-                                                          <div className="bg-neutral-100/15 dark:bg-black/25 p-3 rounded-xl border border-neutral-300/10 space-y-3">
-                                                            <div className="text-[10px] font-black uppercase text-zinc-400 dark:text-zinc-500 tracking-wider flex items-center justify-between">
-                                                              <span>📋 Контролируемые элементы ({elementsCount}) в чек-листе: "{tpl.name}"</span>
-                                                              {tpl.description && <span className="text-[9px] font-semibold italic text-neutral-400 normal-case">{tpl.description}</span>}
+                                                          <div className="bg-neutral-100/15 dark:bg-black/25 p-2.5 rounded-lg border border-neutral-350/5 space-y-2">
+                                                            <div className="text-[9px] font-black uppercase text-zinc-400 dark:text-zinc-500 tracking-wider flex items-center justify-between">
+                                                              <span>📋 Чек-лист: "{tpl.name}"</span>
                                                             </div>
-                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                            <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1">
                                                               {tpl.questions.map((q, idx) => (
-                                                                <div key={q.id} className="flex gap-2 p-2 rounded-lg bg-white/5 border border-dashed border-neutral-300/10 text-[11px]">
-                                                                  <span className="text-[9px] bg-sky-500/10 text-sky-500 rounded px-1.5 py-0.5 font-bold shrink-0 self-start">
+                                                                <div key={q.id} className="flex gap-1.5 p-1.5 rounded bg-white/5 border border-dashed border-neutral-300/10 text-[10px]">
+                                                                  <span className="text-[8px] bg-sky-500/10 text-sky-500 rounded px-1.5 py-0.5 font-bold shrink-0 self-start leading-none">
                                                                     {idx + 1}
                                                                   </span>
                                                                   <div className="flex-1 min-w-0">
-                                                                    <p className="font-semibold text-neutral-800 dark:text-neutral-100">{q.text}</p>
-                                                                    <p className="text-[9px] text-neutral-400/80 mt-0.5 font-mono">
-                                                                      Тип ответа: {q.type === 'boolean' ? "Да/Нет" : q.type === 'number' ? "Измерение" : q.type === 'text' ? "Текстовое описание" : q.type === 'select' ? "Выбор из параметров" : "Фотоподтверждение"}
-                                                                    </p>
+                                                                    <p className="font-semibold text-neutral-800 dark:text-neutral-100 leading-tight">{q.text}</p>
                                                                   </div>
                                                                 </div>
                                                               ))}
                                                             </div>
                                                             {sch.notes && (
-                                                              <div className="text-[11px] text-neutral-500 dark:text-zinc-400 bg-neutral-300/10 dark:bg-zinc-800/20 p-2.5 rounded border-l-2 border-amber-500/70">
-                                                                <span className="font-extrabold uppercase text-[9px] text-zinc-400 block mb-0.5">Инструкция по исполнению:</span>
-                                                                <p className="font-medium italic">{sch.notes}</p>
+                                                              <div className="text-[10px] text-neutral-500 dark:text-zinc-400 bg-neutral-300/10 dark:bg-zinc-800/20 p-2 rounded border-l-2 border-amber-500/70">
+                                                                <span className="font-extrabold uppercase text-[8px] text-zinc-400 block mb-0.5">Инструкция:</span>
+                                                                <p className="font-medium italic leading-relaxed">{sch.notes}</p>
                                                               </div>
                                                             )}
                                                           </div>
@@ -2940,76 +3589,143 @@ export default function App() {
                     <p className="text-xs opacity-60">Юридически и технически подтвержденная история осмотров инженерного оборудования объектов</p>
                   </div>
 
+                  {/* Фильтры структуры: Объект и Год */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-5 mb-5 border-b border-neutral-300/15">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-bold uppercase opacity-75">🏢 Выберите объект контроля:</label>
+                      <select
+                        value={selectedReportObjectId}
+                        onChange={(e) => {
+                          setSelectedReportObjectId(e.target.value);
+                          setSelectedReportYear('all'); // сбросить год при выборе другого объекта
+                        }}
+                        className={getInputStyle()}
+                      >
+                        <option value="all">🌐 Все объекты ({reports.length} актов)</option>
+                        {objects.map(obj => {
+                          const hasReports = reports.some(r => r.objectId === obj.id);
+                          if (!hasReports) return null;
+                          const count = reports.filter(r => r.objectId === obj.id).length;
+                          return (
+                            <option key={obj.id} value={obj.id}>
+                              🏢 {obj.name} (Актов: {count})
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-bold uppercase opacity-75">📅 Выберите год:</label>
+                      <select
+                        value={selectedReportYear}
+                        onChange={(e) => setSelectedReportYear(e.target.value)}
+                        className={getInputStyle()}
+                        disabled={reports.filter(r => selectedReportObjectId === 'all' || r.objectId === selectedReportObjectId).length === 0}
+                      >
+                        <option value="all">⏳ Все годы ({reports.filter(r => selectedReportObjectId === 'all' || r.objectId === selectedReportObjectId).length} актов)</option>
+                        {(() => {
+                          const relevantReports = reports.filter(r => selectedReportObjectId === 'all' || r.objectId === selectedReportObjectId);
+                          const years = Array.from<string>(new Set(relevantReports.map(r => new Date(r.dateDone).getFullYear().toString()))).sort((a: string, b: string) => b.localeCompare(a));
+                          return years.map(yr => {
+                            const countInYear = relevantReports.filter(r => new Date(r.dateDone).getFullYear().toString() === yr).length;
+                            return (
+                              <option key={yr} value={yr}>
+                                📅 {yr} год (Актов: {countInYear})
+                              </option>
+                            );
+                          });
+                        })()}
+                      </select>
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {reports.map(rep => {
-                      const obj = objects.find(o => o.id === rep.objectId);
-                      const tpl = templates.find(t => t.id === rep.checklistTemplateId);
-                      const sch = schedules.find(s => s.id === rep.scheduleItemId);
-                      
-                      return (
-                        <div key={rep.id} className="p-5 rounded-2xl border border-neutral-300/15 bg-neutral-100/5 hover:shadow-md transition-all space-y-4">
-                          <div className="flex justify-between items-center bg-black/5 dark:bg-white/5 p-2 rounded-xl">
-                            <div>
-                              <span className="text-[10px] text-sky-500 font-bold tracking-wider uppercase block">АКТ {rep.id}</span>
-                              <span className="text-[11px] opacity-60">{new Date(rep.dateDone).toLocaleString('ru-RU')}</span>
-                            </div>
-                            <span className="bg-emerald-500/10 text-emerald-500 text-[10px] font-extrabold px-2 py-1 rounded-full uppercase">Выполнено</span>
-                          </div>
+                    {(() => {
+                      const finalReports = reports.filter(rep => {
+                        const matchObject = selectedReportObjectId === 'all' || rep.objectId === selectedReportObjectId;
+                        const matchYear = selectedReportYear === 'all' || new Date(rep.dateDone).getFullYear().toString() === selectedReportYear;
+                        return matchObject && matchYear;
+                      });
 
-                          <div className="space-y-1">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Объект контроля:</span>
-                            <div className="font-extrabold text-sm">{obj ? obj.name : "Неизвестный объект"}</div>
-                            <p className="text-xs text-slate-500">{obj ? obj.address : ""}</p>
+                      if (finalReports.length === 0) {
+                        return (
+                          <div className="col-span-full py-12 text-center text-sm opacity-65 font-medium">
+                            📭 Не найдено заполненных актов по выбранному фильтру (объект / год).
                           </div>
+                        );
+                      }
 
-                          <div className="space-y-1">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Регламентная задача:</span>
-                            <div className="font-bold text-xs">{sch ? sch.title : "Регламентное обслуживание"}</div>
-                            <p className="text-[11px] opacity-65 italic">Тип чек-листа: {tpl ? tpl.name : ""}</p>
-                          </div>
-
-                          <div className="bg-slate-50 dark:bg-zinc-800/40 p-3 rounded-xl space-y-2 border">
-                            <span className="text-[10px] uppercase font-bold text-slate-500 block border-b pb-1">Ответы в чек-листе:</span>
-                            <div className="space-y-1.5">
-                              {rep.answers.map(ans => {
-                                const qText = tpl?.questions.find(q => q.id === ans.questionId)?.text || ans.questionId;
-                                const isPhoto = ans.value.startsWith('http') || ans.value.startsWith('data:image');
-                                return (
-                                  <div key={ans.questionId} className="text-[11px] leading-tight flex flex-col">
-                                    <span className="text-slate-500 font-medium">{qText}:</span>
-                                    {isPhoto ? (
-                                      <a href={ans.value} target="_blank" rel="noopener noreferrer" className="text-sky-500 font-bold hover:underline flex items-center gap-1 mt-0.5">
-                                        <ImageIcon className="w-3.5 h-3.5" /> [Смотреть прикрепленное фото]
-                                      </a>
-                                    ) : (
-                                      <span className="font-extrabold text-slate-800 mt-0.5">
-                                        {ans.value === 'true' ? '✅ Да' : ans.value === 'false' ? '❌ Нет' : ans.value}
-                                      </span>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-
-                          <div className="border-t border-dashed border-neutral-300/15 pt-3 flex items-center justify-between text-[11px]">
-                            <div>
-                              <div className="font-bold text-slate-700">{rep.specialistInfo.fullname}</div>
-                              <div className="opacity-65 text-[10px]">{rep.specialistInfo.company}</div>
+                      return finalReports.map(rep => {
+                        const obj = objects.find(o => o.id === rep.objectId);
+                        const tpl = templates.find(t => t.id === rep.checklistTemplateId);
+                        const sch = schedules.find(s => s.id === rep.scheduleItemId);
+                        
+                        return (
+                          <div key={rep.id} className="p-5 rounded-2xl border border-neutral-300/15 bg-neutral-100/5 hover:shadow-md transition-all space-y-4">
+                            <div className="flex justify-between items-center bg-black/5 dark:bg-white/5 p-2 rounded-xl">
+                              <div>
+                                <span className="text-[10px] text-sky-500 font-bold tracking-wider uppercase block">АКТ {rep.id}</span>
+                                <span className="text-[11px] opacity-60">{new Date(rep.dateDone).toLocaleString('ru-RU')}</span>
+                              </div>
+                              <span className="bg-emerald-500/10 text-emerald-500 text-[10px] font-extrabold px-2 py-1 rounded-full uppercase">Выполнено</span>
                             </div>
 
-                            <a 
-                              href={`/api/reports/${rep.id}/pdf`} 
-                              target="_blank" 
-                              rel="noopener noreferrer"
-                              className="bg-blue-600 hover:bg-blue-700 text-white font-bold p-2 rounded-lg flex items-center gap-1 shadow-sm uppercase text-[9px] tracking-wide"
-                            >
-                              <Download className="w-3.5 h-3.5" /> Скачать акт
-                            </a>
+                            <div className="space-y-1">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Объект контроля:</span>
+                              <div className="font-extrabold text-sm">{obj ? obj.name : "Неизвестный объект"}</div>
+                              <p className="text-xs text-slate-500">{obj ? obj.address : ""}</p>
+                            </div>
+
+                            <div className="space-y-1">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Регламентная задача:</span>
+                              <div className="font-bold text-xs">{sch ? sch.title : "Регламентное обслуживание"}</div>
+                              <p className="text-[11px] opacity-65 italic">Тип чек-листа: {tpl ? tpl.name : ""}</p>
+                            </div>
+
+                            <div className="bg-slate-50 dark:bg-zinc-800/40 p-3 rounded-xl space-y-2 border">
+                              <span className="text-[10px] uppercase font-bold text-slate-500 block border-b pb-1">Ответы в чек-листе:</span>
+                              <div className="space-y-1.5">
+                                {rep.answers.map(ans => {
+                                  const qText = tpl?.questions.find(q => q.id === ans.questionId)?.text || ans.questionId;
+                                  const isPhoto = ans.value.startsWith('http') || ans.value.startsWith('data:image');
+                                  return (
+                                    <div key={ans.questionId} className="text-[11px] leading-tight flex flex-col">
+                                      <span className="text-slate-500 font-medium">{qText}:</span>
+                                      {isPhoto ? (
+                                        <a href={ans.value} target="_blank" rel="noopener noreferrer" className="text-sky-500 font-bold hover:underline flex items-center gap-1 mt-0.5">
+                                          <ImageIcon className="w-3.5 h-3.5" /> [Смотреть прикрепленное фото]
+                                        </a>
+                                      ) : (
+                                        <span className="font-extrabold text-slate-800 mt-0.5">
+                                          {ans.value === 'true' ? '✅ Да' : ans.value === 'false' ? '❌ Нет' : ans.value}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div className="border-t border-dashed border-neutral-300/15 pt-3 flex items-center justify-between text-[11px]">
+                              <div>
+                                <div className="font-bold text-slate-700">{rep.specialistInfo.fullname}</div>
+                                <div className="opacity-65 text-[10px]">{rep.specialistInfo.company}</div>
+                              </div>
+
+                              <a 
+                                href={`/api/reports/${rep.id}/pdf`} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold p-2 rounded-lg flex items-center gap-1 shadow-sm uppercase text-[9px] tracking-wide"
+                              >
+                                <Download className="w-3.5 h-3.5" /> Скачать акт
+                              </a>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
               </div>
@@ -3019,67 +3735,283 @@ export default function App() {
             {activeTab === 'users' && (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 
-                {/* Users list database */}
-                <div className="lg:col-span-2 space-y-4">
+                {/* Users list database structured by Object - Owner */}
+                <div className="lg:col-span-2 space-y-6">
+                  
+                  {/* Part 1: Object - Owner Relation List */}
                   <div className={getCardStyle()}>
                     <div className={getSubHeaderStyle()}>
-                      <h3 className="font-bold text-base">Управление правами доступа и каналами связи</h3>
-                      <p className="text-xs opacity-60">Настройка идентификаторов мессенджеров для мгновенной рассылки уведомлений ТО</p>
+                      <span className="text-[10px] uppercase font-bold text-[#bc1c24] block tracking-widest mb-1">Права доступа и Каналы</span>
+                      <h3 className="font-extrabold text-base text-zinc-800 dark:text-zinc-100 flex items-center gap-2">
+                        🏢 Структура «Объект — Собственник»
+                      </h3>
+                      <p className="text-xs opacity-65">
+                        Управление правами доступа и настройка каналов связи собственников для каждого обслуживаемого здания
+                      </p>
+                    </div>
+
+                    <div className="space-y-4">
+                      {objects.map(obj => {
+                        const owner = users.find(u => u.id === obj.ownerId);
+                        const otherOwners = users.filter(u => u.role === 'owner');
+
+                        return (
+                          <div 
+                            key={obj.id} 
+                            className="p-4 rounded-xl border border-neutral-200 dark:border-zinc-800/85 bg-neutral-100/10 dark:bg-zinc-900/40 hover:border-blue-500/30 transition-all space-y-3"
+                          >
+                            {/* Object Info & Dynamic Owner Selector */}
+                            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-neutral-150 dark:border-zinc-850/50">
+                              <div>
+                                <h4 className="font-extrabold text-sm text-neutral-800 dark:text-neutral-100">
+                                  {obj.name}
+                                </h4>
+                                <p className="text-xs text-neutral-450 dark:text-neutral-500 font-medium">
+                                  📍 {obj.address}
+                                </p>
+                              </div>
+
+                              {/* Owner Assignment Dropdown */}
+                              <div className="flex items-center gap-1.5 shrink-0 w-full sm:w-auto">
+                                <span className="text-[10px] uppercase font-bold text-neutral-400">Собственник:</span>
+                                <select
+                                  value={obj.ownerId || ""}
+                                  onChange={(e) => handleAssignOwner(obj.id, e.target.value)}
+                                  className="text-xs px-2.5 py-1 rounded-lg border border-neutral-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 font-semibold text-neutral-700 dark:text-neutral-200 cursor-pointer w-full sm:w-auto"
+                                >
+                                  <option value="">-- Не назначен --</option>
+                                  {otherOwners.map(ow => (
+                                    <option key={ow.id} value={ow.id}>
+                                      👤 {ow.fullname}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+
+                            {/* Linked Owner Contact & Communication Channels block */}
+                            {owner ? (
+                              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pt-1">
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2">
+                                    <UserCheck className="w-4 h-4 text-sky-500" />
+                                    <span className="font-extrabold text-sm text-neutral-800 dark:text-neutral-100">
+                                      {owner.fullname}
+                                    </span>
+                                    <span className="text-[8px] font-black bg-sky-500/10 text-sky-500 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                                      Кабинет собственника
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                                    Email: <span className="font-semibold text-neutral-750 dark:text-neutral-300">{owner.email}</span> • Тел: <span className="font-mono">{owner.phone || "—"}</span>
+                                  </p>
+
+                                  {/* Messenger channels for this owner */}
+                                  <div className="flex flex-wrap items-center gap-2 pt-1.5 text-[10px]">
+                                    <span className={`px-2 py-0.5 rounded font-mono ${owner.telegramChatId ? "bg-emerald-500/10 text-emerald-500 font-bold border border-emerald-500/15" : "bg-neutral-100 dark:bg-zinc-800 text-neutral-400"}`}>
+                                      💬 TG ID: {owner.telegramChatId || "не настроен"}
+                                    </span>
+                                    <span className={`px-2 py-0.5 rounded font-mono ${owner.maxChatId ? "bg-emerald-500/10 text-emerald-500 font-bold border border-emerald-500/15" : "bg-neutral-100 dark:bg-zinc-800 text-neutral-400"}`}>
+                                      🤖 MAX Chat Bot: {owner.maxChatId || "не настроен"}
+                                    </span>
+                                    <span className={`px-2 py-0.5 rounded font-mono ${owner.vkUserId ? "bg-emerald-500/10 text-emerald-500 font-bold border border-emerald-500/15" : "bg-neutral-100 dark:bg-zinc-800 text-neutral-400"}`}>
+                                      👤 VK ID: {owner.vkUserId || "не настроен"}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Edit buttons */}
+                                <div className="flex gap-2 self-end md:self-center">
+                                  <button 
+                                    type="button"
+                                    onClick={() => startEditUser(owner)}
+                                    className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 p-2 rounded-lg border border-amber-500/10 transition-colors cursor-pointer"
+                                    title="Настройка коммуникационных каналов и личных данных"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button 
+                                    type="button"
+                                    onClick={() => deleteUser(owner.id)}
+                                    className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 p-2 rounded-lg border border-rose-500/10 transition-colors cursor-pointer"
+                                    title="Удалить собственника"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="p-3 bg-amber-500/5 rounded-xl border border-dashed border-amber-500/20 text-xs text-amber-600 dark:text-amber-400/95 flex items-center justify-between">
+                                <span className="flex items-center gap-1.5 font-semibold">
+                                  <AlertCircle className="w-3.5 h-3.5 animate-pulse" />
+                                  Собственник не привязан к этому объекту. Уведомления не будут доставляться.
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setUsrRole('owner');
+                                    setEditingUserId(null);
+                                    document.getElementById("user-form-container")?.scrollIntoView({ behavior: "smooth" });
+                                  }}
+                                  className="text-[10px] uppercase font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer bg-neutral-100 dark:bg-zinc-800 px-2.5 py-1 rounded-lg"
+                                >
+                                  + Добавить собственника
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Part 2: Administrators */}
+                  <div className={getCardStyle()}>
+                    <div className={getSubHeaderStyle()}>
+                      <span className="text-[10px] uppercase font-bold text-emerald-500 block tracking-widest mb-1">Группа администрирования</span>
+                      <h3 className="font-bold text-base text-zinc-800 dark:text-zinc-100 flex items-center gap-1.5">
+                        🛡️ Администраторы системы
+                      </h3>
+                      <p className="text-xs opacity-65">
+                        Управляющий персонал с правами на добавление объектов, редактирование графиков, чек-листов и юридических документов
+                      </p>
                     </div>
 
                     <div className="space-y-3">
-                      {users.map(u => (
-                        <div key={u.id} className="p-4 rounded-xl border border-neutral-300/15 bg-neutral-100/5 hover:bg-neutral-100/10 transition-colors flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                      {users.filter(u => u.role === 'admin').map(u => (
+                        <div key={u.id} className="p-4 rounded-xl border border-neutral-200 dark:border-zinc-800 bg-neutral-100/5 hover:bg-neutral-150/10 dark:hover:bg-zinc-800/10 transition-colors flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                           <div className="space-y-1">
                             <div className="flex items-center gap-2">
-                              {u.role === 'admin' ? <Shield className="w-4 h-4 text-emerald-500" /> : u.role === 'owner' ? <UserCheck className="w-4 h-4 text-sky-500" /> : <HardHat className="w-4 h-4 text-amber-500" />}
-                              <span className="font-extrabold text-sm">{u.fullname}</span>
-                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${
-                                u.role === 'admin' ? 'bg-emerald-500/10 text-emerald-500' : u.role === 'owner' ? 'bg-sky-500/10 text-sky-500' : 'bg-amber-500/10 text-amber-500'
-                              }`}>
-                                {u.role}
+                              <Shield className="w-4 h-4 text-emerald-500" />
+                              <span className="font-extrabold text-sm text-neutral-800 dark:text-neutral-100">{u.fullname}</span>
+                              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-emerald-500/10 text-emerald-500">
+                                Администратор
                               </span>
+                              {u.company && (
+                                <span className="text-[9px] font-medium text-neutral-450">
+                                  🏢 {u.company}
+                                </span>
+                              )}
                             </div>
-                            <p className="text-xs opacity-85">Email: <span className="font-semibold">{u.email}</span> • Тел: {u.phone || "—"}</p>
+                            <p className="text-xs opacity-85 text-neutral-500 dark:text-neutral-400 font-medium">Email: <span className="font-semibold text-neutral-750 dark:text-neutral-300">{u.email}</span> • Тел: <span className="font-mono">{u.phone || "—"}</span></p>
                             
-                            {/* Communication channels state tags */}
-                            <div className="flex flex-wrap items-center gap-2.5 pt-1.5 text-[10px]">
-                              <span className={`px-2 py-0.5 rounded font-mono ${u.telegramChatId ? "bg-emerald-500/10 text-emerald-500 font-bold" : "bg-zinc-200/10 text-zinc-500"}`}>
-                                TG Chat ID: {u.telegramChatId || "Не привязан"}
+                            {/* Staff messenger channels */}
+                            <div className="flex flex-wrap items-center gap-2 pt-1.5 text-[10px]">
+                              <span className={`px-2 py-0.5 rounded font-mono ${u.telegramChatId ? "bg-indigo-500/10 text-indigo-500 font-bold border border-indigo-500/15" : "bg-neutral-100 dark:bg-zinc-800 text-neutral-400"}`}>
+                                TG Chat: {u.telegramChatId || "Не привязан"}
                               </span>
-                              <span className={`px-2 py-0.5 rounded font-mono ${u.maxChatId ? "bg-emerald-500/10 text-emerald-500 font-bold" : "bg-zinc-200/10 text-zinc-500"}`}>
+                              <span className={`px-2 py-0.5 rounded font-mono ${u.maxChatId ? "bg-indigo-500/10 text-indigo-500 font-bold border border-indigo-500/15" : "bg-neutral-100 dark:bg-zinc-800 text-neutral-400"}`}>
                                 MAX Bot: {u.maxChatId || "Не привязан"}
-                              </span>
-                              <span className={`px-2 py-0.5 rounded font-mono ${u.vkUserId ? "bg-emerald-500/10 text-emerald-500 font-bold" : "bg-zinc-200/10 text-zinc-500"}`}>
-                                VK ID: {u.vkUserId || "Не привязан"}
                               </span>
                             </div>
                           </div>
 
                           <div className="flex gap-2">
                             <button 
+                              type="button"
                               onClick={() => startEditUser(u)}
-                              className="bg-amber-50 hover:bg-amber-100 text-amber-600 p-1.5 rounded-lg border"
-                              title="Редактировать пользователя"
+                              className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 p-2 rounded-lg border border-amber-500/10 transition-colors cursor-pointer"
+                              title="Редактировать сотрудника"
                             >
                               <Edit3 className="w-3.5 h-3.5" />
                             </button>
                             <button 
+                              type="button"
                               onClick={() => deleteUser(u.id)}
-                              className={getRedBtn()}
-                              title="Удалить аккаунт"
+                              className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 p-2 rounded-lg border border-rose-500/10 transition-colors cursor-pointer"
+                              title="Удалить сотрудника"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </div>
                       ))}
+                      {users.filter(u => u.role === 'admin').length === 0 && (
+                        <p className="text-xs text-neutral-400 italic">Администраторы отсутствуют.</p>
+                      )}
                     </div>
                   </div>
+
+                  {/* Part 3: Service Specialists */}
+                  <div className={getCardStyle()}>
+                    <div className={getSubHeaderStyle()}>
+                      <span className="text-[10px] uppercase font-bold text-amber-500 block tracking-widest mb-1">Производственный персонал</span>
+                      <h3 className="font-bold text-base text-zinc-800 dark:text-zinc-100 flex items-center gap-1.5">
+                        🛠️ Сервисные специалисты службы ТО
+                      </h3>
+                      <p className="text-xs opacity-65">
+                        Технический персонал, выполняющий обходы и контролирующий регламентные графики ТО
+                      </p>
+                    </div>
+
+                    <div className="space-y-3">
+                      {users.filter(u => u.role === 'specialist').map(u => (
+                        <div key={u.id} className="p-4 rounded-xl border border-neutral-200 dark:border-zinc-800 bg-neutral-100/5 hover:bg-neutral-150/10 dark:hover:bg-zinc-800/10 transition-colors flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              {u.avatarUrl ? (
+                                <img 
+                                  src={u.avatarUrl} 
+                                  alt={u.fullname} 
+                                  className="w-5 h-5 rounded-full object-cover border border-neutral-300 dark:border-zinc-700 shadow-sm shrink-0" 
+                                  referrerPolicy="no-referrer"
+                                />
+                              ) : (
+                                <HardHat className="w-4 h-4 text-amber-500" />
+                              )}
+                              <span className="font-extrabold text-sm text-neutral-800 dark:text-neutral-100">{u.fullname}</span>
+                              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-amber-500/10 text-amber-500">
+                                Специалист
+                              </span>
+                              {u.company && (
+                                <span className="text-[9px] font-medium text-neutral-450">
+                                  🏢 {u.company}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs opacity-85 text-neutral-500 dark:text-neutral-400 font-medium">Email: <span className="font-semibold text-neutral-750 dark:text-neutral-300">{u.email}</span> • Тел: <span className="font-mono">{u.phone || "—"}</span></p>
+                            
+                            {/* Staff messenger channels */}
+                            <div className="flex flex-wrap items-center gap-2 pt-1.5 text-[10px]">
+                              <span className={`px-2 py-0.5 rounded font-mono ${u.telegramChatId ? "bg-indigo-500/10 text-indigo-500 font-bold border border-indigo-500/15" : "bg-neutral-100 dark:bg-zinc-800 text-neutral-400"}`}>
+                                TG Chat: {u.telegramChatId || "Не привязан"}
+                              </span>
+                              <span className={`px-2 py-0.5 rounded font-mono ${u.maxChatId ? "bg-indigo-500/10 text-indigo-500 font-bold border border-indigo-500/15" : "bg-neutral-100 dark:bg-zinc-800 text-neutral-400"}`}>
+                                MAX Bot: {u.maxChatId || "Не привязан"}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2">
+                            <button 
+                              type="button"
+                              onClick={() => startEditUser(u)}
+                              className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 p-2 rounded-lg border border-amber-500/10 transition-colors cursor-pointer"
+                              title="Редактировать сотрудника"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                            <button 
+                              type="button"
+                              onClick={() => deleteUser(u.id)}
+                              className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 p-2 rounded-lg border border-rose-500/10 transition-colors cursor-pointer"
+                              title="Удалить сотрудника"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {users.filter(u => u.role === 'specialist').length === 0 && (
+                        <p className="text-xs text-neutral-400 italic">Специалисты отсутствуют.</p>
+                      )}
+                    </div>
+                  </div>
+
                 </div>
 
                 {/* Create/Edit user form */}
-                <div className="space-y-4">
+                <div id="user-form-container" className="space-y-4">
                   <div className={getCardStyle()}>
                     <div className={getSubHeaderStyle()}>
                       <h3 className="font-bold text-sm">
@@ -3206,7 +4138,7 @@ export default function App() {
 
             {/* TAB: SETTINGS & GLOBAL TELEMETRY LOGS */}
             {activeTab === 'settings' && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 max-w-4xl mx-auto w-full">
                 
                 {/* Global Notification config settings */}
                 <div className={getCardStyle()}>
@@ -3221,19 +4153,19 @@ export default function App() {
                       
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
                         <div className="flex flex-col">
-                          <span className="font-semibold text-neutral-600">Telegram Bot API (python-telegram-bot):</span>
+                          <span className="font-semibold text-neutral-600 font-bold">Telegram Bot API (python-telegram-bot):</span>
                           <span className="text-emerald-500 font-bold mt-1">● АКТИВЕН (Реальный BOT_TOKEN через .env)</span>
                         </div>
                         <div className="flex flex-col">
-                          <span className="font-semibold text-neutral-600">VK_API Сервер сообщений:</span>
+                          <span className="font-semibold text-neutral-600 font-bold">VK_API Сервер сообщений:</span>
                           <span className="text-emerald-500 font-bold mt-1">● АКТИВЕН (Связан с Группой)</span>
                         </div>
                         <div className="flex flex-col">
-                          <span className="font-semibold text-neutral-600">MAX-BOTAPI Клиент (MasterBot):</span>
+                          <span className="font-semibold text-neutral-600 font-bold">MAX-BOTAPI Клиент (MasterBot):</span>
                           <span className="text-emerald-500 font-bold mt-1">● АКТИВЕН (Реальный API через .env)</span>
                         </div>
                         <div className="flex flex-col">
-                          <span className="font-semibold text-neutral-600">SMTP Почтовый сервер (.env):</span>
+                          <span className="font-semibold text-neutral-600 font-bold">SMTP Почтовый сервер (.env):</span>
                           <span className="text-emerald-500 font-bold mt-1">● АКТИВЕН (С шифрованием SSL)</span>
                         </div>
                       </div>
@@ -3327,7 +4259,7 @@ export default function App() {
                                   owner: { ...systemSettings.notificationChannels.owner, max: e.target.checked }
                                 }
                               })}
-                            /> MAX
+                            /> MAX (мессенджер)
                           </label>
                           <label className="flex items-center gap-2">
                             <input 
@@ -3383,11 +4315,266 @@ export default function App() {
                       <span className="text-[10px] opacity-60 mt-0.5">Служебный токен с правами на сохранение отчетов</span>
                     </div>
 
-                    <div className="space-y-4 p-4 rounded-xl border border-rose-500/20 bg-rose-500/[0.02] mt-4">
-                      <span className="font-bold text-rose-500 uppercase tracking-wider block text-[10px]">🎨 Фирменный логотип объекта (брендирование):</span>
+                    {/* 📞 Контактные данные службы техподдержки перенесены в Каналы связи */}
+                    <div className="space-y-4 p-4 rounded-xl border border-neutral-200 dark:border-zinc-800 bg-white/45 dark:bg-zinc-900/40">
+                      <span className="font-bold text-neutral-700 dark:text-zinc-300 uppercase tracking-wider block text-[10px]">📞 Контактные данные службы техподдержки:</span>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">Горячая линия (телефон):</label>
+                          <input 
+                            type="text" 
+                            placeholder="+7 (800) 555-35-35"
+                            value={systemSettings.supportPhone || ""}
+                            onChange={(e) => setSystemSettings({ ...systemSettings, supportPhone: e.target.value })}
+                            className={getInputStyle()}
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">Email техподдержки:</label>
+                          <input 
+                            type="email" 
+                            placeholder="support@commercial-passport.ru"
+                            value={systemSettings.supportEmail || ""}
+                            onChange={(e) => setSystemSettings({ ...systemSettings, supportEmail: e.target.value })}
+                            className={getInputStyle()}
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">Телеграм чат-бот:</label>
+                          <input 
+                            type="text" 
+                            placeholder="cp_support_bot"
+                            value={systemSettings.supportTelegram || ""}
+                            onChange={(e) => setSystemSettings({ ...systemSettings, supportTelegram: e.target.value })}
+                            className={getInputStyle()}
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">WhatsApp (телефон/ссылка):</label>
+                          <input 
+                            type="text" 
+                            placeholder="+79234567890"
+                            value={systemSettings.supportWhatsapp || ""}
+                            onChange={(e) => setSystemSettings({ ...systemSettings, supportWhatsapp: e.target.value })}
+                            className={getInputStyle()}
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5 md:col-span-2">
+                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">Мессенджер MAX (ID чата или ссылка):</label>
+                          <input 
+                            type="text" 
+                            placeholder="@PassportTechSupportBot"
+                            value={systemSettings.supportMax || ""}
+                            onChange={(e) => setSystemSettings({ ...systemSettings, supportMax: e.target.value })}
+                            className={getInputStyle()}
+                          />
+                        </div>
+                      </div>
+                      
+                      <span className="text-[10px] opacity-70 block leading-tight mt-1">
+                        Эти контактные данные будут отображаться во вкладке «Поддержка» для специалистов и собственников жилья.
+                      </span>
+                    </div>
+
+                    <button type="submit" className={`w-full ${getAccentBtn()}`}>
+                      Сохранить настройки
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* TAB: BRANDING */}
+            {activeTab === 'branding' && (
+              <div className="space-y-6 max-w-2xl mx-auto w-full">
+                <div className={getCardStyle()}>
+                  <div className={getSubHeaderStyle()}>
+                    <span className="text-[10px] uppercase font-bold text-blue-600 dark:text-blue-400 block tracking-widest mb-1 font-bold">Оформление приложения</span>
+                    <h3 className="font-extrabold text-base text-zinc-800 dark:text-zinc-100 flex items-center gap-2">
+                      🎨 Фирменное брендирование и визуальный стиль
+                    </h3>
+                    <p className="text-xs opacity-65">
+                      Настройка тем оформления, индивидуального логотипа, прозрачности интерактивных панелей и фоновых изображений системы
+                    </p>
+                  </div>
+
+                  <form onSubmit={saveSettingsSubmit} className="space-y-6 text-xs animate-fadeIn">
+                    {/* 1. Selection of color palette (theme) */}
+                    <div className="flex flex-col gap-1.5 p-4 rounded-xl border border-neutral-200 dark:border-zinc-800 bg-white/45 dark:bg-zinc-900/40">
+                      <label className="text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-zinc-300">Цветовая палитра интерфейса:</label>
+                      <select
+                        value={theme}
+                        onChange={(e) => {
+                          const val = e.target.value as any;
+                          setTheme(val);
+                          localStorage.setItem("app_theme", val);
+                        }}
+                        className="w-full text-xs font-semibold p-2.5 rounded-lg border border-neutral-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-neutral-800 dark:text-neutral-100 focus:outline-none"
+                      >
+                        <option value="cleanroom">🧼 «Чистая комната» (Классический светлый)</option>
+                        <option value="modern">💻 «Современный тёмный» (Modern Dark)</option>
+                        <option value="terminal">📟 «Хаки терминал» (Terminal Green)</option>
+                        <option value="warm">📜 «Теплый бежевый» (Warm Serif)</option>
+                        <option value="japanese">🍣 «Японский дзен» (Japanese Zen)</option>
+                        <option value="japanese_calligraphy">🌸 «Сад сакуры & Каллиграфия» (Kyoto Brush)</option>
+                        <option value="crisp_minimal">⬜ «Строгий бумажный» (Crisp Minimal)</option>
+                      </select>
+                    </div>
+
+                    {/* 2. Фоновое оформление и Прозрачность */}
+                    <div className="space-y-4 p-4 rounded-xl border border-neutral-200 dark:border-zinc-800 bg-white/45 dark:bg-zinc-900/40">
+                      <span className="font-bold text-neutral-700 dark:text-zinc-300 uppercase tracking-wider block text-[10px]">🏞️ Фоновые изображения и Стеклянный дизайн (Glassmorphism):</span>
+                      
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'default', appBackgroundUrl: '' })}
+                          className={`p-2.5 text-xs font-semibold rounded-lg border text-center transition-all ${
+                            (!systemSettings.appBackgroundType || systemSettings.appBackgroundType === 'default')
+                              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 shadow-sm'
+                              : 'border-neutral-200 dark:border-zinc-800 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-neutral-300 bg-white/40 dark:bg-zinc-800/20'
+                          }`}
+                        >
+                          🎨 Стандартный фон
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'villa', appBackgroundUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=80' })}
+                          className={`p-2.5 text-xs font-semibold rounded-lg border text-center transition-all ${
+                            systemSettings.appBackgroundType === 'villa'
+                              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 shadow-sm'
+                              : 'border-neutral-200 dark:border-zinc-800 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-neutral-300 bg-white/40 dark:bg-zinc-800/20'
+                          }`}
+                        >
+                          🏡 Вилла (Остекление)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'blueprint', appBackgroundUrl: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=2000&q=80' })}
+                          className={`p-2.5 text-xs font-semibold rounded-lg border text-center transition-all ${
+                            systemSettings.appBackgroundType === 'blueprint'
+                              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 shadow-sm'
+                              : 'border-neutral-200 dark:border-zinc-800 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-neutral-300 bg-white/40 dark:bg-zinc-800/20'
+                          }`}
+                        >
+                          📐 Чертеж фасада
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'sakura', appBackgroundUrl: 'https://images.unsplash.com/photo-1524413840807-0c3cb6fa808d?auto=format&fit=crop&w=2000&q=80' })}
+                          className={`p-2.5 text-xs font-semibold rounded-lg border text-center transition-all ${
+                            systemSettings.appBackgroundType === 'sakura'
+                              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 shadow-sm'
+                              : 'border-neutral-200 dark:border-zinc-800 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-neutral-300 bg-white/40 dark:bg-zinc-800/20'
+                          }`}
+                        >
+                          🌸 Сад Сакуры
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'custom' })}
+                          className={`p-2.5 text-xs font-semibold rounded-lg border text-center transition-all col-span-2 ${
+                            systemSettings.appBackgroundType === 'custom'
+                              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 shadow-sm'
+                              : 'border-neutral-200 dark:border-zinc-800 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-neutral-300 bg-white/40 dark:bg-zinc-800/20'
+                          }`}
+                        >
+                          📸 Свое фоновое фото
+                        </button>
+                      </div>
+
+                      {systemSettings.appBackgroundType === 'custom' && (
+                        <div className="space-y-2 animate-fadeIn pt-1">
+                          <span className="text-xs font-semibold text-neutral-600 block">Загрузить свое фоновое фото с диска (Base64):</span>
+                          <div className="relative flex flex-col items-center justify-center border-2 border-dashed border-neutral-300 dark:border-zinc-700 rounded-lg p-5 bg-white/50 hover:bg-white dark:bg-zinc-950/20 transition cursor-pointer group">
+                            <input 
+                              type="file" 
+                              accept="image/*" 
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onloadend = () => {
+                                    setSystemSettings({ ...systemSettings, appBackgroundUrl: reader.result as string });
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                            />
+                            <ImageIcon className="w-8 h-8 text-neutral-400 group-hover:text-neutral-500 transition mb-1" />
+                            <span className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">Нажмите для выбора файла фона</span>
+                            <span className="text-[10px] text-neutral-400 mt-0.5">Допустимы изображения JPG, PNG, WEBP</span>
+                          </div>
+
+                          <div className="flex flex-col gap-1 pt-1">
+                            <span className="text-[11px] font-semibold text-neutral-500">Или внешняя ссылка на изображение:</span>
+                            <input 
+                              type="text" 
+                              placeholder="https://example.com/background.jpg"
+                              value={systemSettings.appBackgroundUrl && !systemSettings.appBackgroundUrl.startsWith("data:") ? systemSettings.appBackgroundUrl : ""}
+                              onChange={(e) => setSystemSettings({ ...systemSettings, appBackgroundUrl: e.target.value })}
+                              className={getInputStyle()}
+                            />
+                          </div>
+
+                          {systemSettings.appBackgroundUrl && (
+                            <div className="flex items-center justify-between p-2.5 rounded bg-blue-50 dark:bg-zinc-800 border border-blue-250 dark:border-zinc-700 text-xs gap-2">
+                              <span className="truncate max-w-[200px] text-blue-800 dark:text-blue-300 font-semibold flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                                Cобственный фон активирован
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setSystemSettings({ ...systemSettings, appBackgroundUrl: "" })}
+                                className="text-rose-600 hover:text-rose-800 transition font-semibold"
+                              >
+                                Очистить фон
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Card transparency slider */}
+                      <div className="space-y-1.5 bg-neutral-50 dark:bg-zinc-800/20 border border-neutral-150 dark:border-zinc-800 rounded-xl p-3">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-zinc-400">
+                            Прозрачность полей и панелей:
+                          </span>
+                          <span className="text-xs font-extrabold text-blue-600 dark:text-blue-400">
+                            {systemSettings.cardOpacity !== undefined ? systemSettings.cardOpacity : 85}%
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="10"
+                          max="100"
+                          value={systemSettings.cardOpacity !== undefined ? systemSettings.cardOpacity : 85}
+                          onChange={(e) => setSystemSettings({ ...systemSettings, cardOpacity: parseInt(e.target.value, 10) })}
+                          className="w-full h-1.5 bg-neutral-200 dark:bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                        />
+                        <p className="text-[9px] text-neutral-400 dark:text-zinc-500 leading-tight">
+                          Настройте прозрачность остекления (Glassmorphism): левее для полупрозрачного матового фона, правее — для сплошного цвета.
+                        </p>
+                      </div>
+
+                      <span className="text-[10px] opacity-70 block leading-tight mt-1.5">
+                        При выборе фоновых изображений веб-интерфейс автоматически переключается в <b>адаптивный стеклянный дизайн (Glassmorphism)</b> с полупрозрачными затушеванными панелями и эффектом размытия <b>backdrop-blur</b>. Вы можете регулировать прозрачность интерфейса в настройках.
+                      </span>
+                    </div>
+
+                    {/* 3. Логотип приложения (Поставлен в конец!) */}
+                    <div className="space-y-4 p-4 rounded-xl border border-neutral-200 dark:border-zinc-800 bg-white/45 dark:bg-zinc-900/40">
+                      <span className="font-bold text-neutral-700 dark:text-zinc-300 uppercase tracking-wider block text-[10px]">🏢 Логотип приложения:</span>
                       
                       <div className="flex items-center gap-3">
-                        <label className="flex items-center gap-2 font-semibold text-neutral-800 cursor-pointer">
+                        <label className="flex items-center gap-2 font-semibold text-neutral-800 dark:text-neutral-250 cursor-pointer">
                           <input 
                             type="checkbox" 
                             checked={!!systemSettings.customLogoEnabled} 
@@ -3397,19 +4584,60 @@ export default function App() {
                         </label>
                       </div>
 
-                      <div className="flex flex-col gap-1.5">
-                        <span className="font-semibold text-neutral-600 block">Ссылка на логотип (URL картинки или Base64):</span>
-                        <input 
-                          type="text" 
-                          placeholder="https://example.com/logo.png"
-                          value={systemSettings.logoUrl || ""}
-                          onChange={(e) => setSystemSettings({ ...systemSettings, logoUrl: e.target.value })}
-                          className={getInputStyle()}
-                        />
-                        <span className="text-[10px] opacity-65">Внесите URL-адрес любого изображения, чтобы оно заменило стандартную эмблему в верхнем углу для всех пользователей.</span>
-                        
+                      <div className="flex flex-col gap-3">
+                        <div className="flex flex-col gap-1.5">
+                          <span className="font-semibold text-neutral-600 dark:text-neutral-400 block">Ссылка на логотип (URL картинки):</span>
+                          <input 
+                            type="text" 
+                            placeholder="https://example.com/logo.png"
+                            value={systemSettings.logoUrl && !systemSettings.logoUrl.startsWith("data:") ? systemSettings.logoUrl : ""}
+                            onChange={(e) => setSystemSettings({ ...systemSettings, logoUrl: e.target.value })}
+                            className={getInputStyle()}
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <span className="font-semibold text-neutral-600 dark:text-neutral-400 block">Или загрузить файл с компьютера (Base64):</span>
+                          <div className="relative flex flex-col items-center justify-center border-2 border-dashed border-neutral-300 dark:border-zinc-700 rounded-lg p-5 bg-white/50 hover:bg-white dark:bg-zinc-950/20 transition cursor-pointer group">
+                            <input 
+                              type="file" 
+                              accept="image/*" 
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onloadend = () => {
+                                    setSystemSettings({ ...systemSettings, logoUrl: reader.result as string });
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                            />
+                            <ImageIcon className="w-8 h-8 text-neutral-400 group-hover:text-neutral-500 transition mb-1" />
+                            <span className="text-xs font-semibold text-neutral-600 dark:text-neutral-300">Нажмите или перетащите файл логотипа</span>
+                            <span className="text-[10px] text-neutral-400 mt-0.5">Допустимы форматы JPG, PNG, SVG, WEBP</span>
+                          </div>
+                        </div>
+
+                        {systemSettings.logoUrl && systemSettings.logoUrl.startsWith("data:") && (
+                          <div className="flex items-center justify-between p-2.5 rounded bg-amber-50 dark:bg-zinc-800 border border-amber-200 dark:border-zinc-700 text-xs gap-2">
+                            <span className="truncate max-w-[200px] text-amber-800 dark:text-amber-400 font-semibold flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+                              Файл загружен напрямую
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setSystemSettings({ ...systemSettings, logoUrl: "" })}
+                              className="text-rose-650 hover:text-rose-800 transition font-semibold"
+                            >
+                              Очистить
+                            </button>
+                          </div>
+                        )}
+
                         {systemSettings.logoUrl && (
-                          <div className="mt-2 text-center p-3 border border-dashed rounded bg-white flex flex-col items-center justify-center gap-1.5">
+                          <div className="mt-2 text-center p-3 border border-dashed rounded bg-white dark:bg-zinc-950 flex flex-col items-center justify-center gap-1.5">
                             <span className="text-[9px] uppercase tracking-wider opacity-60">Предпросмотр:</span>
                             <img 
                               src={systemSettings.logoUrl} 
@@ -3423,43 +4651,16 @@ export default function App() {
                     </div>
 
                     <button type="submit" className={`w-full ${getAccentBtn()}`}>
-                      Сохранить настройки
+                      Сохранить настройки оформления
                     </button>
                   </form>
-                </div>
-
-                {/* Simulated Notification Real Time Hub logs */}
-                <div className={getCardStyle()}>
-                  <div className={getSubHeaderStyle()}>
-                    <h3 className="font-bold text-base">📡 Лог уведомлений и отправки отчетов</h3>
-                    <p className="text-xs opacity-60">Телеметрия отправок по каналам связи (Telegram, email, MAX, VK) в реальном времени</p>
-                  </div>
-
-                  <div className="space-y-2 max-h-[450px] overflow-y-auto pr-1">
-                    {logs.map(log => (
-                      <div key={log.id} className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-mono leading-tight space-y-1">
-                        <div className="flex justify-between text-neutral-400">
-                          <span className="text-cyan-400 flex items-center gap-1">
-                            <Send className="w-3 h-3" />
-                            {log.channel.toUpperCase()} ➔ {log.recipient}
-                          </span>
-                          <span>{new Date(log.timestamp).toLocaleTimeString('ru-RU')}</span>
-                        </div>
-                        <p className="text-green-400 leading-snug">{log.message}</p>
-                        <div className="flex justify-between pt-1 border-t border-slate-800 text-[8px] text-neutral-500">
-                          <span>УЗЕЛ: {log.type}</span>
-                          <span className="text-emerald-400">STATUS: {log.status}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
                 </div>
 
               </div>
             )}
 
             {activeTab === 'ratings' && (
-              <div className="space-y-6">
+              <div className="space-y-6 max-w-3xl mx-auto w-full">
                 <div className={getCardStyle()}>
                   <div className={getSubHeaderStyle()}>
                     <h3 className="font-bold text-base flex items-center gap-2">⭐ Сводный рейтинг специалистов</h3>
@@ -3573,6 +4774,30 @@ export default function App() {
               </div>
             )}
 
+            {/* TAB: LEGAL */}
+            {(activeTab as any) === 'legal' && (
+              <div className="space-y-4 max-w-3xl mx-auto w-full mr-auto">
+                <div className={getCardStyle()}>
+                  <div className={getSubHeaderStyle()}>
+                    <h3 className="font-bold text-base flex items-center gap-2">⚖️ Юридические соглашения</h3>
+                    <p className="text-xs opacity-60">Официальные документы, регулирующие использование сервиса «Цифровой паспорт объекта»</p>
+                  </div>
+                  <LegalTabContent currentTheme={theme} isAdmin={currentUser.role === 'admin'} />
+                </div>
+              </div>
+            )}
+
+            {/* TAB: SUPPORT (TICKETS) */}
+            {activeTab === 'support' && (
+              <SupportTab 
+                currentUser={currentUser} 
+                systemSettings={systemSettings} 
+                getCardStyle={getCardStyle} 
+                getSubHeaderStyle={getSubHeaderStyle}
+                theme={theme}
+              />
+            )}
+
           </div>
         )}
 
@@ -3580,144 +4805,198 @@ export default function App() {
         {currentUser.role === 'owner' && (
           <div className="space-y-6">
             
-            <div className={getCardStyle()}>
-              <div className={getSubHeaderStyle()}>
-                <h3 className="font-bold text-base">🏢 Мои объекты (Личный кабинет Собственника)</h3>
-                <p className="text-xs opacity-60">Просмотр технических паспортов в режиме чтения, проверка календарных графиков ТО и загрузка архива Актов</p>
-              </div>
+            {ownerActiveTab === 'characteristics' && (
+              <div className="space-y-4 animate-fadeIn max-w-4xl mx-auto w-full">
+                <div className={getCardStyle()}>
+                <div className={getSubHeaderStyle()}>
+                  <h3 className="font-bold text-base flex items-center gap-2">🏢 Мои объекты (Личный кабинет Собственника)</h3>
+                  <p className="text-xs opacity-60">Просмотр технических паспортов в режиме чтения, проверка календарных графиков ТО и загрузка архива Актов. Кликните на объект, чтобы скрыть или показать его данные.</p>
+                </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {objects.filter(o => o.ownerId === currentUser.id).map(obj => {
+                <div className="space-y-4">
+                  {objects.filter(o => o.ownerId === currentUser.id).map(obj => {
                   const matchingSchedules = schedules.filter(s => s.objectId === obj.id);
                   const matchingReports = reports.filter(r => r.objectId === obj.id);
                   
+                  const isObjExpanded = expandedObjs[obj.id] !== false; // expanded by default
+                  
                   return (
-                    <div key={obj.id} className="p-5 rounded-2xl border border-neutral-300/10 space-y-4 bg-neutral-100/5">
-                      <div className="flex justify-between items-start gap-4 flex-wrap">
+                    <div key={obj.id} className="border border-neutral-300/15 rounded-xl overflow-hidden bg-white/40 dark:bg-zinc-900/10 shadow-sm transition-all duration-200">
+                      {/* Object Header block which toggles expansion when clicked */}
+                      <div 
+                        onClick={() => setExpandedObjs(prev => ({ ...prev, [obj.id]: !isObjExpanded }))}
+                        className="w-full text-left p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-neutral-100/5 hover:bg-neutral-100/10 dark:bg-white/5 transition-all border-b border-neutral-300/10 cursor-pointer select-none"
+                      >
                         <div className="flex gap-2.5 items-center">
                           <Building className="w-5 h-5 text-blue-500" />
                           <div>
-                            <h4 className="font-black text-base">{obj.name}</h4>
+                            <h4 className="font-black text-sm flex items-center gap-2">
+                              <span>{obj.name}</span>
+                              <span className="text-[10px] opacity-45 font-mono">ID: {obj.id}</span>
+                            </h4>
                             <p className="text-xs opacity-65">{obj.address}</p>
                           </div>
                         </div>
-                        <a 
-                          href={`https://disk.yandex.ru/client/disk/${encodeURIComponent(obj.yandexDiskPath)}`} 
-                          target="_blank" 
-                          rel="noopener noreferrer" 
-                          title="Открыть папку объекта на Яндекс.Диск"
-                          className="flex items-center gap-1 bg-sky-500/10 hover:bg-sky-500/20 text-sky-600 font-bold text-xs p-1.5 px-3 rounded-lg transition-all"
-                        >
-                          <FileSpreadsheet className="w-4 h-4" />
-                          Яндекс.Диск объекта ↗
-                        </a>
+                        <div className="flex items-center gap-3">
+                          {obj.yandexDiskUrl ? (
+                            <a 
+                              href={obj.yandexDiskUrl} 
+                              target="_blank" 
+                              rel="noopener noreferrer" 
+                              title="Открыть папку объекта на Яндекс.Диск"
+                              onClick={(e) => e.stopPropagation()} // Prevent collapse trigger when clicking link
+                              className="flex items-center gap-1 bg-sky-500/10 hover:bg-sky-500/20 text-sky-600 font-bold text-xs p-1.5 px-3 rounded-lg transition-all"
+                            >
+                              <FileSpreadsheet className="w-4 h-4" />
+                              <span>Яндекс.Диск объекта ↗</span>
+                            </a>
+                          ) : obj.yandexDiskPath ? (
+                            <a 
+                              href={`https://disk.yandex.ru/client/disk/${encodeURIComponent(obj.yandexDiskPath)}`} 
+                              target="_blank" 
+                              rel="noopener noreferrer" 
+                              title="Открыть папку объекта на Яндекс.Диск"
+                              onClick={(e) => e.stopPropagation()} // Prevent collapse trigger when clicking link
+                              className="flex items-center gap-1 bg-sky-500/10 hover:bg-sky-500/20 text-sky-600 font-bold text-xs p-1.5 px-3 rounded-lg transition-all"
+                            >
+                              <FileSpreadsheet className="w-4 h-4" />
+                              <span>Яндекс.Диск объекта ↗</span>
+                            </a>
+                          ) : (
+                            <span className="text-[10px] text-zinc-400 italic">Диск не привязан</span>
+                          )}
+                          <span className="text-xs font-semibold text-neutral-400">
+                            {isObjExpanded ? "Скрыть ▲" : "Показать ▼"}
+                          </span>
+                        </div>
                       </div>
 
-                      {/* Schedule item readings */}
-                      <div className="space-y-2">
-                        <span className="text-[10px] font-black uppercase text-zinc-400">График обслуживания оборудования:</span>
-                        {matchingSchedules.length === 0 ? (
-                          <p className="text-xs italic text-[11px] opacity-50">График не назначен службой эксплуатации</p>
-                        ) : (
-                          <div className="space-y-1.5">
-                            {matchingSchedules.map(sch => {
-                              const status = getScheduleStatus(sch);
-                              return (
-                                <div key={sch.id} className="p-3 border rounded-lg flex flex-col gap-2 text-xs text-neutral-600 dark:text-zinc-300 bg-white dark:bg-zinc-950 shadow-sm border-neutral-300/20">
-                                  <div className="min-w-0 space-y-1">
-                                    <div className="font-bold text-slate-800 dark:text-slate-100 break-words">{sch.title}</div>
-                                    <div className="text-[10px] opacity-65 flex flex-wrap gap-x-2 gap-y-1 items-center mt-0.5">
-                                      <span>Интервал: {sch.intervalDays} дн.</span>
-                                      <span className="opacity-40">•</span>
-                                      <span>Чек-лист: {getTemplateName(sch.checklistTemplateId)}</span>
-                                    </div>
-                                    <div className="pt-1 flex items-center gap-2">
-                                      <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold border uppercase tracking-wider ${status.class}`}>
-                                        {status.label}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  
-                                  <div className="flex items-center justify-between pt-1.5 border-t border-slate-100 dark:border-zinc-800/40">
-                                    <button 
-                                      onClick={() => setQrModalSchedule(sch)}
-                                      className="flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 border border-rose-300/20 rounded-md font-bold text-[9px] cursor-pointer transition-all uppercase tracking-wider"
-                                    >
-                                      <span>📲 Сформировать QR-код</span>
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })}
+                      {/* Object Details body */}
+                      {isObjExpanded && (
+                        <div className="p-5 space-y-5 bg-white/20 dark:bg-black/5 animate-slideDown">
+                          {/* Characteristics / Specs list */}
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-b border-neutral-300/10 pb-4">
+                            <div className="p-3 bg-neutral-100/5 border border-neutral-300/10 rounded-xl">
+                              <span className="text-[9px] uppercase tracking-wider opacity-60 font-black block">📁 Общая характеристика:</span>
+                              <p className="font-bold text-xs mt-1 text-slate-800 dark:text-zinc-200">{obj.specs || "Характеристики не указаны"}</p>
+                            </div>
+                            <div className="p-3 bg-neutral-100/5 border border-neutral-300/10 rounded-xl">
+                              <span className="text-[9px] uppercase tracking-wider opacity-60 font-black block">⚙️ Ключевое оборудование:</span>
+                              <p className="font-bold text-xs mt-1 text-slate-800 dark:text-zinc-200">{obj.equipmentSpecs || "Перечень оборудования отсутствует"}</p>
+                            </div>
+                            <div className="p-3 bg-neutral-100/5 border border-neutral-300/10 rounded-xl">
+                              <span className="text-[9px] uppercase tracking-wider opacity-60 font-black block">🏗️ Ввод в эксплуатацию:</span>
+                              <p className="font-bold text-xs mt-1 text-slate-800 dark:text-zinc-200">{obj.info || "Параметры года постройки не указаны"}</p>
+                            </div>
                           </div>
-                        )}
-                      </div>
 
-                      {/* Completed Acts for this owner facility */}
-                      <div className="space-y-2 border-t border-dashed border-neutral-300/15 pt-3">
-                        <span className="text-[10px] font-black uppercase text-zinc-400">Всего подтверждено выездов ({matchingReports.length}):</span>
-                        {matchingReports.length === 0 ? (
-                          <p className="text-xs italic text-[11px] opacity-50">Акты пока отсутствуют</p>
-                        ) : (
-                          <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                            {matchingReports.map(rep => {
-                              const isApproved = !!rep.approvedByOwner;
-                              return (
-                                <div key={rep.id} className="p-2.5 bg-neutral-50 dark:bg-zinc-800 rounded-lg flex flex-col sm:flex-row justify-between sm:items-center gap-2 text-[11px]">
-                                  <div>
-                                    <div className="font-bold text-slate-800 flex items-center gap-1.5">
-                                      <span>Акт {rep.id} от {new Date(rep.dateDone).toLocaleDateString('ru-RU')}</span>
-                                      {isApproved ? (
-                                        <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-400 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wide">Утвержден</span>
-                                      ) : (
-                                        <span className="bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-400 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wide">Ожидает утверждения</span>
-                                      )}
-                                    </div>
-                                    <div className="opacity-60 mt-0.5">Внутренний чек-лист инспекции выполнен</div>
-                                    {isApproved && rep.ownerRating && (
-                                      <div className="flex items-center gap-1 mt-1 text-amber-500 font-bold">
-                                        <span>Оценка: {"★".repeat(rep.ownerRating)}{"☆".repeat(5 - rep.ownerRating)}</span>
-                                        {rep.ownerRatingComment && <span className="text-slate-500 font-normal italic">("{rep.ownerRatingComment}")</span>}
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            {/* Schedule item readings */}
+                            <div className="space-y-2">
+                              <span className="text-[10px] font-black uppercase text-zinc-400">График обслуживания оборудования:</span>
+                              {matchingSchedules.length === 0 ? (
+                                <p className="text-xs italic text-[11px] opacity-50">График не назначен службой эксплуатации</p>
+                              ) : (
+                                <div className="space-y-1.5">
+                                  {matchingSchedules.map(sch => {
+                                    const status = getScheduleStatus(sch);
+                                    return (
+                                      <div key={sch.id} className="p-3 border rounded-lg flex flex-col gap-2 text-xs text-neutral-600 dark:text-zinc-300 bg-white dark:bg-zinc-950 shadow-sm border-neutral-300/20">
+                                        <div className="min-w-0 space-y-1">
+                                          <div className="font-bold text-slate-800 dark:text-slate-100 break-words">{sch.title}</div>
+                                          <div className="text-[10px] opacity-65 flex flex-wrap gap-x-2 gap-y-1 items-center mt-0.5">
+                                            <span>Интервал: {sch.intervalDays} дн.</span>
+                                            <span className="opacity-40">•</span>
+                                            <span>Чек-лист: {getTemplateName(sch.checklistTemplateId)}</span>
+                                          </div>
+                                          <div className="pt-1 flex items-center justify-between gap-2">
+                                            <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold border uppercase tracking-wider ${status.class}`}>
+                                              {status.label}
+                                            </span>
+                                            <button 
+                                              onClick={() => setQrModalSchedule(sch)}
+                                              className="flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 border border-rose-300/20 rounded-md font-bold text-[9px] cursor-pointer transition-all uppercase tracking-wider"
+                                            >
+                                              <span>📲 QR-код</span>
+                                            </button>
+                                          </div>
+                                        </div>
                                       </div>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-2 self-start sm:self-auto">
-                                    {!isApproved && (
-                                      <button
-                                        onClick={() => {
-                                          setRatingReport(rep);
-                                          setRatingStars(5);
-                                          setRatingComment("");
-                                        }}
-                                        className="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded text-[10px] shadow-sm cursor-pointer transition-colors"
-                                      >
-                                        👍 Утвердить и оценить
-                                      </button>
-                                    )}
-                                    <a 
-                                      href={`/api/reports/${rep.id}/pdf`} 
-                                      target="_blank" 
-                                      rel="noopener noreferrer" 
-                                      className="text-blue-600 font-bold hover:underline flex items-center gap-1 shrink-0 px-2 py-1 bg-neutral-200/50 hover:bg-neutral-200 rounded"
-                                    >
-                                      <Download className="w-3.5 h-3.5" /> PDF
-                                    </a>
-                                  </div>
+                                    );
+                                  })}
                                 </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
+                              )}
+                            </div>
 
+                            {/* Completed Acts for this owner facility */}
+                            <div className="space-y-2">
+                              <span className="text-[10px] font-black uppercase text-zinc-400">Всего подтверждено выездов ({matchingReports.length}):</span>
+                              {matchingReports.length === 0 ? (
+                                <p className="text-xs italic text-[11px] opacity-50">Акты пока отсутствуют</p>
+                              ) : (
+                                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                                  {matchingReports.map(rep => {
+                                    const isApproved = !!rep.approvedByOwner;
+                                    return (
+                                      <div key={rep.id} className="p-2 bg-neutral-50 dark:bg-zinc-800 rounded-lg flex flex-col justify-between gap-2 text-[11px]">
+                                        <div className="p-2 pb-0">
+                                          <div className="font-bold text-slate-800 flex items-center justify-between gap-1">
+                                            <span>Акт {rep.id} от {new Date(rep.dateDone).toLocaleDateString('ru-RU')}</span>
+                                            {isApproved ? (
+                                              <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-400 px-1 py-0.5 rounded text-[8px] font-bold uppercase tracking-wide">Утвержден</span>
+                                            ) : (
+                                              <span className="bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-400 px-1 py-0.5 rounded text-[8px] font-bold uppercase tracking-wide">Ожидает</span>
+                                            )}
+                                          </div>
+                                          {isApproved && rep.ownerRating && (
+                                            <div className="flex items-center gap-1 mt-1 text-amber-500 font-bold">
+                                              <span>Оценка: {"★".repeat(rep.ownerRating)}</span>
+                                            </div>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center justify-between gap-2 p-2 pt-0 border-t border-neutral-100 dark:border-zinc-700/50 mt-1">
+                                          {!isApproved ? (
+                                            <button
+                                              onClick={() => {
+                                                setRatingReport(rep);
+                                                setRatingStars(5);
+                                                setRatingComment("");
+                                              }}
+                                              className="px-2 py-0.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded text-[9px] cursor-pointer"
+                                            >
+                                              👍 Оценить
+                                            </button>
+                                          ) : <span className="text-[10px] text-emerald-600">✓ Подтвержден</span>}
+                                          <a 
+                                            href={`/api/reports/${rep.id}/pdf`} 
+                                            target="_blank" 
+                                            rel="noopener noreferrer" 
+                                            className="text-blue-600 font-bold hover:underline flex items-center gap-1 shrink-0 px-2 py-0.5 bg-neutral-200/50 hover:bg-neutral-200 rounded"
+                                          >
+                                            <Download className="w-3 h-3" /> PDF
+                                          </a>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
             </div>
+              </div>
+            )}
 
             {/* Registered Service Specialists Contact Info for Owners */}
-            <div className={getCardStyle()}>
+            {ownerActiveTab === 'specialists' && (
+              <div className="space-y-4 animate-fadeIn max-w-4xl mx-auto w-full">
+                <div className={getCardStyle()}>
               <div className={getSubHeaderStyle()}>
                 <span className="text-[10px] uppercase font-bold text-[#bc1c24] block tracking-widest mb-1">Служба эксплуатации</span>
                 <h3 className="font-extrabold text-base flex items-center gap-1.5 text-zinc-800">
@@ -3729,9 +5008,101 @@ export default function App() {
                 </p>
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                {users.filter(u => u.role === 'specialist').length === 0 ? (
+                  <p className="text-xs italic opacity-60 col-span-full">В данный момент зарегистрированные специалисты отсутствуют в системе.</p>
+                ) : (
+                  users.filter(u => u.role === 'specialist').map(spec => {
+                    const specRatings = reports.filter(r => r.specialistUserId === spec.id && r.approvedByOwner === true && r.ownerRating !== undefined);
+                    const avgRating = specRatings.length > 0 ? (specRatings.reduce((sum, r) => sum + (r.ownerRating || 0), 0) / specRatings.length).toFixed(1) : null;
+
+                    return (
+                      <div key={spec.id} className="p-4 border border-zinc-200 dark:border-zinc-800 rounded-xl bg-white/50 dark:bg-zinc-900/35 hover:shadow-sm transition-all flex flex-col justify-between space-y-3 relative overflow-hidden group">
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-start">
+                            <span className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 text-[9px] px-2 py-0.5 rounded font-black uppercase tracking-wider inline-block">Инженер</span>
+                            {(currentUser.role === 'owner' || currentUser.role === 'admin') && (
+                              <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button 
+                                  onClick={() => startEditSpecialist(spec)}
+                                  title="Редактировать профиль инженера"
+                                  className="p-1 bg-neutral-200/50 hover:bg-neutral-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 rounded text-slate-700 dark:text-zinc-300 cursor-pointer"
+                                >
+                                  <Settings className="w-3 h-3" />
+                                </button>
+                                <button 
+                                  onClick={() => deleteSpecialist(spec.id)}
+                                  title="Удалить инженера"
+                                  className="p-1 bg-red-50 hover:bg-red-150 dark:bg-red-900/10 dark:hover:bg-red-900/30 rounded text-red-600 dark:text-red-400 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-start gap-3 mt-1.5">
+                            {spec.avatarUrl ? (
+                              <img 
+                                src={spec.avatarUrl} 
+                                alt={spec.fullname} 
+                                className="w-10 h-10 rounded-full object-cover border border-neutral-200 dark:border-zinc-800 shadow-xl shrink-0"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <div className="w-10 h-10 rounded-full bg-amber-500/10 flex items-center justify-center shrink-0 border border-amber-500/15">
+                                <HardHat className="w-5 h-5 text-amber-500" />
+                              </div>
+                            )}
+                            <div className="space-y-0.5">
+                              <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100 leading-tight">{spec.fullname}</h4>
+                              <p className="text-[11px] opacity-75 dark:text-zinc-400 italic">{spec.company || "Служба эксплуатации и ТО"}</p>
+                            </div>
+                          </div>
+                          
+                          {/* Specialist average rating */}
+                          {avgRating ? (
+                            <div className="flex items-center gap-1 mt-1 text-xs">
+                              <span className="text-amber-500 font-bold">★ {avgRating}</span>
+                              <span className="opacity-60 text-[10px]">({specRatings.length} {specRatings.length === 1 ? 'оценка' : [2,3,4].includes(specRatings.length % 10) && ![12,13,14].includes(specRatings.length % 100) ? 'оценки' : 'оценок'})</span>
+                            </div>
+                          ) : (
+                            <div className="text-[10px] opacity-40 mt-1 italic">Рейтинг: Нет оценок</div>
+                          )}
+
+                          {spec.keySkills && (
+                            <div className="mt-2 bg-amber-500/10 border border-amber-500/15 p-2 rounded-lg text-[10px] text-amber-800 dark:text-amber-400">
+                              <span className="font-extrabold uppercase text-[7.5px] tracking-wider block opacity-75">Профессиональные навыки и компетенции:</span>
+                              <p className="mt-0.5 whitespace-pre-wrap leading-snug">{spec.keySkills}</p>
+                            </div>
+                          )}
+                        </div>
+
+                      <div className="space-y-1.5 pt-2 border-t border-neutral-100 dark:border-zinc-800 text-xs text-neutral-600 dark:text-zinc-400">
+                        {spec.phone && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="opacity-50 text-[10px]">Телефон:</span>
+                            <a href={`tel:${spec.phone}`} className="font-semibold text-sky-600 hover:underline">{spec.phone}</a>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-1.5">
+                          <span className="opacity-50 text-[10px]">Эл. почта:</span>
+                          <a href={`mailto:${spec.email}`} className="font-medium hover:underline text-sky-700 dark:text-sky-400">{spec.email}</a>
+                        </div>
+                        {spec.telegramChatId && (
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <span className="bg-sky-50 dark:bg-sky-900/10 text-sky-600 dark:text-sky-400 text-[10px] px-1.5 py-0.5 rounded font-mono">TG Chat Link ID: {spec.telegramChatId}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    );
+                  })
+                )}
+              </div>
+
               {/* Specialist Profile Form (only visible to Owners & Admins) */}
               {(currentUser.role === 'owner' || currentUser.role === 'admin') && (
-                <div className="mb-6 p-4 rounded-xl border border-dashed border-zinc-200 dark:border-zinc-800 bg-neutral-100/5 dark:bg-zinc-800/10 space-y-3">
+                <div className="mt-8 pt-6 border-t border-dashed border-zinc-200 dark:border-zinc-800 p-4 rounded-xl bg-neutral-100/5 dark:bg-zinc-800/10 space-y-3">
                   <h4 className="font-bold text-xs text-amber-600 dark:text-amber-500 flex items-center gap-1">
                     {editingSpecialistId ? "✏️ Редактирование профиля инженера" : "➕ Регистрация нового инженера"}
                   </h4>
@@ -3857,86 +5228,14 @@ export default function App() {
                   </form>
                 </div>
               )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                {users.filter(u => u.role === 'specialist').length === 0 ? (
-                  <p className="text-xs italic opacity-60 col-span-full">В данный момент зарегистрированные специалисты отсутствуют в системе.</p>
-                ) : (
-                  users.filter(u => u.role === 'specialist').map(spec => {
-                    const specRatings = reports.filter(r => r.specialistUserId === spec.id && r.approvedByOwner === true && r.ownerRating !== undefined);
-                    const avgRating = specRatings.length > 0 ? (specRatings.reduce((sum, r) => sum + (r.ownerRating || 0), 0) / specRatings.length).toFixed(1) : null;
-
-                    return (
-                      <div key={spec.id} className="p-4 border border-zinc-200 dark:border-zinc-800 rounded-xl bg-white/50 dark:bg-zinc-900/35 hover:shadow-sm transition-all flex flex-col justify-between space-y-3 relative overflow-hidden group">
-                        <div className="space-y-1">
-                          <div className="flex justify-between items-start">
-                            <span className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 text-[9px] px-2 py-0.5 rounded font-black uppercase tracking-wider inline-block">Инженер</span>
-                            {(currentUser.role === 'owner' || currentUser.role === 'admin') && (
-                              <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button 
-                                  onClick={() => startEditSpecialist(spec)}
-                                  title="Редактировать профиль инженера"
-                                  className="p-1 bg-neutral-200/50 hover:bg-neutral-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 rounded text-slate-700 dark:text-zinc-300 cursor-pointer"
-                                >
-                                  <Settings className="w-3 h-3" />
-                                </button>
-                                <button 
-                                  onClick={() => deleteSpecialist(spec.id)}
-                                  title="Удалить инженера"
-                                  className="p-1 bg-red-50 hover:bg-red-150 dark:bg-red-900/10 dark:hover:bg-red-900/30 rounded text-red-600 dark:text-red-400 cursor-pointer"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                          <h4 className="font-bold text-sm text-slate-900 dark:text-slate-100 leading-tight">{spec.fullname}</h4>
-                          <p className="text-xs opacity-70 dark:text-zinc-400 italic">{spec.company || "Служба эксплуатации и ТО"}</p>
-                          
-                          {/* Specialist average rating */}
-                          {avgRating ? (
-                            <div className="flex items-center gap-1 mt-1 text-xs">
-                              <span className="text-amber-500 font-bold">★ {avgRating}</span>
-                              <span className="opacity-60 text-[10px]">({specRatings.length} {specRatings.length === 1 ? 'оценка' : [2,3,4].includes(specRatings.length % 10) && ![12,13,14].includes(specRatings.length % 100) ? 'оценки' : 'оценок'})</span>
-                            </div>
-                          ) : (
-                            <div className="text-[10px] opacity-40 mt-1 italic">Рейтинг: Нет оценок</div>
-                          )}
-
-                          {spec.keySkills && (
-                            <div className="mt-2 bg-amber-500/10 border border-amber-500/15 p-2 rounded-lg text-[10px] text-amber-800 dark:text-amber-400">
-                              <span className="font-extrabold uppercase text-[7.5px] tracking-wider block opacity-75">Профессиональные навыки и компетенции:</span>
-                              <p className="mt-0.5 whitespace-pre-wrap leading-snug">{spec.keySkills}</p>
-                            </div>
-                          )}
-                        </div>
-
-                      <div className="space-y-1.5 pt-2 border-t border-neutral-100 dark:border-zinc-800 text-xs text-neutral-600 dark:text-zinc-400">
-                        {spec.phone && (
-                          <div className="flex items-center gap-1.5">
-                            <span className="opacity-50 text-[10px]">Телефон:</span>
-                            <a href={`tel:${spec.phone}`} className="font-semibold text-sky-600 hover:underline">{spec.phone}</a>
-                          </div>
-                        )}
-                        <div className="flex items-center gap-1.5">
-                          <span className="opacity-50 text-[10px]">Эл. почта:</span>
-                          <a href={`mailto:${spec.email}`} className="font-medium hover:underline text-sky-700 dark:text-sky-400">{spec.email}</a>
-                        </div>
-                        {spec.telegramChatId && (
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <span className="bg-sky-50 dark:bg-sky-900/10 text-sky-600 dark:text-sky-400 text-[10px] px-1.5 py-0.5 rounded font-mono">TG Chat Link ID: {spec.telegramChatId}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-              </div>
             </div>
+              </div>
+            )}
 
             {/* Notification channel setup for owners */}
-            <div className={getCardStyle()}>
+            {ownerActiveTab === 'profile' && (
+              <div className="space-y-4 animate-fadeIn max-w-2xl mx-auto w-full">
+                <div className={getCardStyle()}>
               <div className={getSubHeaderStyle()}>
                 <h3 className="font-bold text-base">📲 Мои каналы получения уведомлений</h3>
                 <p className="text-xs opacity-60">Куда техническому инженеру высылать уведомление сразу в момент окончания обхода</p>
@@ -4140,6 +5439,369 @@ export default function App() {
                 </div>
               </div>
             </div>
+              </div>
+            )}
+
+            {/* TAB: OWNER ACCUMULATED REPORTS/ACTS */}
+            {ownerActiveTab === 'reports' && (
+              <div className="space-y-4 animate-fadeIn max-w-4xl mx-auto w-full">
+                <div className={getCardStyle()}>
+                  <div className={getSubHeaderStyle()}>
+                    <h3 className="font-extrabold text-base flex items-center gap-1.5">
+                      <FileText className="w-5 h-5 text-blue-500" />
+                      📂 Мои Акты и Заполненные Чек-листы
+                    </h3>
+                    <p className="text-xs opacity-60">Юридически подтвержденная история осмотров инженерного оборудования по вашим объектам</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-5 mb-5 border-b border-neutral-300/15">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-bold uppercase opacity-75">🏢 Выберите объект контроля:</label>
+                      <select
+                        value={selectedReportObjectId}
+                        onChange={(e) => {
+                          setSelectedReportObjectId(e.target.value);
+                          setSelectedReportYear('all');
+                        }}
+                        className={getInputStyle()}
+                      >
+                        <option value="all">Все мои объекты ({reports.filter(r => objects.some(o => o.id === r.objectId && o.ownerId === currentUser.id)).length} актов)</option>
+                        {objects.filter(o => o.ownerId === currentUser.id).map(obj => {
+                          const count = reports.filter(r => r.objectId === obj.id).length;
+                          return (
+                            <option key={obj.id} value={obj.id}>
+                              🏢 {obj.name} (Актов: {count})
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-bold uppercase opacity-75">📅 Выберите год:</label>
+                      <select
+                        value={selectedReportYear}
+                        onChange={(e) => setSelectedReportYear(e.target.value)}
+                        className={getInputStyle()}
+                      >
+                        <option value="all">Все доступные годы ({reports.filter(r => (selectedReportObjectId === 'all' ? objects.some(o => o.id === r.objectId && o.ownerId === currentUser.id) : r.objectId === selectedReportObjectId)).length} актов)</option>
+                        {(() => {
+                          const relevantReports = reports.filter(r => (selectedReportObjectId === 'all' ? objects.some(o => o.id === r.objectId && o.ownerId === currentUser.id) : r.objectId === selectedReportObjectId));
+                          const years = Array.from<string>(new Set(relevantReports.map(r => new Date(r.dateDone).getFullYear().toString()))).sort((a: string, b: string) => b.localeCompare(a));
+                          return years.map(yr => {
+                            const countInYear = relevantReports.filter(r => new Date(r.dateDone).getFullYear().toString() === yr).length;
+                            return (
+                              <option key={yr} value={yr}>
+                                📅 {yr} год (Актов: {countInYear})
+                              </option>
+                            );
+                          });
+                        })()}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {(() => {
+                      const finalReports = reports.filter(rep => {
+                        const isMyObj = objects.some(o => o.id === rep.objectId && o.ownerId === currentUser.id);
+                        if (!isMyObj) return false;
+                        const matchObject = selectedReportObjectId === 'all' || rep.objectId === selectedReportObjectId;
+                        const matchYear = selectedReportYear === 'all' || new Date(rep.dateDone).getFullYear().toString() === selectedReportYear;
+                        return matchObject && matchYear;
+                      });
+
+                      if (finalReports.length === 0) {
+                        return (
+                          <div className="col-span-full py-12 text-center text-sm opacity-65 font-medium">
+                            📭 Не найдено заполненных актов по выбранному фильтру.
+                          </div>
+                        );
+                      }
+
+                      return finalReports.map(rep => {
+                        const obj = objects.find(o => o.id === rep.objectId);
+                        const tpl = templates.find(t => t.id === rep.checklistTemplateId);
+                        const sch = schedules.find(s => s.id === rep.scheduleItemId);
+                        const isApproved = !!rep.approvedByOwner;
+                        
+                        return (
+                          <div key={rep.id} className="p-5 rounded-2xl border border-neutral-300/15 bg-neutral-100/5 hover:shadow-md transition-all space-y-4">
+                            <div className="flex justify-between items-center bg-black/5 dark:bg-white/5 p-2.5 rounded-xl">
+                              <div>
+                                <span className="text-[10px] text-sky-500 font-bold tracking-wider uppercase block">АКТ {rep.id}</span>
+                                <span className="text-[11px] opacity-60">{new Date(rep.dateDone).toLocaleDateString('ru-RU')}</span>
+                              </div>
+                              {isApproved ? (
+                                <span className="bg-emerald-500/10 text-emerald-500 text-[10px] font-extrabold px-2.5 py-1 rounded-full uppercase">Утвержден</span>
+                              ) : (
+                                <span className="bg-amber-500/10 text-amber-500 text-[10px] font-extrabold px-2.5 py-1 rounded-full uppercase animate-pulse">Ожидает</span>
+                              )}
+                            </div>
+
+                            <div className="space-y-1">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block pb-0.5 border-b border-neutral-300/10">Объект контроля:</span>
+                              <div className="font-extrabold text-sm">{obj ? obj.name : "Неизвестный объект"}</div>
+                            </div>
+
+                            <div className="space-y-1">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block pb-0.5 border-b border-neutral-300/10">Регламентная задача:</span>
+                              <span className="font-bold text-xs">{sch ? sch.title : "Регламентное ТО"}</span>
+                            </div>
+
+                            <div className="pt-3 border-t border-dashed border-neutral-300/15 flex justify-end gap-2">
+                              {!isApproved && (
+                                <button
+                                  onClick={() => {
+                                    setRatingReport(rep);
+                                    setRatingStars(5);
+                                    setRatingComment("");
+                                  }}
+                                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs cursor-pointer"
+                                >
+                                  👍 Утвердить
+                                </button>
+                              )}
+                              <a 
+                                href={`/api/reports/${rep.id}/pdf`} 
+                                target="_blank" 
+                                rel="noopener noreferrer" 
+                                className="px-3.5 py-1.5 bg-neutral-200/50 hover:bg-neutral-200 text-blue-600 font-bold rounded-xl text-xs inline-flex items-center gap-1"
+                              >
+                                <Download className="w-4 h-4" /> PDF Акт
+                              </a>
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB: OWNER SETTINGS */}
+            {ownerActiveTab === 'settings' && (
+              <div className="space-y-4 animate-fadeIn max-w-2xl mx-auto w-full">
+                <div className={getCardStyle()}>
+                  <div className={getSubHeaderStyle()}>
+                    <h3 className="font-extrabold text-base flex items-center gap-1.5">
+                      <Settings className="w-5 h-5 text-blue-500" />
+                      🎨 Мои настройки и фоновое оформление
+                    </h3>
+                    <p className="text-xs opacity-60">Собственный визуальный стиль оформления цифрового паспорта объектов</p>
+                  </div>
+
+                  <form onSubmit={handleSaveVisualSettings} className="space-y-5 max-w-xl text-left">
+                    {settingsSuccessMsg && (
+                      <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-xl text-xs font-bold animate-fadeIn">
+                        ✨ {settingsSuccessMsg}
+                      </div>
+                    )}
+                    {settingsErrorMsg && (
+                      <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-600 rounded-xl text-xs font-bold animate-fadeIn">
+                        ⚠️ {settingsErrorMsg}
+                      </div>
+                    )}
+
+                    {/* 1. Selection of color palette (theme) */}
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-zinc-400">Цветовая палитра интерфейса:</label>
+                      <select
+                        value={theme}
+                        onChange={(e) => setTheme(e.target.value as any)}
+                        className="w-full text-xs font-semibold p-2.5 rounded-lg border border-neutral-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-neutral-800 dark:text-neutral-100 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      >
+                        <option value="cleanroom">🧼 «Чистая комната» (Классический светлый)</option>
+                        <option value="modern">💻 «Современный тёмный» (Modern Dark)</option>
+                        <option value="terminal">📟 «Хаки терминал» (Terminal Green)</option>
+                        <option value="warm">📜 «Теплый бежевый» (Warm Serif)</option>
+                        <option value="japanese">🍣 «Японский дзен» (Japanese Zen)</option>
+                        <option value="japanese_calligraphy">🌸 «Сад сакуры & Каллиграфия» (Kyoto Brush)</option>
+                        <option value="crisp_minimal">⬜ «Строгий бумажный» (Crisp Minimal)</option>
+                      </select>
+                    </div>
+
+                    {/* 2. Style & Background opacity */}
+                    <div className="space-y-3">
+                      <label className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-zinc-400 block">Фоновое изображение экрана и адаптивный стеклянный дизайн:</label>
+                      
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'default', appBackgroundUrl: '' })}
+                          className={`p-2.5 text-xs font-semibold rounded-xl border text-center transition-all cursor-pointer ${
+                            (!systemSettings.appBackgroundType || systemSettings.appBackgroundType === 'default')
+                              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 shadow-sm font-bold'
+                              : 'border-neutral-200 dark:border-zinc-800 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-zinc-400 bg-white/50 dark:bg-zinc-900/50'
+                          }`}
+                        >
+                          🎨 Стандартная тема
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'villa', appBackgroundUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=80' })}
+                          className={`p-2.5 text-xs font-semibold rounded-xl border text-center transition-all cursor-pointer ${
+                            systemSettings.appBackgroundType === 'villa'
+                              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 shadow-sm font-bold'
+                              : 'border-neutral-200 dark:border-zinc-800 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-zinc-400 bg-white/50 dark:bg-zinc-900/50'
+                          }`}
+                        >
+                          🏡 Вилла (Остекление)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'blueprint', appBackgroundUrl: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=2000&q=80' })}
+                          className={`p-2.5 text-xs font-semibold rounded-xl border text-center transition-all cursor-pointer ${
+                            systemSettings.appBackgroundType === 'blueprint'
+                              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 shadow-sm font-bold'
+                              : 'border-neutral-200 dark:border-zinc-800 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-zinc-400 bg-white/50 dark:bg-zinc-900/50'
+                          }`}
+                        >
+                          📐 Чертеж фасада
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'sakura', appBackgroundUrl: 'https://images.unsplash.com/photo-1524413840807-0c3cb6fa808d?auto=format&fit=crop&w=2000&q=80' })}
+                          className={`p-2.5 text-xs font-semibold rounded-xl border text-center transition-all cursor-pointer ${
+                            systemSettings.appBackgroundType === 'sakura'
+                              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 shadow-sm font-bold'
+                              : 'border-neutral-200 dark:border-zinc-800 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-zinc-400 bg-white/50 dark:bg-zinc-900/50'
+                          }`}
+                        >
+                          🌸 Сад Сакуры
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'custom' })}
+                          className={`p-2.5 text-xs font-semibold rounded-xl border text-center transition-all col-span-2 cursor-pointer ${
+                            systemSettings.appBackgroundType === 'custom'
+                              ? 'border-blue-600 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 shadow-sm font-bold'
+                              : 'border-neutral-200 dark:border-zinc-800 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-zinc-400 bg-white/50 dark:bg-zinc-900/50'
+                          }`}
+                        >
+                          📸 Свое собственное фоновое фото
+                        </button>
+                      </div>
+
+                      {/* Custom uploads */}
+                      {systemSettings.appBackgroundType === 'custom' && (
+                        <div className="space-y-3 pt-2 bg-neutral-50 dark:bg-zinc-850/10 p-3.5 border rounded-xl animate-fadeIn text-xs">
+                          <span className="font-semibold text-neutral-600 dark:text-zinc-400 block">Загрузить свое фоновое фото с диска (Base64):</span>
+                          <div className="relative flex flex-col items-center justify-center border-2 border-dashed border-neutral-300 dark:border-zinc-700 rounded-xl p-4 bg-white/50 dark:bg-zinc-900/50 hover:bg-white dark:hover:bg-zinc-900 transition cursor-pointer group">
+                            <input 
+                              type="file" 
+                              accept="image/*" 
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onloadend = () => {
+                                    setSystemSettings({ ...systemSettings, appBackgroundUrl: reader.result as string });
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                            />
+                            <ImageIcon className="w-6 h-6 text-neutral-400 group-hover:text-neutral-500 transition mb-1" />
+                            <span className="text-[11px] font-semibold text-neutral-650 dark:text-neutral-400">Нажмите для выбора файла</span>
+                            <span className="text-[9px] text-neutral-400">JPG, PNG, WEBP</span>
+                          </div>
+
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[10px] font-semibold text-neutral-500 dark:text-zinc-450">Или внешняя ссылка на изображение:</span>
+                            <input 
+                              type="text" 
+                              placeholder="https://example.com/background.jpg"
+                              value={systemSettings.appBackgroundUrl && !systemSettings.appBackgroundUrl.startsWith("data:") ? systemSettings.appBackgroundUrl : ""}
+                              onChange={(e) => setSystemSettings({ ...systemSettings, appBackgroundUrl: e.target.value })}
+                              className={getInputStyle()}
+                            />
+                          </div>
+
+                          {systemSettings.appBackgroundUrl && (
+                            <div className="flex items-center justify-between p-2 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/30 text-[11px] gap-2">
+                              <span className="truncate max-w-[200px] text-blue-800 dark:text-blue-400 font-semibold flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                                Собственное фоновое фото успешно загружено
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setSystemSettings({ ...systemSettings, appBackgroundUrl: "" })}
+                                className="text-rose-600 hover:text-rose-800 dark:text-rose-400 transition font-semibold"
+                              >
+                                Сбросить
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Card transparency slider */}
+                      <div className="space-y-1.5 bg-neutral-50 dark:bg-zinc-800/20 border border-neutral-150 dark:border-zinc-800 rounded-xl p-3">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-zinc-400">
+                            Прозрачность полей и панелей:
+                          </span>
+                          <span className="text-xs font-extrabold text-blue-600 dark:text-blue-400">
+                            {systemSettings.cardOpacity !== undefined ? systemSettings.cardOpacity : 85}%
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="10"
+                          max="100"
+                          value={systemSettings.cardOpacity !== undefined ? systemSettings.cardOpacity : 85}
+                          onChange={(e) => setSystemSettings({ ...systemSettings, cardOpacity: parseInt(e.target.value, 10) })}
+                          className="w-full h-1.5 bg-neutral-200 dark:bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                        />
+                        <p className="text-[9px] text-neutral-400 dark:text-zinc-500 leading-tight">
+                          Настройте прозрачность остекления (Glassmorphism): левее для полупрозрачного матового фона, правее — для сплошного цвета.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-neutral-100 dark:border-zinc-800">
+                      <button
+                        type="submit"
+                        className="py-2.5 px-5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs shadow-md shadow-blue-500/15 hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        <Settings className="w-3.5 h-3.5" />
+                        <span>💾 Сохранить оформление</span>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* TAB: OWNER LEGAL DOCUMENT ENCLOSURE */}
+            {ownerActiveTab === 'legal' && (
+              <div className="space-y-4 animate-fadeIn max-w-3xl mx-auto w-full">
+                <div className={getCardStyle()}>
+                  <div className={getSubHeaderStyle()}>
+                    <h3 className="font-extrabold text-base flex items-center gap-1.5">
+                      <ShieldCheck className="w-5 h-5 text-blue-500" />
+                      ⚖️ Юридические соглашения
+                    </h3>
+                    <p className="text-xs opacity-60">Официальные документы, регулирующие использование сервиса «Цифровой паспорт объекта»</p>
+                  </div>
+                  <LegalTabContent currentTheme={theme} isAdmin={currentUser.role === 'admin'} />
+                </div>
+              </div>
+            )}
+
+            {/* TAB: SUPPORT */}
+            {ownerActiveTab === 'support' && (
+              <SupportTab 
+                currentUser={currentUser} 
+                systemSettings={systemSettings} 
+                getCardStyle={getCardStyle} 
+                getSubHeaderStyle={getSubHeaderStyle}
+                theme={theme}
+              />
+            )}
 
           </div>
         )}
@@ -4147,8 +5809,12 @@ export default function App() {
         {/* ======================= ROLE 3: SPECIALIST CHECKS RUNNER ======================= */}
         {currentUser.role === 'specialist' && (
           <div className="space-y-6">
-            
-            {/* РАЗДЕЛ: КЛЮЧЕВЫЕ НАВЫКИ СПЕЦИАЛИСТА */}
+
+            {/* 1. WORKPLACE / DEFAULT TAB */}
+            {(activeTab === 'workplace' || activeTab === 'objects' || !activeTab) && (
+              <div className="space-y-6">
+                
+                {/* РАЗДЕЛ: КЛЮЧЕВЫЕ НАВЫКИ СПЕЦИАЛИСТА */}
             <div className={`${getCardStyle()} border-l-4 border-l-amber-500`}>
               <div className={getSubHeaderStyle()}>
                 <span className="text-[10px] uppercase font-bold text-amber-600 block tracking-widest mb-1">Квалификация и профиль компетенций</span>
@@ -4162,47 +5828,162 @@ export default function App() {
               </div>
 
               <div className="space-y-3">
-                <textarea
-                  value={mySkills}
-                  onChange={(e) => setMySkills(e.target.value)}
-                  placeholder="Пример: Наладка автоматики ИТП Danfoss, обслуживание приточно-вытяжных вентиляций Systemair, ремонт чиллеров Carrier, допуски по электробезопасности IV группа..."
-                  className={`${getInputStyle()} w-full p-3 text-xs bg-slate-50 border border-slate-200 focus:bg-white transition-colors`}
-                  rows={3}
-                />
-                <div className="flex justify-end">
-                  <button
-                    onClick={async () => {
-                      setSavingSkills(true);
-                      try {
-                        const response = await fetch("/api/auth/me", {
-                          method: "PUT",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            fullname: currentUser?.fullname,
-                            phone: currentUser?.phone,
-                            company: currentUser?.company,
-                            keySkills: mySkills
-                          })
-                        });
-                        const data = await response.ok ? await response.json() : null;
-                        if (data && data.success) {
-                          localStorage.setItem("user_session", JSON.stringify(data.user));
-                          setCurrentUser(data.user);
-                          alert("Ключевые навыки успешно обновлены в вашем профиле!");
-                        } else {
-                          alert(data?.error || "Произошла ошибка при сохранении навыков.");
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
+                  {/* Photo management inside the specialist workspace card */}
+                  <div className="md:col-span-1 flex flex-col items-center p-3 bg-neutral-100/50 dark:bg-zinc-900/40 rounded-xl border border-neutral-200 dark:border-zinc-800 space-y-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 text-center">Моя фотография</span>
+                    <div className="relative w-24 h-24 rounded-full overflow-hidden border border-neutral-250 dark:border-zinc-850 bg-white dark:bg-zinc-950 flex items-center justify-center shrink-0 shadow shadow-inner group">
+                      {currentUser?.avatarUrl ? (
+                        <img 
+                          src={currentUser.avatarUrl} 
+                          alt="Мое фото" 
+                          className="w-full h-full object-cover"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <UserIcon className="w-12 h-12 text-neutral-305 dark:text-neutral-605" />
+                      )}
+                      <label 
+                        htmlFor="spec-avatar-direct-input"
+                        className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer animate-fadeIn"
+                      >
+                        <Camera className="w-6 h-6 text-white" />
+                      </label>
+                    </div>
+                    
+                    <input 
+                      type="file"
+                      id="spec-avatar-direct-input"
+                      accept="image/*"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          if (file.size > 2 * 1024 * 1024) {
+                            alert("Размер файла превышает 2МБ.");
+                            return;
+                          }
+                          const reader = new FileReader();
+                          reader.onload = async (ev) => {
+                            if (ev.target?.result) {
+                              const base64Photo = ev.target.result as string;
+                              try {
+                                const response = await fetch("/api/auth/me", {
+                                  method: "PUT",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({
+                                    fullname: currentUser?.fullname,
+                                    phone: currentUser?.phone,
+                                    company: currentUser?.company,
+                                    keySkills: currentUser?.keySkills || mySkills,
+                                    avatarUrl: base64Photo
+                                  })
+                                });
+                                const data = response.ok ? await response.json() : null;
+                                if (data && data.success) {
+                                  localStorage.setItem("user_session", JSON.stringify(data.user));
+                                  setCurrentUser(data.user);
+                                  alert("Фотография успешно обновлена!");
+                                } else {
+                                  alert(data?.error || "Не удалось обновить фотографию.");
+                                }
+                              } catch (err) {
+                                alert("Не удалось связаться с сервером.");
+                              }
+                            }
+                          };
+                          reader.readAsDataURL(file);
                         }
-                      } catch (err) {
-                        alert("Не удалось связаться с сервером.");
-                      } finally {
-                        setSavingSkills(false);
-                      }
-                    }}
-                    disabled={savingSkills}
-                    className="py-1.5 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded shadow transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    {savingSkills ? "Сохранение..." : "💾 Сохранить ключевые навыки"}
-                  </button>
+                      }}
+                      className="hidden"
+                    />
+                    
+                    <div className="flex flex-col gap-1 w-full">
+                      <button
+                        type="button"
+                        onClick={() => document.getElementById("spec-avatar-direct-input")?.click()}
+                        className="w-full py-1 px-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[9px] rounded text-center cursor-pointer shadow-xs"
+                      >
+                        Выбрать файл...
+                      </button>
+                      {currentUser?.avatarUrl && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (confirm("Вы хотите удалить фотографию?")) {
+                              try {
+                                const response = await fetch("/api/auth/me", {
+                                  method: "PUT",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({
+                                    fullname: currentUser?.fullname,
+                                    phone: currentUser?.phone,
+                                    company: currentUser?.company,
+                                    keySkills: currentUser?.keySkills || mySkills,
+                                    avatarUrl: ""
+                                  })
+                                });
+                                const data = response.ok ? await response.json() : null;
+                                if (data && data.success) {
+                                  localStorage.setItem("user_session", JSON.stringify(data.user));
+                                  setCurrentUser(data.user);
+                                }
+                              } catch (e) {}
+                            }
+                          }}
+                          className="w-full py-0.5 px-2 bg-neutral-200 dark:bg-zinc-800 hover:bg-neutral-300 dark:hover:bg-zinc-700 text-neutral-800 dark:text-neutral-200 text-[9px] rounded text-center cursor-pointer"
+                        >
+                          Удалить
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Skills panel */}
+                  <div className="md:col-span-3 space-y-3">
+                    <textarea
+                      value={mySkills}
+                      onChange={(e) => setMySkills(e.target.value)}
+                      placeholder="Пример: Наладка автоматики ИТП Danfoss, обслуживание приточно-вытяжных вентиляций Systemair, ремонт чиллеров Carrier, допуски по электробезопасности IV группа..."
+                      className={`${getInputStyle()} w-full p-3 text-xs bg-slate-50 border border-slate-200 focus:bg-white transition-colors`}
+                      rows={3}
+                    />
+                    <div className="flex justify-end">
+                      <button
+                        onClick={async () => {
+                          setSavingSkills(true);
+                          try {
+                            const response = await fetch("/api/auth/me", {
+                              method: "PUT",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                fullname: currentUser?.fullname,
+                                phone: currentUser?.phone,
+                                company: currentUser?.company,
+                                keySkills: mySkills,
+                                avatarUrl: currentUser?.avatarUrl
+                              })
+                            });
+                            const data = await response.ok ? await response.json() : null;
+                            if (data && data.success) {
+                              localStorage.setItem("user_session", JSON.stringify(data.user));
+                              setCurrentUser(data.user);
+                              alert("Ключевые навыки успешно обновлены в вашем профиле!");
+                            } else {
+                              alert(data?.error || "Произошла ошибка при сохранении навыков.");
+                            }
+                          } catch (err) {
+                            alert("Не удалось связаться с сервером.");
+                          } finally {
+                            setSavingSkills(false);
+                          }
+                        }}
+                        disabled={savingSkills}
+                        className="py-1.5 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded shadow transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        {savingSkills ? "Сохранение..." : "💾 Сохранить ключевые навыки"}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -4497,6 +6278,480 @@ export default function App() {
 
               </div>
             </div>
+          </div>
+        )}
+
+            {/* 2. TAB: MY ACTS / МОИ АКТЫ */}
+            {activeTab === 'my-acts' && (
+              <div className="space-y-4 animate-fadeIn">
+                <div className={getCardStyle()}>
+                  <div className={getSubHeaderStyle()}>
+                    <h3 className="font-bold text-base flex items-center gap-2">📂 Мои отправленные работы (Акты ТО)</h3>
+                    <p className="text-xs opacity-65">Юридически подтвержденная история осмотров и регламентов оборудования, отправленная вами лично</p>
+                  </div>
+
+                  {/* Фильтры структуры: Объект и Год */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-5 mb-5 border-b border-neutral-300/15">
+                    <div className="flex flex-col gap-1 text-left">
+                      <label className="text-xs font-bold uppercase opacity-75">🏢 Выберите объект контроля:</label>
+                      <select
+                        value={selectedMyReportObjectId}
+                        onChange={(e) => {
+                          setSelectedMyReportObjectId(e.target.value);
+                          setSelectedMyReportYear('all'); // сбросить год при выборе другого объекта
+                        }}
+                        className={getInputStyle()}
+                      >
+                        <option value="all">🌐 Все объекты ({reports.filter(r => r.specialistUserId === currentUser.id).length} актов)</option>
+                        {objects.map(obj => {
+                          const myReports = reports.filter(r => r.specialistUserId === currentUser.id);
+                          const hasReports = myReports.some(r => r.objectId === obj.id);
+                          if (!hasReports) return null;
+                          const count = myReports.filter(r => r.objectId === obj.id).length;
+                          return (
+                            <option key={obj.id} value={obj.id}>
+                              🏢 {obj.name} (Ваших актов: {count})
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    <div className="flex flex-col gap-1 text-left">
+                      <label className="text-xs font-bold uppercase opacity-75">📅 Выберите год:</label>
+                      <select
+                        value={selectedMyReportYear}
+                        onChange={(e) => setSelectedMyReportYear(e.target.value)}
+                        className={getInputStyle()}
+                        disabled={reports.filter(r => r.specialistUserId === currentUser.id && (selectedMyReportObjectId === 'all' || r.objectId === selectedMyReportObjectId)).length === 0}
+                      >
+                        <option value="all">⏳ Все годы ({reports.filter(r => r.specialistUserId === currentUser.id && (selectedMyReportObjectId === 'all' || r.objectId === selectedMyReportObjectId)).length} актов)</option>
+                        {(() => {
+                          const relevantReports = reports.filter(r => r.specialistUserId === currentUser.id && (selectedMyReportObjectId === 'all' || r.objectId === selectedMyReportObjectId));
+                          const years = Array.from<string>(new Set(relevantReports.map(r => new Date(r.dateDone).getFullYear().toString()))).sort((a: string, b: string) => b.localeCompare(a));
+                          return years.map(yr => {
+                            const countInYear = relevantReports.filter(r => new Date(r.dateDone).getFullYear().toString() === yr).length;
+                            return (
+                              <option key={yr} value={yr}>
+                                📅 {yr} год (Актов: {countInYear})
+                              </option>
+                            );
+                          });
+                        })()}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {(() => {
+                      const finalReports = reports.filter(rep => {
+                        const isMine = rep.specialistUserId === currentUser.id;
+                        const matchObject = selectedMyReportObjectId === 'all' || rep.objectId === selectedMyReportObjectId;
+                        const matchYear = selectedMyReportYear === 'all' || new Date(rep.dateDone).getFullYear().toString() === selectedMyReportYear;
+                        return isMine && matchObject && matchYear;
+                      });
+
+                      if (finalReports.length === 0) {
+                        return (
+                          <div className="col-span-full py-12 text-center text-sm opacity-65 font-medium">
+                            📭 Не найдено отправленных актов по выбранному фильтру (объект / год).
+                          </div>
+                        );
+                      }
+
+                      return finalReports.map(rep => {
+                        const obj = objects.find(o => o.id === rep.objectId);
+                        const tpl = templates.find(t => t.id === rep.checklistTemplateId);
+                        const sch = schedules.find(s => s.id === rep.scheduleItemId);
+                        
+                        return (
+                          <div key={rep.id} className="p-5 rounded-2xl border border-neutral-300/15 bg-neutral-100/5 hover:shadow-md transition-all space-y-4 text-left">
+                            <div className="flex justify-between items-center bg-black/5 dark:bg-white/5 p-2 rounded-xl">
+                              <div>
+                                <span className="text-[10px] text-sky-500 font-bold tracking-wider uppercase block">АКТ {rep.id}</span>
+                                <span className="text-[11px] opacity-60">{new Date(rep.dateDone).toLocaleString('ru-RU')}</span>
+                              </div>
+                              <span className="bg-emerald-500/10 text-emerald-500 text-[10px] font-extrabold px-2 py-1 rounded-full uppercase">Выполнено</span>
+                            </div>
+
+                            <div className="space-y-1">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Объект контроля:</span>
+                              <div className="font-extrabold text-sm">{obj ? obj.name : "Неизвестный объект"}</div>
+                              <p className="text-xs text-slate-500">{obj ? obj.address : ""}</p>
+                            </div>
+
+                            <div className="space-y-1">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Регламентная задача:</span>
+                              <div className="font-bold text-xs">{sch ? sch.title : "Регламентное обслуживание"}</div>
+                              <p className="text-[11px] opacity-65 italic">Тип чек-листа: {tpl ? tpl.name : ""}</p>
+                            </div>
+
+                            <div className="bg-slate-50 dark:bg-zinc-800/40 p-3 rounded-xl space-y-2 border">
+                              <span className="text-[10px] uppercase font-bold text-slate-500 block border-b pb-1">Ответы в чек-листе:</span>
+                              <div className="space-y-1.5">
+                                {rep.answers.map(ans => {
+                                  const qText = tpl?.questions.find(q => q.id === ans.questionId)?.text || ans.questionId;
+                                  const isPhoto = ans.value.startsWith('http') || ans.value.startsWith('data:image');
+                                  return (
+                                    <div key={ans.questionId} className="text-[11px] leading-tight flex flex-col">
+                                      <span className="text-slate-500 font-medium">{qText}:</span>
+                                      {isPhoto ? (
+                                        <a href={ans.value} target="_blank" rel="noopener noreferrer" className="text-sky-500 font-bold hover:underline flex items-center gap-1 mt-0.5">
+                                          <ImageIcon className="w-3.5 h-3.5" /> [Смотреть прикрепленное фото]
+                                        </a>
+                                      ) : (
+                                        <span className="font-extrabold text-slate-800 mt-0.5">
+                                          {ans.value === 'true' ? '✅ Да' : ans.value === 'false' ? '❌ Нет' : ans.value}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div className="border-t border-dashed border-neutral-300/15 pt-3 flex items-center justify-between text-[11px]">
+                              <div>
+                                <div className="font-bold text-slate-700">{rep.specialistInfo.fullname}</div>
+                                <div className="opacity-65 text-[10px]">{rep.specialistInfo.company}</div>
+                              </div>
+
+                              <a 
+                                href={`/api/reports/${rep.id}/pdf`} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="bg-amber-600 hover:bg-amber-700 text-white font-bold p-2 rounded-lg flex items-center gap-1 shadow-sm uppercase text-[9px] tracking-wide"
+                              >
+                                <Download className="w-3.5 h-3.5" /> Скачать акт
+                              </a>
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 3. TAB: SPECIALIST RATING AND REVIEWS */}
+            {activeTab === 'my-ratings' && (
+              <div className="space-y-6 max-w-3xl mx-auto w-full animate-fadeIn text-left">
+                <div className={getCardStyle()}>
+                  <div className={getSubHeaderStyle()}>
+                    <h3 className="font-bold text-base flex items-center gap-2">⭐ Мой профессиональный рейтинг</h3>
+                    <p className="text-xs opacity-65">
+                      Оценки вашей работы и экспертности на основе отзывов собственников обслуживаемых объектов
+                    </p>
+                  </div>
+
+                  <div className="p-6 bg-slate-50 dark:bg-zinc-800/20 border border-neutral-100 dark:border-zinc-800 rounded-2xl flex flex-col sm:flex-row items-center justify-around gap-6 text-center sm:text-left">
+                    <div>
+                      <div className="text-[10px] uppercase font-bold text-neutral-400">Ваша средняя оценка</div>
+                      {(() => {
+                        const myRatings = reports.filter(r => r.specialistUserId === currentUser.id && r.approvedByOwner === true && r.ownerRating !== undefined);
+                        const avgRating = myRatings.length > 0 
+                          ? Number((myRatings.reduce((sum, r) => sum + (r.ownerRating || 0), 0) / myRatings.length).toFixed(1)) 
+                          : 0;
+                        return (
+                          <div className="mt-2">
+                            {avgRating > 0 ? (
+                              <div className="space-y-1">
+                                <div className="text-4xl font-black text-amber-500 flex items-center justify-center sm:justify-start gap-2">
+                                  <span>★ {avgRating.toFixed(1)}</span>
+                                  <span className="text-sm font-bold text-neutral-400">/ 5.0</span>
+                                </div>
+                                <div className="text-xs font-semibold text-neutral-600 dark:text-zinc-400">На основе {myRatings.length} оценок от собственников</div>
+                              </div>
+                            ) : (
+                              <div className="space-y-1">
+                                <div className="text-2xl font-black text-neutral-400 italic">Рейтинг не сформирован</div>
+                                <div className="text-xs text-neutral-500">Собственники еще не оценивали ваши акты ТО</div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    {(() => {
+                      const myRatings = reports.filter(r => r.specialistUserId === currentUser.id && r.approvedByOwner === true && r.ownerRating !== undefined);
+                      const avgRating = myRatings.length > 0 
+                        ? Number((myRatings.reduce((sum, r) => sum + (r.ownerRating || 0), 0) / myRatings.length).toFixed(1)) 
+                        : 0;
+                      if (avgRating === 0) return null;
+                      return (
+                        <div className="w-full sm:w-1/2 space-y-2">
+                          <div className="flex justify-between text-xs font-bold text-slate-500">
+                            <span>Шкала экспертности:</span>
+                            <span>{(avgRating / 5 * 100).toFixed(0)}%</span>
+                          </div>
+                          <div className="w-full bg-neutral-200 dark:bg-zinc-800 h-2.5 rounded-full overflow-hidden">
+                            <div 
+                              className="bg-amber-500 h-full rounded-full transition-all duration-500" 
+                              style={{ width: `${(avgRating / 5) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                <div className={getCardStyle()}>
+                  <div className={getSubHeaderStyle()}>
+                    <h3 className="font-bold text-base flex items-center gap-2">💬 Отзывы и комментарии клиентов</h3>
+                    <p className="text-xs opacity-65">История комментариев и обратной связи, оставленных собственниками по вашим актам ТО</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    {reports.filter(r => r.specialistUserId === currentUser.id && r.approvedByOwner === true && r.ownerRating !== undefined).length === 0 ? (
+                      <p className="text-xs italic opacity-50 p-6 text-center">Оценки и отзывы о вашей работе пока отсутствуют</p>
+                    ) : (
+                      reports.filter(r => r.specialistUserId === currentUser.id && r.approvedByOwner === true && r.ownerRating !== undefined).map(rep => {
+                        const associatedObject = objects.find(o => o.id === rep.objectId);
+                        return (
+                          <div key={rep.id} className="p-4 border rounded-xl bg-slate-50 dark:bg-zinc-900/40 border-neutral-300/10 space-y-2 text-xs hover:border-neutral-300 dark:hover:border-zinc-700 transition-colors">
+                            <div className="flex justify-between items-start flex-wrap gap-2">
+                              <div>
+                                <span className="font-extrabold text-slate-800 dark:text-slate-100 text-xs">Собственник ({associatedObject?.name || "Здание"})</span>
+                                <span className="text-[10px] opacity-50 block">{associatedObject ? `Адрес: ${associatedObject.address}` : `Акт: ${rep.id}`}</span>
+                              </div>
+                              <div className="flex flex-col items-end">
+                                <span className="text-amber-500 font-extrabold text-sm">
+                                  {"★".repeat(rep.ownerRating || 0)}{"☆".repeat(5 - (rep.ownerRating || 0))}
+                                </span>
+                                <span className="text-[9px] opacity-45">{new Date(rep.dateDone).toLocaleDateString('ru-RU')}</span>
+                              </div>
+                            </div>
+                            {rep.ownerRatingComment ? (
+                              <p className="italic text-slate-600 dark:text-zinc-300 p-2.5 rounded-lg bg-white dark:bg-zinc-800/40 border-dashed border border-neutral-300/10">
+                                "{rep.ownerRatingComment}"
+                              </p>
+                            ) : (
+                              <p className="italic text-slate-400 p-1">Оценка выставлена без текстового комментария</p>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 4. TAB: SPECIALIST APP STYLE / BRANDING */}
+            {activeTab === 'spec-branding' && (
+              <div className="space-y-6 max-w-2xl mx-auto w-full animate-fadeIn text-left">
+                <div className={getCardStyle()}>
+                  <div className={getSubHeaderStyle()}>
+                    <span className="text-[10px] uppercase font-bold text-amber-600 block tracking-widest mb-1">Оформление приложения</span>
+                    <h3 className="font-extrabold text-base text-zinc-800 dark:text-zinc-100 flex items-center gap-2">
+                      🎨 Персональное оформление интерфейса
+                    </h3>
+                    <p className="text-xs opacity-65">
+                      Настройка тем оформления, прозрачности полей и панелей и фоновых изображений вашего рабочего места
+                    </p>
+                  </div>
+
+                  <form onSubmit={saveSettingsSubmit} className="space-y-6 text-xs text-left">
+                    {/* 1. Selection of color palette (theme) */}
+                    <div className="flex flex-col gap-1.5 p-4 rounded-xl border border-neutral-200 dark:border-zinc-800 bg-white/45 dark:bg-zinc-900/40">
+                      <label className="text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-zinc-300">Цветовая палитра интерфейса:</label>
+                      <select
+                        value={theme}
+                        onChange={(e) => {
+                          const val = e.target.value as any;
+                          setTheme(val);
+                          localStorage.setItem("app_theme", val);
+                        }}
+                        className="w-full text-xs font-semibold p-2.5 rounded-lg border border-neutral-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-neutral-800 dark:text-neutral-100 focus:outline-none"
+                      >
+                        <option value="cleanroom">🧼 «Чистая комната» (Классический светлый)</option>
+                        <option value="modern">💻 «Современный тёмный» (Modern Dark)</option>
+                        <option value="terminal">📟 «Хаки терминал» (Terminal Green)</option>
+                        <option value="warm">📜 «Теплый бежевый» (Warm Serif)</option>
+                        <option value="japanese">🍣 «Японский дзен» (Japanese Zen)</option>
+                        <option value="japanese_calligraphy">🌸 «Сад сакуры & Каллиграфия» (Kyoto Brush)</option>
+                        <option value="crisp_minimal">⬜ «Строгий бумажный» (Crisp Minimal)</option>
+                      </select>
+                    </div>
+
+                    {/* 2. Фоновое оформление и Прозрачность */}
+                    <div className="space-y-4 p-4 rounded-xl border border-neutral-200 dark:border-zinc-800 bg-white/45 dark:bg-zinc-900/40">
+                      <span className="font-bold text-neutral-700 dark:text-zinc-300 uppercase tracking-wider block text-[10px]">🏞️ Фоновые изображения и Стеклянный дизайн (Glassmorphism):</span>
+                      
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'default', appBackgroundUrl: '' })}
+                          className={`p-2.5 text-xs font-semibold rounded-lg border text-center transition-all ${
+                            (!systemSettings.appBackgroundType || systemSettings.appBackgroundType === 'default')
+                              ? 'border-amber-600 bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400 shadow-sm'
+                              : 'border-neutral-200 dark:border-zinc-800 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-neutral-300 bg-white/40 dark:bg-zinc-800/20'
+                          }`}
+                        >
+                          🎨 Стандартная тема
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'villa', appBackgroundUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=80' })}
+                          className={`p-2.5 text-xs font-semibold rounded-lg border text-center transition-all ${
+                            systemSettings.appBackgroundType === 'villa'
+                              ? 'border-amber-600 bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400 shadow-sm'
+                              : 'border-neutral-200 dark:border-zinc-800 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-neutral-300 bg-white/40 dark:bg-zinc-800/20'
+                          }`}
+                        >
+                          🏡 Вилла (Остекление)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'blueprint', appBackgroundUrl: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=2000&q=80' })}
+                          className={`p-2.5 text-xs font-semibold rounded-lg border text-center transition-all ${
+                            systemSettings.appBackgroundType === 'blueprint'
+                              ? 'border-amber-600 bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400 shadow-sm'
+                              : 'border-neutral-200 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-neutral-300 bg-white/40 dark:bg-zinc-800/20'
+                          }`}
+                        >
+                          📐 Чертеж фасада
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'sakura', appBackgroundUrl: 'https://images.unsplash.com/photo-1524413840807-0c3cb6fa808d?auto=format&fit=crop&w=2000&q=80' })}
+                          className={`p-2.5 text-xs font-semibold rounded-lg border text-center transition-all ${
+                            systemSettings.appBackgroundType === 'sakura'
+                              ? 'border-amber-600 bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400 shadow-sm'
+                              : 'border-neutral-200 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-neutral-300 bg-white/40 dark:bg-zinc-800/20'
+                          }`}
+                        >
+                          🌸 Сад Сакуры
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'custom' })}
+                          className={`p-2.5 text-xs font-semibold rounded-lg border text-center transition-all col-span-2 ${
+                            systemSettings.appBackgroundType === 'custom'
+                              ? 'border-amber-600 bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400 shadow-sm'
+                              : 'border-neutral-200 hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-600 dark:text-neutral-300 bg-white/40 dark:bg-zinc-800/20'
+                          }`}
+                        >
+                          📸 Свое фоновое фото
+                        </button>
+                      </div>
+
+                      {/* Card transparency slider */}
+                      <div className="space-y-1.5 bg-neutral-50 dark:bg-zinc-800/20 border border-neutral-150 dark:border-zinc-800 rounded-xl p-3">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 dark:text-zinc-400">
+                            Прозрачность полей и панелей:
+                          </span>
+                          <span className="text-xs font-extrabold text-amber-600 dark:text-amber-400">
+                            {systemSettings.cardOpacity !== undefined ? systemSettings.cardOpacity : 85}%
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="10"
+                          max="100"
+                          value={systemSettings.cardOpacity !== undefined ? systemSettings.cardOpacity : 85}
+                          onChange={(e) => setSystemSettings({ ...systemSettings, cardOpacity: parseInt(e.target.value, 10) })}
+                          className="w-full h-1.5 bg-neutral-200 dark:bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-amber-600"
+                        />
+                        <p className="text-[9px] text-neutral-400 dark:text-zinc-500 leading-tight">
+                          Настройте прозрачность остекления (Glassmorphism): левее для полупрозрачного матового фона, правее — для сплошного цвета.
+                        </p>
+                      </div>
+
+                      {systemSettings.appBackgroundType === 'custom' && (
+                        <div className="space-y-2 animate-fadeIn pt-1">
+                          <span className="text-xs font-semibold text-neutral-600 block">Загрузить свое фоновое фото с диска (Base64):</span>
+                          <div className="relative flex flex-col items-center justify-center border-2 border-dashed border-neutral-300 rounded-lg p-4 bg-white/50 hover:bg-white transition cursor-pointer group">
+                            <input 
+                              type="file" 
+                              accept="image/*" 
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onloadend = () => {
+                                    setSystemSettings({ ...systemSettings, appBackgroundUrl: reader.result as string });
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                            />
+                            <ImageIcon className="w-6 h-6 text-neutral-400 group-hover:text-neutral-500 transition mb-1" />
+                            <span className="text-[11px] font-semibold text-neutral-600">Нажмите для выбора файла</span>
+                            <span className="text-[9px] text-neutral-400">JPG, PNG, WEBP</span>
+                          </div>
+
+                          <div className="flex flex-col gap-1 pt-1">
+                            <span className="text-[10px] font-semibold text-neutral-500">Или внешняя ссылка на изображение:</span>
+                            <input 
+                              type="text" 
+                              placeholder="https://example.com/background.jpg"
+                              value={systemSettings.appBackgroundUrl && !systemSettings.appBackgroundUrl.startsWith("data:") ? systemSettings.appBackgroundUrl : ""}
+                              onChange={(e) => setSystemSettings({ ...systemSettings, appBackgroundUrl: e.target.value })}
+                              className={getInputStyle()}
+                            />
+                          </div>
+
+                          {systemSettings.appBackgroundUrl && (
+                            <div className="flex items-center justify-between p-2 rounded bg-blue-50 border border-blue-200 text-[11px] gap-2">
+                              <span className="truncate max-w-[200px] text-blue-800 font-semibold flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                                Собственный фон загружен
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setSystemSettings({ ...systemSettings, appBackgroundUrl: "" })}
+                                className="text-rose-600 hover:text-rose-800 transition font-semibold"
+                              >
+                                Сбросить
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="pt-3 border-t border-neutral-100 dark:border-zinc-800">
+                      <button
+                        type="submit"
+                        className="py-2.5 px-5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold text-xs shadow-md shadow-amber-500/15 hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        <Settings className="w-3.5 h-3.5" />
+                        <span>💾 Сохранить оформление</span>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* 5. TAB: LEGAL AGREEMENTS FOR SPECIALIST */}
+            {activeTab === 'legal' && (
+              <div className="space-y-4 max-w-3xl mx-auto w-full text-left">
+                <div className={getCardStyle()}>
+                  <div className={getSubHeaderStyle()}>
+                    <h3 className="font-bold text-base flex items-center gap-2">⚖️ Юридические соглашения</h3>
+                    <p className="text-xs opacity-60">Официальные документы, регулирующие использование сервиса «Цифровой паспорт объекта»</p>
+                  </div>
+                  <LegalTabContent currentTheme={theme} isAdmin={currentUser.role === 'admin'} />
+                </div>
+              </div>
+            )}
+
+            {/* TAB: SUPPORT */}
+            {activeTab === 'support' && (
+              <SupportTab 
+                currentUser={currentUser} 
+                systemSettings={systemSettings} 
+                getCardStyle={getCardStyle} 
+                getSubHeaderStyle={getSubHeaderStyle}
+                theme={theme}
+              />
+            )}
 
           </div>
         )}
@@ -4505,8 +6760,9 @@ export default function App() {
 
       {/* Humble Clean footer */}
       <footer className="py-12 border-t border-neutral-300/10 mt-12 text-center text-[10px] opacity-50 space-y-1">
-        <p>© 2026 Управление Техническим Обслуживанием Объектов • «Цифровой паспорт здания»</p>
-        <p>Яндекс.Диск Робот-Синхронизатор • FastAPI Backend • PostgreSQL Engine v15</p>
+        <p>© 2026 Управление Техническим Обслуживанием Объектов</p>
+        <p>«Цифровой паспорт объекта»</p>
+        <p className="pt-1 font-semibold">Разработано командой АкваТермСервис г. Новосибирск</p>
       </footer>
 
       {/* MODAL: QR-CODE ISSUING FOR INSTRUCTIONS & FORMS */}
@@ -4625,14 +6881,14 @@ export default function App() {
       {/* MODAL: EDIT USER PROFILE */}
       {isProfileOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className={`${getCardStyle()} max-w-sm w-full relative animate-fadeIn space-y-4 bg-white text-neutral-800`}>
+          <div className={`${getCardStyle()} max-w-md w-full max-h-[90vh] overflow-y-auto relative animate-fadeIn space-y-4 bg-white text-neutral-800 p-6`}>
             
             {/* Header of Modal */}
             <div className="flex justify-between items-start border-b pb-3 border-neutral-100">
               <div>
-                <span className="text-[10px] font-bold text-amber-600 uppercase block tracking-wider">Профиль пользователя</span>
+                <span className="text-[10px] font-bold text-blue-600 uppercase block tracking-wider">Настройки аккаунта & Дизайна</span>
                 <h4 className="font-semibold text-base text-slate-900 leading-snug">
-                  Редактировать личные данные
+                  Личные данные и фоновое оформление
                 </h4>
               </div>
               <button 
@@ -4655,6 +6911,79 @@ export default function App() {
                   {profileErrorMsg}
                 </div>
               )}
+
+              {/* РАЗДЕЛ: АВАТАРКА ПОЛЬЗОВАТЕЛЯ / ФОТО СПЕЦИАЛИСТА */}
+              <div className="p-3 bg-neutral-100/50 dark:bg-zinc-900/40 rounded-xl border border-neutral-200 dark:border-zinc-800 space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 flex items-center gap-1.5">
+                  <Camera className="w-3.5 h-3.5 text-blue-600" />
+                  Фотография профиля {currentUser?.role === 'specialist' && "(Обязательно для выездного инженера TO)"}
+                </label>
+                <div className="flex items-center gap-4">
+                  <div className="relative w-16 h-16 rounded-full overflow-hidden border border-neutral-200 dark:border-zinc-800 bg-neutral-100 dark:bg-zinc-900 flex items-center justify-center shrink-0 shadow-inner group">
+                    {profileAvatarUrl ? (
+                      <img 
+                        src={profileAvatarUrl} 
+                        alt="Аватар профиля" 
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <UserIcon className="w-8 h-8 text-neutral-400 dark:text-neutral-500" />
+                    )}
+                    <label 
+                      htmlFor="profile-avatar-input"
+                      className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                    >
+                      <Camera className="w-4 h-4 text-white" />
+                    </label>
+                  </div>
+                  <div className="flex flex-col gap-1.5 flex-1">
+                    <input 
+                      type="file"
+                      id="profile-avatar-input"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          if (file.size > 2 * 1024 * 1024) {
+                            alert("Размер файла превышает 2МБ. Выберите меньший файл.");
+                            return;
+                          }
+                          const reader = new FileReader();
+                          reader.onload = (ev) => {
+                            if (ev.target?.result) {
+                              setProfileAvatarUrl(ev.target.result as string);
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                      className="hidden"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => document.getElementById("profile-avatar-input")?.click()}
+                        className="py-1 px-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] rounded transition-all cursor-pointer shadow-sm"
+                      >
+                        Выбрать файл...
+                      </button>
+                      {profileAvatarUrl && (
+                        <button
+                          type="button"
+                          onClick={() => setProfileAvatarUrl("")}
+                          className="py-1 px-2.5 bg-neutral-200 hover:bg-neutral-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-neutral-800 dark:text-neutral-200 font-bold text-[10px] rounded transition-all cursor-pointer"
+                        >
+                          Удалить
+                        </button>
+                      )}
+                    </div>
+                    <span className="text-[9px] text-neutral-400 dark:text-neutral-500 italic block">
+                      Файл JPG, PNG. До 2 МБ. Отображается в чек-листах и графиках контактов.
+                    </span>
+                  </div>
+                </div>
+              </div>
 
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">ФИО *</label>
@@ -4714,7 +7043,174 @@ export default function App() {
                 />
               </div>
 
-              <div className="flex justify-end gap-2 pt-2">
+              {/* РАЗДЕЛ ТЕМЫ И ФОНОВОГО ОФОРМЛЕНИЯ В МЕНЮ "НАСТРОЙКИ" (Скрыт для специалистов) */}
+              {currentUser?.role !== 'specialist' && (
+                <div className="border-t border-neutral-200/60 pt-4 mt-3 space-y-3.5">
+                  <span className="font-bold text-neutral-800 text-xs block mb-1 uppercase tracking-wider text-blue-600">🎨 Темы и адаптивное фоновое оформление:</span>
+                  
+                  {/* 1. Выбор цветовой палитры (Тема) */}
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">Цветовая палитра интерфейса:</label>
+                    <select
+                      value={theme}
+                      onChange={(e) => setTheme(e.target.value as any)}
+                      className="w-full text-xs font-semibold p-2.5 rounded-lg border border-neutral-300 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      <option value="cleanroom">🧼 «Чистая комната» (Классический светлый)</option>
+                      <option value="modern">💻 «Современный тёмный» (Modern Dark)</option>
+                      <option value="terminal">📟 «Хаки терминал» (Terminal Green)</option>
+                      <option value="warm">📜 «Теплый бежевый» (Warm Serif)</option>
+                      <option value="japanese">🍣 «Японский дзен» (Japanese Zen)</option>
+                      <option value="japanese_calligraphy">🌸 «Сад сакуры & Каллиграфия» (Kyoto Brush)</option>
+                      <option value="crisp_minimal">⬜ «Строгий бумажный» (Crisp Minimal)</option>
+                    </select>
+                  </div>
+
+                  {/* 2. Наличие Фоновых Рисунков с Эффектом Остекления (Glassmorphism) */}
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 block">Фоновое изображение экрана и адаптивный стеклянный дизайн (Glassmorphic):</label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'default', appBackgroundUrl: '' })}
+                        className={`p-2 px-3 text-xs font-semibold rounded-lg border text-center transition-all ${
+                          (!systemSettings.appBackgroundType || systemSettings.appBackgroundType === 'default')
+                            ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-sm'
+                            : 'border-neutral-200 hover:bg-neutral-50 text-neutral-600 bg-white'
+                        }`}
+                      >
+                        🎨 Стандартная тема
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'villa', appBackgroundUrl: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=80' })}
+                        className={`p-2 px-3 text-xs font-semibold rounded-lg border text-center transition-all ${
+                          systemSettings.appBackgroundType === 'villa'
+                            ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-sm'
+                            : 'border-neutral-200 hover:bg-neutral-50 text-neutral-600 bg-white'
+                        }`}
+                      >
+                        🏡 Вилла (Остекление)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'blueprint', appBackgroundUrl: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=2000&q=80' })}
+                        className={`p-2 px-3 text-xs font-semibold rounded-lg border text-center transition-all ${
+                          systemSettings.appBackgroundType === 'blueprint'
+                            ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-sm'
+                            : 'border-neutral-200 hover:bg-neutral-50 text-neutral-600 bg-white'
+                        }`}
+                      >
+                        📐 Чертеж фасада
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'sakura', appBackgroundUrl: 'https://images.unsplash.com/photo-1524413840807-0c3cb6fa808d?auto=format&fit=crop&w=2000&q=80' })}
+                        className={`p-2 px-3 text-xs font-semibold rounded-lg border text-center transition-all ${
+                          systemSettings.appBackgroundType === 'sakura'
+                            ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-sm'
+                            : 'border-neutral-200 hover:bg-neutral-50 text-neutral-600 bg-white'
+                        }`}
+                      >
+                        🌸 Сад Сакуры
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSystemSettings({ ...systemSettings, appBackgroundType: 'custom' })}
+                        className={`p-2 px-3 text-xs font-semibold rounded-lg border text-center transition-all col-span-2 ${
+                          systemSettings.appBackgroundType === 'custom'
+                            ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-sm'
+                            : 'border-neutral-200 hover:bg-neutral-50 text-neutral-600 bg-white'
+                        }`}
+                      >
+                        📸 Свое фоновое фото
+                      </button>
+                    </div>
+
+                    {/* 3. Ползунок прозрачности полей и панелей */}
+                    <div className="space-y-1.5 bg-neutral-50 border border-neutral-150 rounded-xl p-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+                          Прозрачность полей и панелей:
+                        </span>
+                        <span className="text-xs font-extrabold text-blue-600">
+                          {systemSettings.cardOpacity !== undefined ? systemSettings.cardOpacity : 85}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="10"
+                        max="100"
+                        value={systemSettings.cardOpacity !== undefined ? systemSettings.cardOpacity : 85}
+                        onChange={(e) => setSystemSettings({ ...systemSettings, cardOpacity: parseInt(e.target.value, 10) })}
+                        className="w-full h-1.5 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                      />
+                      <p className="text-[9px] text-neutral-400 leading-tight">
+                        Перемещайте ползунок влево для тонкой настройки остекления (матовый полупрозрачный фон), вправо — для плотного непрозрачного цвета.
+                      </p>
+                    </div>
+
+                    {systemSettings.appBackgroundType === 'custom' && (
+                      <div className="space-y-2 animate-fadeIn pt-1">
+                        <span className="text-xs font-semibold text-neutral-600 block">Загрузить свое фоновое фото с диска (Base64):</span>
+                        <div className="relative flex flex-col items-center justify-center border-2 border-dashed border-neutral-300 rounded-lg p-4 bg-white/50 hover:bg-white transition cursor-pointer group">
+                          <input 
+                            type="file" 
+                            accept="image/*" 
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                const reader = new FileReader();
+                                reader.onloadend = () => {
+                                  setSystemSettings({ ...systemSettings, appBackgroundUrl: reader.result as string });
+                                };
+                                reader.readAsDataURL(file);
+                              }
+                            }}
+                          />
+                          <ImageIcon className="w-6 h-6 text-neutral-400 group-hover:text-neutral-500 transition mb-1" />
+                          <span className="text-[11px] font-semibold text-neutral-600">Нажмите для выбора файла</span>
+                          <span className="text-[9px] text-neutral-400">JPG, PNG, WEBP</span>
+                        </div>
+
+                        <div className="flex flex-col gap-1 pt-1">
+                          <span className="text-[10px] font-semibold text-neutral-500">Или внешняя ссылка на изображение:</span>
+                          <input 
+                            type="text" 
+                            placeholder="https://example.com/background.jpg"
+                            value={systemSettings.appBackgroundUrl && !systemSettings.appBackgroundUrl.startsWith("data:") ? systemSettings.appBackgroundUrl : ""}
+                            onChange={(e) => setSystemSettings({ ...systemSettings, appBackgroundUrl: e.target.value })}
+                            className={getInputStyle()}
+                          />
+                        </div>
+
+                        {systemSettings.appBackgroundUrl && (
+                          <div className="flex items-center justify-between p-2 rounded bg-blue-50 border border-blue-200 text-[11px] gap-2">
+                            <span className="truncate max-w-[200px] text-blue-800 font-semibold flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                              Собственный фон загружен
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setSystemSettings({ ...systemSettings, appBackgroundUrl: "" })}
+                              className="text-rose-600 hover:text-rose-800 transition font-semibold"
+                            >
+                              Сбросить
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <span className="text-[11px] text-neutral-500 block leading-tight pt-1">
+                      🌟 <b>Прим.:</b> Выбор фона и темы применяется ко всему приложению. При активации фонового изображения мгновенно активируется полупрозрачность панелей (Glassmorphism) с эффектом размытия <b>backdrop-blur-md</b>.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-4 border-t border-neutral-100">
                 <button 
                   type="button"
                   onClick={() => setIsProfileOpen(false)} 

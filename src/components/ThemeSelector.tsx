@@ -1,7 +1,7 @@
 import React from "react";
 import { Palette } from "lucide-react";
 
-export type ThemeStyle = 'modern' | 'terminal' | 'cleanroom' | 'warm' | 'japanese' | 'crisp_minimal';
+export type ThemeStyle = 'modern' | 'terminal' | 'cleanroom' | 'warm' | 'japanese' | 'japanese_calligraphy' | 'crisp_minimal';
 
 interface ThemeSelectorProps {
   currentTheme: ThemeStyle;
@@ -36,6 +36,11 @@ export default function ThemeSelector({ currentTheme, onChangeTheme }: ThemeSele
       desc: "Бамбуковые тона, песочная бумага и алые печати"
     },
     {
+      id: "japanese_calligraphy",
+      name: "🌸 Japanese Calligraphy / Сад Сакуры & Кисть",
+      desc: "Изящная японская каллиграфия на фоне цветущего сада сакуры"
+    },
+    {
       id: "crisp_minimal",
       name: "📏 Crisp Minimal / Строгий бумажный",
       desc: "Идеально белый фон и тонкие строгие рамки"
@@ -54,6 +59,7 @@ export default function ThemeSelector({ currentTheme, onChangeTheme }: ThemeSele
       case 'warm':
         return 'bg-[#faf6eb] border-amber-900/20 text-amber-950';
       case 'japanese':
+      case 'japanese_calligraphy':
         return 'bg-white border-[#d6cfbe] text-[#2d2d2d]';
       case 'crisp_minimal':
         return 'bg-white border-neutral-300 text-neutral-900';
