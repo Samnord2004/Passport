@@ -323,6 +323,23 @@ export default function App() {
   const [settingsSuccessMsg, setSettingsSuccessMsg] = useState("");
   const [settingsErrorMsg, setSettingsErrorMsg] = useState("");
 
+  // Web Toast System for User Confirmations
+  const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'error' | 'info' }[]>([]);
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4500);
+  };
+
+  // States for Admin Profile tab
+  const [adminOldPassword, setAdminOldPassword] = useState("");
+  const [adminNewPassword, setAdminNewPassword] = useState("");
+  const [adminConfirmPassword, setAdminConfirmPassword] = useState("");
+  const [adminProfileErr, setAdminProfileErr] = useState("");
+  const [adminProfileOk, setAdminProfileOk] = useState("");
+
   // Owner profile notification settings editor states
   const [isOwnerEditing, setIsOwnerEditing] = useState(false);
   const [ownerTelegram, setOwnerTelegram] = useState("");
@@ -577,11 +594,77 @@ export default function App() {
         setIsProfileOpen(false);
         setCurrentUser(data.user);
         setRefreshTrigger(prev => prev + 1);
+        showToast("Данные профиля и настройки оформления сохранены!", "success");
       } else {
         setProfileErrorMsg(data.error || "Произошла ошибка при сохранении профиля.");
+        showToast(data.error || "Ошибка сохранения профиля", "error");
       }
     } catch (err) {
       setProfileErrorMsg("Не удалось связаться с сервером.");
+      showToast("Не удалось сохранить профиль: ошибка сети", "error");
+    }
+  };
+
+  const handleSaveAdminProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminProfileErr("");
+    setAdminProfileOk("");
+    
+    if (!profileFullname.trim()) {
+      setAdminProfileErr("ФИО не может быть пустым.");
+      return;
+    }
+
+    try {
+      const payload: any = {
+        fullname: profileFullname.trim(),
+        phone: profilePhone.trim(),
+        company: profileCompany.trim(),
+        keySkills: profileKeySkills.trim(),
+        avatarUrl: profileAvatarUrl.trim(),
+      };
+
+      if (adminNewPassword.trim() !== "") {
+        if (adminOldPassword.trim() === "") {
+          setAdminProfileErr("Для смены пароля введите текущий (старый) пароль.");
+          return;
+        }
+        if (adminNewPassword.trim() !== adminConfirmPassword.trim()) {
+          setAdminProfileErr("Новые пароли не совпадают.");
+          return;
+        }
+        if (adminNewPassword.trim().length < 4) {
+          setAdminProfileErr("Новый пароль должен быть не менее 4 символов.");
+          return;
+        }
+        payload.oldPassword = adminOldPassword.trim();
+        payload.newPassword = adminNewPassword.trim();
+        payload.confirmNewPassword = adminConfirmPassword.trim();
+      }
+
+      const response = await fetch("/api/auth/me", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        localStorage.setItem("user_session", JSON.stringify(data.user));
+        setCurrentUser(data.user);
+        setAdminProfileOk("Профиль администратора успешно сохранен!");
+        showToast("Профиль администратора успешно сохранен!", "success");
+        setAdminOldPassword("");
+        setAdminNewPassword("");
+        setAdminConfirmPassword("");
+        setRefreshTrigger(prev => prev + 1);
+      } else {
+        setAdminProfileErr(data.error || "Произошла ошибка при сохранении профиля.");
+        showToast(data.error || "Ошибка сохранения профиля администратора", "error");
+      }
+    } catch (err) {
+      setAdminProfileErr("Не удалось связаться с сервером.");
+      showToast("Не удалось подключиться к серверу", "error");
     }
   };
 
@@ -719,22 +802,28 @@ export default function App() {
       vkUserId: usrVk
     };
 
-    if (editingUserId) {
-      await fetch(`/api/users/${editingUserId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-    } else {
-      await fetch("/api/users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
+    try {
+      if (editingUserId) {
+        await fetch(`/api/users/${editingUserId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        showToast(`Пользователь "${usrFullname}" успешно обновлен!`, "success");
+      } else {
+        await fetch("/api/users", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        showToast(`Пользователь "${usrFullname}" успешно добавлен!`, "success");
+      }
+      setEditingUserId(null);
+      setRefreshTrigger(prev => prev + 1);
+      resetUserForm();
+    } catch (err: any) {
+      showToast("Ошибка сохранения пользователя: " + err.message, "error");
     }
-    setEditingUserId(null);
-    setRefreshTrigger(prev => prev + 1);
-    resetUserForm();
   };
 
   const deleteUser = async (id: string | any) => {
@@ -785,22 +874,28 @@ export default function App() {
       allowedSpecialistIds: objAllowedSpecialistIds
     };
 
-    if (editingObjId) {
-      await fetch(`/api/objects/${editingObjId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-    } else {
-      await fetch("/api/objects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
+    try {
+      if (editingObjId) {
+        await fetch(`/api/objects/${editingObjId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        showToast(`Объект "${objName}" успешно обновлен!`, "success");
+      } else {
+        await fetch("/api/objects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        showToast(`Объект "${objName}" успешно добавлен!`, "success");
+      }
+      setEditingObjId(null);
+      setRefreshTrigger(prev => prev + 1);
+      resetObjectForm();
+    } catch (err: any) {
+      showToast("Ошибка сохранения объекта: " + err.message, "error");
     }
-    setEditingObjId(null);
-    setRefreshTrigger(prev => prev + 1);
-    resetObjectForm();
   };
 
   const deleteObject = async (id: string) => {
@@ -1279,13 +1374,17 @@ export default function App() {
   // Yandex.Disk Settings Save
   const saveSettingsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await fetch("/api/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(systemSettings)
-    });
-    alert("Настройки системы сохранены!");
-    setRefreshTrigger(prev => prev + 1);
+    try {
+      await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(systemSettings)
+      });
+      showToast("Настройки системы успешно сохранены!", "success");
+      setRefreshTrigger(prev => prev + 1);
+    } catch (err: any) {
+      showToast("Ошибка при сохранении настроек: " + err.message, "error");
+    }
   };
 
   // --- SPECIALIST WORKPLACE LOGIC ---
@@ -2213,6 +2312,29 @@ export default function App() {
                       
                       <div className="space-y-1">
                         <button
+                          onClick={() => {
+                            setProfileFullname(currentUser.fullname || "");
+                            setProfilePhone(currentUser.phone || "");
+                            setProfileCompany(currentUser.company || "");
+                            setProfileKeySkills(currentUser.keySkills || "");
+                            setProfileAvatarUrl(currentUser.avatarUrl || "");
+                            setAdminOldPassword("");
+                            setAdminNewPassword("");
+                            setAdminConfirmPassword("");
+                            setAdminProfileErr("");
+                            setAdminProfileOk("");
+                            setActiveTab('profile');
+                            setIsAdminMenuOpen(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            activeTab === 'profile' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <UserIcon className="w-4 h-4" />
+                          <span>👤 Профиль</span>
+                        </button>
+
+                        <button
                           onClick={() => { setActiveTab('objects'); setIsAdminMenuOpen(false); }}
                           className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
                             activeTab === 'objects' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
@@ -2546,6 +2668,24 @@ export default function App() {
 
             {/* Admin Panel Sections Toggles */}
             <div className="flex flex-wrap gap-1.5 p-1 bg-black/5 dark:bg-white/5 rounded-xl border border-dashed border-neutral-300/30">
+              <button 
+                onClick={() => {
+                  setProfileFullname(currentUser.fullname || "");
+                  setProfilePhone(currentUser.phone || "");
+                  setProfileCompany(currentUser.company || "");
+                  setProfileKeySkills(currentUser.keySkills || "");
+                  setProfileAvatarUrl(currentUser.avatarUrl || "");
+                  setAdminOldPassword("");
+                  setAdminNewPassword("");
+                  setAdminConfirmPassword("");
+                  setAdminProfileErr("");
+                  setAdminProfileOk("");
+                  setActiveTab('profile');
+                }}
+                className={`py-2 px-4 rounded-lg font-bold text-xs transition-colors cursor-pointer ${activeTab === 'profile' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-200/50 opacity-80'}`}
+              >
+                👤 Мой профиль
+              </button>
               <button 
                 onClick={() => setActiveTab('objects')}
                 className={`py-2 px-4 rounded-lg font-bold text-xs transition-colors cursor-pointer ${activeTab === 'objects' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-200/50 opacity-80'}`}
@@ -4796,6 +4936,201 @@ export default function App() {
                 getSubHeaderStyle={getSubHeaderStyle}
                 theme={theme}
               />
+            )}
+
+            {/* TAB: ADMIN PROFILE */}
+            {activeTab === 'profile' && (
+              <div className="space-y-6 max-w-4xl mx-auto w-full animate-fadeIn">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  
+                  {/* Personal info form */}
+                  <div className={getCardStyle()}>
+                    <div className={getSubHeaderStyle()}>
+                      <h3 className="font-bold text-base flex items-center gap-2">👤 Личные данные администратора</h3>
+                      <p className="text-xs opacity-60">Управление контактной информацией и фотографией профиля системы</p>
+                    </div>
+
+                    <form onSubmit={handleSaveAdminProfile} className="space-y-4 text-xs font-medium">
+                      
+                      {adminProfileOk && (
+                        <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-xl font-bold">
+                          {adminProfileOk}
+                        </div>
+                      )}
+                      
+                      {adminProfileErr && (
+                        <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-600 rounded-xl font-bold">
+                          {adminProfileErr}
+                        </div>
+                      )}
+
+                      {/* Photo / Avatar Section */}
+                      <div className="p-3 bg-neutral-100/50 dark:bg-zinc-900/40 rounded-xl border border-neutral-200 dark:border-zinc-800 space-y-2">
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 flex items-center gap-1.5">
+                          <Camera className="w-3.5 h-3.5 text-blue-600" />
+                          Фотография профиля
+                        </label>
+                        <div className="flex items-center gap-4">
+                          <div className="relative w-16 h-16 rounded-full overflow-hidden border border-neutral-200 dark:border-zinc-800 bg-neutral-100 dark:bg-zinc-900 flex items-center justify-center shrink-0 shadow-inner group">
+                            {profileAvatarUrl ? (
+                              <img 
+                                src={profileAvatarUrl} 
+                                alt="Аватар профиля" 
+                                className="w-full h-full object-cover"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <UserIcon className="w-8 h-8 text-neutral-400 dark:text-neutral-500" />
+                            )}
+                            <label 
+                              htmlFor="profile-admin-avatar-input"
+                              className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                            >
+                              <Camera className="w-4 h-4 text-white" />
+                            </label>
+                          </div>
+                          <div className="flex flex-col gap-1.5 flex-1">
+                            <input 
+                              type="file"
+                              id="profile-admin-avatar-input"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  if (file.size > 2 * 1024 * 1024) {
+                                    alert("Размер файла превышает 2МБ. Выберите меньший файл.");
+                                    return;
+                                  }
+                                  const reader = new FileReader();
+                                  reader.onload = (ev) => {
+                                    if (ev.target?.result) {
+                                      setProfileAvatarUrl(ev.target.result as string);
+                                    }
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                            />
+                            <span className="text-[10.5px] text-neutral-500 leading-tight">Нажмите на фото, чтобы обновить, или загрузите файл формата JPG, PNG, WebP (макс. 2МБ)</span>
+                            {profileAvatarUrl && (
+                              <button 
+                                type="button" 
+                                onClick={() => setProfileAvatarUrl("")} 
+                                className="text-left text-rose-600 hover:text-rose-800 text-[10px] font-bold cursor-pointer"
+                              >
+                                Удалить фото
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="font-semibold text-neutral-600 dark:text-zinc-350">Полное ФИО *</label>
+                        <input 
+                          type="text" 
+                          required
+                          value={profileFullname}
+                          onChange={(e) => setProfileFullname(e.target.value)}
+                          className={getInputStyle()}
+                          placeholder="Иванов Александр Владимирович"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="font-semibold text-neutral-600 dark:text-zinc-350">Контактный телефон</label>
+                        <input 
+                          type="text" 
+                          value={profilePhone}
+                          onChange={(e) => setProfilePhone(e.target.value)}
+                          className={getInputStyle()}
+                          placeholder="+7 (999) 000-00-00"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="font-semibold text-neutral-600 dark:text-zinc-350">Компания / Служба эксплуатации</label>
+                        <input 
+                          type="text" 
+                          value={profileCompany}
+                          onChange={(e) => setProfileCompany(e.target.value)}
+                          className={getInputStyle()}
+                          placeholder="УК ЖилСервис"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="font-semibold text-neutral-600 dark:text-zinc-350">Должность / Квалификация</label>
+                        <input 
+                          type="text" 
+                          value={profileKeySkills}
+                          onChange={(e) => setProfileKeySkills(e.target.value)}
+                          className={getInputStyle()}
+                          placeholder="Главный инженер, администратор системы"
+                        />
+                      </div>
+
+                      <button type="submit" className={`${getAccentBtn()} w-full mt-4`}>
+                        💾 Сохранить личные данные
+                      </button>
+                    </form>
+                  </div>
+
+                  {/* Password Change Form */}
+                  <div className={getCardStyle()}>
+                    <div className={getSubHeaderStyle()}>
+                      <h3 className="font-bold text-base flex items-center gap-2">🔐 Безопасность и смена пароля</h3>
+                      <p className="text-xs opacity-60">Для изменения текущего пароля администратора введите старый и новый пароли под своей учетной записью</p>
+                    </div>
+
+                    <form onSubmit={handleSaveAdminProfile} className="space-y-4 text-xs font-medium">
+                      
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 rounded-xl leading-relaxed">
+                        Перед вводом нового пароля убедитесь, что вы помните ваш текущий системный пароль от учетной записи администратора.
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="font-semibold text-neutral-600 dark:text-zinc-350">Текущий (старый) пароль *</label>
+                        <input 
+                          type="password" 
+                          value={adminOldPassword}
+                          onChange={(e) => setAdminOldPassword(e.target.value)}
+                          className={getInputStyle()}
+                          placeholder="••••••••"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1.5 border-t dark:border-zinc-800 pt-3">
+                        <label className="font-semibold text-neutral-600 dark:text-zinc-350">Новый пароль *</label>
+                        <input 
+                          type="password" 
+                          value={adminNewPassword}
+                          onChange={(e) => setAdminNewPassword(e.target.value)}
+                          className={getInputStyle()}
+                          placeholder="Минимум 4 символа"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="font-semibold text-neutral-600 dark:text-zinc-350">Подтвердите новый пароль *</label>
+                        <input 
+                          type="password" 
+                          value={adminConfirmPassword}
+                          onChange={(e) => setAdminConfirmPassword(e.target.value)}
+                          className={getInputStyle()}
+                          placeholder="Повторите новый пароль"
+                        />
+                      </div>
+
+                      <button type="submit" className="w-full mt-4 py-2 px-4 rounded-xl font-bold text-xs bg-indigo-600 hover:bg-indigo-700 text-white shadow-md transition-all cursor-pointer">
+                        🔑 Обновить пароль и сохранить изменения
+                      </button>
+                    </form>
+                  </div>
+
+                </div>
+              </div>
             )}
 
           </div>
@@ -7319,6 +7654,43 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Floating Toast Overlay for Real-time Confirmations and alerts */}
+      <div className="fixed bottom-6 right-6 z-[99999] flex flex-col gap-3 max-w-sm w-full pointer-events-none">
+        {toasts.map(toast => (
+          <div 
+            key={toast.id}
+            className={`p-4 rounded-xl shadow-2xl border flex items-start gap-3 transition-all duration-300 transform translate-y-0 scale-100 opacity-100 pointer-events-auto cursor-pointer animate-fadeIn ${
+              toast.type === 'error'
+                ? 'bg-rose-50 border-rose-250 dark:bg-zinc-900/95 dark:border-rose-900/50 text-rose-800 dark:text-rose-200'
+                : toast.type === 'info'
+                ? 'bg-blue-50 border-blue-250 dark:bg-zinc-900/95 dark:border-zinc-800/50 text-blue-800 dark:text-blue-300'
+                : 'bg-emerald-50 border-emerald-250 dark:bg-zinc-900/95 dark:border-zinc-800/50 text-emerald-800 dark:text-emerald-300'
+            }`}
+            onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+          >
+            {toast.type === 'error' ? (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+            ) : toast.type === 'info' ? (
+              <AlertCircle className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+            ) : (
+              <CheckSquare className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+            )}
+            <div className="flex-1 text-left">
+              <span className="text-xs font-bold font-sans block">
+                {toast.type === 'error' ? 'Ошибка' : toast.type === 'info' ? 'Инфо' : 'Успешно'}
+              </span>
+              <p className="text-[11px] opacity-90 leading-snug mt-0.5 font-sans font-medium">{toast.message}</p>
+            </div>
+            <button 
+              className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 shrink-0 self-start text-xs font-bold leading-none"
+              onClick={(e) => { e.stopPropagation(); setToasts(prev => prev.filter(t => t.id !== toast.id)); }}
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+      </div>
 
     </div>
   );

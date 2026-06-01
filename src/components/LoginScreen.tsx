@@ -1046,75 +1046,7 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
           </form>
         )}
 
-        {/* Demo profiles quick selection board */}
-        <div className="mt-6 pt-5 border-t border-dashed border-neutral-300/30">
-          <div className="flex items-center justify-between mb-3 text-[10px] font-black uppercase tracking-widest opacity-60">
-            <span>Быстрый вход для тестирования</span>
-            <span className="text-[9px] text-rose-500 font-semibold flex items-center gap-1">
-               <Fingerprint className="w-3.5 h-3.5" /> Биометрия готова
-            </span>
-          </div>
 
-          <div className="grid grid-cols-1 gap-2">
-            {usersList.slice(0, 5).map((demoUser) => {
-              const demoPassword = demoUser.role === 'admin' ? 'admin' : demoUser.role === 'owner' ? 'owner' : 'spec';
-              return (
-                <div
-                  key={demoUser.id}
-                  className="flex items-center justify-between p-2.5 rounded-lg border border-neutral-300/20 bg-neutral-100/5 hover:bg-neutral-100/15 text-left transition-all group gap-2"
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEmail(demoUser.email);
-                      setPassword(demoPassword);
-                      handleLoginByEmail(demoUser.email, demoPassword);
-                    }}
-                    className="flex-1 flex items-center gap-2.5 text-left cursor-pointer"
-                  >
-                    <div className="p-1 rounded bg-neutral-150 group-hover:scale-105 transition-all">
-                      {getRoleIcon(demoUser.role)}
-                    </div>
-                    <div>
-                      <div className="font-bold text-xs text-slate-800 dark:text-slate-200 leading-tight flex items-center gap-1.5">
-                        {demoUser.fullname}
-                        {demoUser.hasBiometrics && (
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title="Биометрия привязана" />
-                        )}
-                      </div>
-                      <div className="text-[10px] opacity-60 leading-none mt-0.5">{demoUser.email} (пароль: {demoPassword})</div>
-                    </div>
-                  </button>
-
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      title={demoUser.hasBiometrics ? "Войти по FaceID/TouchID" : "Привязать биометрию и войти"}
-                      onClick={() => {
-                        if (demoUser.hasBiometrics) {
-                          handleBiometricLogin(demoUser.email);
-                        } else {
-                          registerBiometricsForUser(demoUser);
-                        }
-                      }}
-                      className={`p-1.5 rounded-md border transition-all flex items-center justify-center gap-1 cursor-pointer hover:scale-105 ${
-                        demoUser.hasBiometrics 
-                          ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/20" 
-                          : "bg-rose-500/10 border-rose-500/30 text-rose-500 hover:bg-rose-500/20"
-                      }`}
-                    >
-                      <Fingerprint className="w-3.5 h-3.5 animate-pulse" />
-                      <span className="text-[8px] font-bold uppercase hidden sm:inline">
-                        {demoUser.hasBiometrics ? "FaceID" : "Связать"}
-                      </span>
-                    </button>
-                    {getRoleBadge(demoUser.role)}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
 
       </div>
 
