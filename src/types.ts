@@ -119,6 +119,11 @@ export interface SystemSettings {
   appBackgroundType?: 'default' | 'villa' | 'blueprint' | 'custom' | 'sakura';
   appBackgroundUrl?: string; // Standard URL, Base64 or Unsplash image of custom background
   cardOpacity?: number; // percentage from 10 to 100
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpUser?: string;
+  smtpPass?: string;
+  smtpSecure?: boolean;
 }
 
 export interface SupportTicket {

@@ -174,19 +174,19 @@ class NotificationQueue {
         if (rec) {
           const botEmail = settings.emailBotAddress || "notify-bot@commercial-passport.ru";
           
-          if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
-            errorDetails = 'SMTP parameters (SMTP_HOST, SMTP_USER, SMTP_PASS) not set. Defaulting to local sandbox emulation logger.';
+          const smtpHost = settings.smtpHost || process.env.SMTP_HOST;
+          const smtpPort = Number(settings.smtpPort) || Number(process.env.SMTP_PORT) || 465;
+          const smtpUser = settings.smtpUser || process.env.SMTP_USER;
+          const smtpPass = settings.smtpPass || process.env.SMTP_PASS;
+          const smtpSecure = settings.smtpSecure !== undefined ? settings.smtpSecure : (process.env.SMTP_SECURE === "true" || smtpPort === 465);
+
+          if (!smtpHost || !smtpUser || !smtpPass) {
+            errorDetails = 'SMTP parameters (Host, User, Password) not configured in Settings or Env. Defaulting to local sandbox emulation logger.';
             console.warn(`[NotificationQueue] [SMTP] ${errorDetails}`);
             // Fallback mockup delivery for browser sandbox demonstration
             isRealSent = true;
           } else {
             try {
-              const smtpHost = process.env.SMTP_HOST;
-              const smtpPort = Number(process.env.SMTP_PORT) || 465;
-              const smtpUser = process.env.SMTP_USER;
-              const smtpPass = process.env.SMTP_PASS;
-              const smtpSecure = process.env.SMTP_SECURE === "true" || smtpPort === 465;
-
               const transporter = nodemailer.createTransport({
                 host: smtpHost,
                 port: smtpPort,
@@ -195,6 +195,9 @@ class NotificationQueue {
                   user: smtpUser,
                   pass: smtpPass,
                 },
+                tls: {
+                  rejectUnauthorized: false
+                }
               });
 
               await transporter.sendMail({

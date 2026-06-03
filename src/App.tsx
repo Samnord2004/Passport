@@ -385,6 +385,7 @@ export default function App() {
   const [usrTelegram, setUsrTelegram] = useState("");
   const [usrMax, setUsrMax] = useState("");
   const [usrVk, setUsrVk] = useState("");
+  const [usrPassword, setUsrPassword] = useState("");
 
   // Object Editor modal form
   const [editingObjId, setEditingObjId] = useState<string | null>(null);
@@ -791,7 +792,7 @@ export default function App() {
   // Users CRUD
   const saveUserSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const payload = {
+    const payload: any = {
       fullname: usrFullname,
       email: usrEmail,
       role: usrRole,
@@ -801,6 +802,9 @@ export default function App() {
       maxChatId: usrMax,
       vkUserId: usrVk
     };
+    if (usrPassword) {
+      payload.password = usrPassword;
+    }
 
     try {
       if (editingUserId) {
@@ -844,6 +848,7 @@ export default function App() {
     setUsrTelegram(u.telegramChatId || "");
     setUsrMax(u.maxChatId || "");
     setUsrVk(u.vkUserId || "");
+    setUsrPassword("");
     setTimeout(() => {
       document.getElementById("user-form-container")?.scrollIntoView({ behavior: 'smooth' });
     }, 100);
@@ -859,6 +864,7 @@ export default function App() {
     setUsrTelegram("");
     setUsrMax("");
     setUsrVk("");
+    setUsrPassword("");
   };
 
   // Facility / Object CRUD
@@ -4222,6 +4228,20 @@ export default function App() {
                         />
                       </div>
 
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-bold uppercase opacity-75">
+                          {editingUserId ? "Новый пароль (оставьте пустым, чтобы не менять)" : "Первоначальный пароль *"}
+                        </label>
+                        <input 
+                          type="password" 
+                          required={!editingUserId}
+                          value={usrPassword}
+                          onChange={(e) => setUsrPassword(e.target.value)}
+                          placeholder="Минимум 4 символа"
+                          className={getInputStyle()} 
+                        />
+                      </div>
+
                       <div className="border-t border-dashed border-neutral-300/10 pt-2 space-y-2">
                         <span className="text-[10px] font-bold uppercase tracking-widest text-sky-500">Оповещения в мессенджеры:</span>
                         
@@ -4453,6 +4473,83 @@ export default function App() {
                         className={getInputStyle()}
                       />
                       <span className="text-[10px] opacity-60 mt-0.5">Служебный токен с правами на сохранение отчетов</span>
+                    </div>
+
+                    {/* SMTP Mail Configuration Panel */}
+                    <div className="space-y-4 p-4 rounded-xl border border-neutral-200 dark:border-zinc-800 bg-white/45 dark:bg-zinc-900/40">
+                      <span className="font-bold text-neutral-700 dark:text-zinc-300 uppercase tracking-wider block text-[10px]">📧 Настройка SMTP-сервера для отправки писем:</span>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">SMTP Host (сервер исходящей почты):</label>
+                          <input 
+                            type="text" 
+                            placeholder="smtp.yandex.ru или smtp.gmail.com"
+                            value={systemSettings.smtpHost || ""}
+                            onChange={(e) => setSystemSettings({ ...systemSettings, smtpHost: e.target.value })}
+                            className={getInputStyle()}
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">SMTP Port (исходящий порт):</label>
+                          <input 
+                            type="number" 
+                            placeholder="465 или 587"
+                            value={systemSettings.smtpPort || ""}
+                            onChange={(e) => setSystemSettings({ ...systemSettings, smtpPort: e.target.value ? Number(e.target.value) : undefined })}
+                            className={getInputStyle()}
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">SMTP User (логин/почта отправителя):</label>
+                          <input 
+                            type="text" 
+                            placeholder="notify-bot@commercial-passport.ru"
+                            value={systemSettings.smtpUser || ""}
+                            onChange={(e) => setSystemSettings({ ...systemSettings, smtpUser: e.target.value })}
+                            className={getInputStyle()}
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">SMTP Password (пароль приложения):</label>
+                          <input 
+                            type="password" 
+                            placeholder="Ваш пароль или токен приложения"
+                            value={systemSettings.smtpPass || ""}
+                            onChange={(e) => setSystemSettings({ ...systemSettings, smtpPass: e.target.value })}
+                            className={getInputStyle()}
+                          />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5 md:col-span-2">
+                          <label className="font-semibold text-neutral-600 dark:text-zinc-350 flex items-center gap-2">
+                            <input 
+                              type="checkbox"
+                              checked={systemSettings.smtpSecure !== undefined ? systemSettings.smtpSecure : true}
+                              onChange={(e) => setSystemSettings({ ...systemSettings, smtpSecure: e.target.checked })}
+                              className="rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            Использовать SSL/TLS шифрование (secure соединение)
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label className="font-semibold text-neutral-600 dark:text-zinc-350">Адрес почты робота-отправителя (emailBotAddress):</label>
+                        <input 
+                          type="text" 
+                          placeholder="notify-bot@commercial-passport.ru"
+                          value={systemSettings.emailBotAddress || ""}
+                          onChange={(e) => setSystemSettings({ ...systemSettings, emailBotAddress: e.target.value })}
+                          className={getInputStyle()}
+                        />
+                        <span className="text-[10px] opacity-70 block leading-tight">
+                          Этот адрес будет отображаться в поле "Отправитель" в отправленных письмах (from).
+                        </span>
+                      </div>
                     </div>
 
                     {/* 📞 Контактные данные службы техподдержки перенесены в Каналы связи */}
