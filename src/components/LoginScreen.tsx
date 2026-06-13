@@ -616,17 +616,20 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
               referrerPolicy="no-referrer"
             />
           ) : (
-            <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-rose-500/10 text-[#bc1c24] mb-3">
-              {isRegisterMode ? <UserPlus className="w-6 h-6" /> : <LogIn className="w-6 h-6" />}
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-teal-500/10 text-teal-600 mb-3 block">
+              <span className="font-extrabold text-lg">🏡</span>
             </div>
           )}
           <h2 className="text-xl font-extrabold tracking-tight mb-1">
-            {isRegisterMode ? "Регистрация в Паспорте" : "Вход в систему"}
+            {isRegisterMode ? "Регистрация в Экосистеме" : "Единая точка входа"}
           </h2>
-          <p className="text-xs opacity-60">
+          <div className="text-xs bg-teal-500/10 text-teal-750 dark:text-teal-400 font-extrabold px-3 py-1 rounded-full mb-2 uppercase tracking-wider text-[10px] border border-teal-500/15">
+            🔑 Мой цифровой дом SSO
+          </div>
+          <p className="text-xs opacity-60 leading-normal max-w-xs">
             {isRegisterMode 
-              ? "Создайте новый профиль Участника для отслеживания состояния" 
-              : "Единая платформа технической эксплуатации объектов недвижимости"}
+              ? "Создайте единый аккаунт для разделов «Мой сад», «Мои постройки» и «История моего дома»" 
+              : "Один логин и пароль ко всем приложениям вашей загородной инфраструктуры"}
           </p>
         </div>
 

@@ -29,6 +29,10 @@ export interface BuildingObject {
   yandexDiskPath: string; // Folder path on Yandex.Disk
   yandexDiskUrl?: string; // Direct Web link to Yandex.Disk folders
   allowedSpecialistIds?: string[]; // Allowed specialist IDs
+  specs?: string; // Общая характеристика
+  equipmentSpecs?: string; // Ключевое оборудование
+  info?: string; // Ввод в эксплуатацию
+  objectType?: 'house' | 'admin_building' | 'land' | 'dacha' | 'other';
 }
 
 export interface ScheduleItem {

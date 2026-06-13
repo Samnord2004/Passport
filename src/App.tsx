@@ -8,12 +8,14 @@ import {
   User, 
   UserRole, 
   Question,
-  SystemSettings
+  SystemSettings,
+  SupportTicket
 } from "./types";
 import ThemeSelector, { ThemeStyle } from "./components/ThemeSelector";
 import LoginScreen from "./components/LoginScreen";
 import { LegalTabContent } from "./components/LegalAgreements";
 import SupportTab from "./components/SupportTab";
+import EcosystemPortal from "./components/EcosystemPortal";
 import { 
   Building, 
   Calendar, 
@@ -36,6 +38,7 @@ import {
   Bell, 
   LogOut, 
   UserPlus, 
+  LayoutGrid, 
   ChevronRight, 
   ChevronDown,
   Copy, 
@@ -301,6 +304,8 @@ export default function App() {
   const [specPhone, setSpecPhone] = useState("");
   const [specEmail, setSpecEmail] = useState("");
   const [checklistCompletedReport, setChecklistCompletedReport] = useState<CompletedChecklist | null>(null);
+  const [specSelectedCategory, setSpecSelectedCategory] = useState<string>("");
+  const [specExpandedTplId, setSpecExpandedTplId] = useState<string>("");
 
   // States for hierarchical schedule TO view collapsing
   const [expandedObjs, setExpandedObjs] = useState<Record<string, boolean>>({});
@@ -309,6 +314,17 @@ export default function App() {
   const [copyingCatInfo, setCopyingCatInfo] = useState<{ srcObjectId: string; category: string } | null>(null);
   const [copyTargetObjId, setCopyTargetObjId] = useState<string>("");
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; type: 'schedule' | 'user' | 'object' | 'template'; title: string } | null>(null);
+
+  // Support Appeals Pop-ups & Real-time Polling State
+  interface SupportNotification {
+    type: 'incoming_appeal' | 'update_reply';
+    ticket: SupportTicket;
+    oldStatus?: string;
+  }
+  const [activeSupportNotif, setActiveSupportNotif] = useState<SupportNotification | null>(null);
+  const [globalSupportTickets, setGlobalSupportTickets] = useState<SupportTicket[]>([]);
+  const prevTicketsRef = useRef<SupportTicket[]>([]);
+  const isFirstTicketsLoadRef = useRef<boolean>(true);
 
   // User profile modal states
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -351,11 +367,14 @@ export default function App() {
   const [ownerEditMsg, setOwnerEditMsg] = useState("");
   const [ownerEditError, setOwnerEditError] = useState("");
 
-  const [ownerActiveTab, setOwnerActiveTab] = useState<'characteristics' | 'profile' | 'reports' | 'specialists' | 'settings' | 'legal' | 'support'>('characteristics');
+  const [ownerActiveTab, setOwnerActiveTab] = useState<'ecosystem' | 'characteristics' | 'profile' | 'reports' | 'specialists' | 'settings' | 'legal' | 'support'>('characteristics');
   const [isOwnerMenuOpen, setIsOwnerMenuOpen] = useState(false);
   const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
   const [isSpecMenuOpen, setIsSpecMenuOpen] = useState(false);
   const [objDiskUrl, setObjDiskUrl] = useState("");
+  const [objSpecs, setObjSpecs] = useState("");
+  const [objEquipmentSpecs, setObjEquipmentSpecs] = useState("");
+  const [objInfo, setObjInfo] = useState("");
 
   // Specialist rating states
   const [ratingReport, setRatingReport] = useState<CompletedChecklist | null>(null);
@@ -395,6 +414,7 @@ export default function App() {
   const [objOwnerId, setObjOwnerId] = useState("");
   const [objDiskPath, setObjDiskPath] = useState("");
   const [objAllowedSpecialistIds, setObjAllowedSpecialistIds] = useState<string[]>([]);
+  const [objObjectType, setObjObjectType] = useState<'house' | 'admin_building' | 'land' | 'dacha' | 'other'>('house');
 
   // QR Modal options
   const [qrSelectedSpecId, setQrSelectedSpecId] = useState<string>("new-specialist");
@@ -424,24 +444,59 @@ export default function App() {
 
   // Load Data on startup & refresh
   useEffect(() => {
+    const fetchJson = async (url: string, defaultValue: any) => {
+      try {
+        const r = await fetch(url);
+        if (!r.ok) {
+          console.warn(`Fetch to ${url} returned status ${r.status}`);
+          return defaultValue;
+        }
+        return await r.json();
+      } catch (e) {
+        console.error(`Fetch to ${url} failed:`, e);
+        return defaultValue;
+      }
+    };
+
     Promise.all([
-      fetch("/api/auth/me").then(r => r.json()),
-      fetch("/api/users").then(r => r.json()),
-      fetch("/api/objects").then(r => r.json()),
-      fetch("/api/schedules").then(r => r.json()),
-      fetch("/api/templates").then(r => r.json()),
-      fetch("/api/reports").then(r => r.json()),
-      fetch("/api/notifications/logs").then(r => r.json()),
-      fetch("/api/settings").then(r => r.json())
+      fetchJson("/api/auth/me", { user: null }),
+      fetchJson("/api/users", []),
+      fetchJson("/api/objects", []),
+      fetchJson("/api/schedules", []),
+      fetchJson("/api/templates", []),
+      fetchJson("/api/reports", []),
+      fetchJson("/api/notifications/logs", []),
+      fetchJson("/api/settings", {
+        yandexDiskToken: "",
+        yandexDiskConnected: false,
+        reminderDaysBefore: 3,
+        logoUrl: "",
+        customLogoEnabled: false,
+        appBackgroundType: "default",
+        appBackgroundUrl: "",
+        notificationChannels: {
+          admin: { telegram: true, max: true, vk: false, email: true },
+          owner: { telegram: true, max: false, vk: false, email: true }
+        }
+      })
     ]).then(([authData, usersData, objectsData, schedulesData, templatesData, reportsData, logsData, settingsData]) => {
-      setCurrentUser(authData.user);
-      setUsers(usersData);
-      setObjects(objectsData);
-      setSchedules(schedulesData);
-      setTemplates(templatesData);
-      setReports(reportsData);
-      setLogs(logsData);
-      setSystemSettings(settingsData);
+      setCurrentUser(authData?.user || null);
+      setUsers(usersData || []);
+      setObjects(objectsData || []);
+      setSchedules(schedulesData || []);
+      setTemplates(templatesData || []);
+      setReports(reportsData || []);
+      setLogs(logsData || []);
+      setSystemSettings(settingsData || {
+        yandexDiskConnected: false,
+        notificationChannels: {
+          admin: { telegram: true, max: false, vk: false, email: true },
+          owner: { telegram: true, max: false, vk: false, email: true }
+        },
+        cardOpacity: 85,
+        appBackgroundType: 'default',
+        appBackgroundUrl: ''
+      });
 
       // Check incoming QR code query parameters to auto-route Specialist checklist flow
       const params = new URLSearchParams(window.location.search);
@@ -480,10 +535,107 @@ export default function App() {
       }
       setIsInitialized(true);
     }).catch(err => {
-      console.error("Погрешность загрузки данных API", err);
+      console.warn("Погрешность загрузки данных API", err);
       setIsInitialized(true);
     });
   }, [refreshTrigger]);
+
+  // Poll & diff support tickets for pop-up alerts
+  const checkSupportTicketsDiff = (oldList: SupportTicket[], newList: SupportTicket[]) => {
+    if (!currentUser) return;
+
+    const oldMap = new Map<string, SupportTicket>();
+    for (const t of oldList) {
+      oldMap.set(t.id, t);
+    }
+
+    for (const newT of newList) {
+      const oldT = oldMap.get(newT.id);
+
+      if (currentUser.role === 'admin') {
+        // Admin: Alert on incoming new appeals
+        if (!oldT) {
+          if (newT.status === 'new' && newT.userId !== currentUser.id) {
+            setActiveSupportNotif({
+              type: 'incoming_appeal',
+              ticket: newT
+            });
+            showToast(`Получено новое обращение от ${newT.userName}: "${newT.subject}"`, 'info');
+            break;
+          }
+        } else if (oldT.status !== 'new' && newT.status === 'new' && newT.userId !== currentUser.id) {
+          setActiveSupportNotif({
+            type: 'incoming_appeal',
+            ticket: newT
+          });
+          showToast(`Обращение вновь открыто: "${newT.subject}"`, 'info');
+          break;
+        }
+      } else {
+        // Owner/Specialist: Alert on reply or status modification
+        if (oldT) {
+          const statusChanged = oldT.status !== newT.status;
+          const notesChanged = (!oldT.adminNotes && newT.adminNotes) || 
+                               (oldT.adminNotes && newT.adminNotes && oldT.adminNotes !== newT.adminNotes);
+
+          if (statusChanged || notesChanged) {
+            setActiveSupportNotif({
+              type: 'update_reply',
+              ticket: newT,
+              oldStatus: oldT.status
+            });
+
+            let displayStatus = 'Новое';
+            if (newT.status === 'in_progress') displayStatus = 'В работе';
+            if (newT.status === 'resolved') displayStatus = 'Решено';
+
+            showToast(`Обновлен статус обращения #${newT.id} на "${displayStatus}"`, 'success');
+            break;
+          }
+        }
+      }
+    }
+  };
+
+  const fetchGlobalSupportTickets = async () => {
+    if (!currentUser) return;
+    try {
+      const response = await fetch('/api/support/tickets');
+      if (response.ok) {
+        const data: SupportTicket[] = await response.json();
+        setGlobalSupportTickets(data);
+
+        if (isFirstTicketsLoadRef.current) {
+          prevTicketsRef.current = data;
+          isFirstTicketsLoadRef.current = false;
+        } else {
+          checkSupportTicketsDiff(prevTicketsRef.current, data);
+          prevTicketsRef.current = data;
+        }
+      }
+    } catch (err) {
+      console.warn('Error polling support tickets:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (!currentUser) {
+      isFirstTicketsLoadRef.current = true;
+      prevTicketsRef.current = [];
+      setGlobalSupportTickets([]);
+      return;
+    }
+
+    // Load initially
+    fetchGlobalSupportTickets();
+
+    // 6-second polling interval
+    const intervalId = setInterval(() => {
+      fetchGlobalSupportTickets();
+    }, 6000);
+
+    return () => clearInterval(intervalId);
+  }, [currentUser?.id]);
 
   // Synchronize Yandex.Disk
   const triggerDiskSync = async () => {
@@ -877,7 +1029,11 @@ export default function App() {
       ownerId: objOwnerId,
       yandexDiskPath: objDiskPath,
       yandexDiskUrl: objDiskUrl,
-      allowedSpecialistIds: objAllowedSpecialistIds
+      allowedSpecialistIds: objAllowedSpecialistIds,
+      specs: objSpecs,
+      equipmentSpecs: objEquipmentSpecs,
+      info: objInfo,
+      objectType: objObjectType
     };
 
     try {
@@ -921,6 +1077,10 @@ export default function App() {
     setObjDiskPath(o.yandexDiskPath);
     setObjDiskUrl(o.yandexDiskUrl || "");
     setObjAllowedSpecialistIds(o.allowedSpecialistIds || []);
+    setObjSpecs(o.specs || "");
+    setObjEquipmentSpecs(o.equipmentSpecs || "");
+    setObjInfo(o.info || "");
+    setObjObjectType(o.objectType || "house");
 
     // Smooth scroll to object form
     setTimeout(() => {
@@ -937,6 +1097,10 @@ export default function App() {
     setObjDiskPath("");
     setObjDiskUrl("");
     setObjAllowedSpecialistIds([]);
+    setObjSpecs("");
+    setObjEquipmentSpecs("");
+    setObjInfo("");
+    setObjObjectType("house");
   };
 
   // Specialist Profiles CRUD for Owners & Admins
@@ -1401,6 +1565,8 @@ export default function App() {
     setFilledAnswers({});
     setUploadedPhotos({});
     setChecklistCompletedReport(null);
+    setSpecSelectedCategory("");
+    setSpecExpandedTplId("");
   };
 
   const handleScheduleSelectForChecklist = (schId: string) => {
@@ -1426,6 +1592,11 @@ export default function App() {
   const handlePhotoUpload = (questionId: string, event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      showToast("Размер файла превышает 10МБ. Выберите меньший файл.", "error");
+      return;
+    }
 
     setUploadingPhotoId(questionId);
     const reader = new FileReader();
@@ -1647,6 +1818,57 @@ export default function App() {
   const getScheduleName = (schId: string) => {
     const found = schedules.find(s => s.id === schId);
     return found ? found.title : "Регламентное обслуживание";
+  };
+
+  // Return friendly object type label and background styles
+  const getObjectTypeLabel = (type?: string) => {
+    switch (type) {
+      case 'house': 
+        return { label: '🏠 Дом / Коттедж', class: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20' };
+      case 'admin_building': 
+        return { label: '🏢 Административное здание', class: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20' };
+      case 'land': 
+        return { label: '🗺️ Земельный участок', class: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20' };
+      case 'dacha': 
+        return { label: '🏡 Дача / Усадьба', class: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20' };
+      default: 
+        return { label: '📦 Другое вспомогательное здание', class: 'bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-500/20' };
+    }
+  };
+
+  // Helper to lookup gardens linked with a given property ID
+  const getLinkedGardens = (objId: string) => {
+    try {
+      const saved = localStorage.getItem("eco_my_gardens_v2");
+      const list = saved ? JSON.parse(saved) : [
+        { 
+          id: "gar_1", 
+          name: "Усадебный сад Раменское", 
+          address: "Московская обл., Раменский р-н, д. Заболотье, уч. 45", 
+          coords: "55.5772, 38.2125", 
+          designer: "Мастерская ландшафта 'Елки и Камни'", 
+          creationHistory: "Проект разработан осенью 2024 года. Высадка хвойных крупномеров произведена весной 2025.",
+          linkedObjectId: "1" // This is our default house's ID
+        }
+      ];
+      return list.filter((g: any) => g.linkedObjectId === objId);
+    } catch (e) {
+      return [];
+    }
+  };
+
+  // Helper to lookup auxiliary buildings (постройки) linked with a property ID
+  const getLinkedOutbuildings = (objId: string) => {
+    try {
+      const saved = localStorage.getItem("eco_plan_buildings");
+      const list = saved ? JSON.parse(saved) : [
+        { id: "pb_1", x: 25, y: 25, width: 25, height: 25, label: "Основной Дом", color: "rgba(59, 130, 246, 0.2)", linkedObjectId: "1" },
+        { id: "pb_2", x: 65, y: 65, width: 20, height: 18, label: "Баня-Кедр", color: "rgba(245, 158, 11, 0.2)", linkedObjectId: "1" }
+      ];
+      return list.filter((b: any) => b.linkedObjectId === objId);
+    } catch (e) {
+      return [];
+    }
   };
 
   // Calculate days difference and statuses
@@ -2161,11 +2383,11 @@ export default function App() {
               </div>
             )}
             <div>
-              <h1 className="text-xl font-extrabold tracking-tight">
-                Цифровой паспорт объекта
+              <h1 className="text-xl font-extrabold tracking-tight flex items-center gap-1.5">
+                <span>🏡 Мой цифровой дом</span>
               </h1>
-              <p className="text-xs opacity-60">
-                Система инспекций & графиков ТО
+              <p className="text-xs opacity-65 font-medium">
+                Цифровой паспорт & Интегрированная экосистема
               </p>
             </div>
           </div>
@@ -2203,6 +2425,26 @@ export default function App() {
                       
                       <div className="space-y-1">
                         <button
+                          onClick={() => { setOwnerActiveTab('characteristics'); setIsOwnerMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            ownerActiveTab === 'characteristics' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <Building className="w-4 h-4 text-blue-500" />
+                          <span>🏢 Мои объекты</span>
+                        </button>
+
+                        <button
+                          onClick={() => { setOwnerActiveTab('ecosystem'); setIsOwnerMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            ownerActiveTab === 'ecosystem' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-750 dark:text-neutral-50 font-extrabold text-indigo-600 dark:text-sky-400'
+                          }`}
+                        >
+                          <LayoutGrid className="w-4 h-4 text-emerald-500 animate-pulse" />
+                          <span>🌿 Моя Экосистема</span>
+                        </button>
+
+                        <button
                           onClick={() => { setOwnerActiveTab('profile'); setIsOwnerMenuOpen(false); }}
                           className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
                             ownerActiveTab === 'profile' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
@@ -2210,16 +2452,6 @@ export default function App() {
                         >
                           <UserIcon className="w-4 h-4" />
                           <span>👤 Мой профиль</span>
-                        </button>
-                        
-                        <button
-                          onClick={() => { setOwnerActiveTab('characteristics'); setIsOwnerMenuOpen(false); }}
-                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
-                            ownerActiveTab === 'characteristics' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
-                          }`}
-                        >
-                          <Building className="w-4 h-4" />
-                          <span>📋 Мои характеристики</span>
                         </button>
                         
                         <button
@@ -2317,6 +2549,16 @@ export default function App() {
                       </div>
                       
                       <div className="space-y-1">
+                        <button
+                          onClick={() => { setActiveTab('ecosystem'); setIsAdminMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            activeTab === 'ecosystem' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-750 dark:text-neutral-50 font-extrabold text-teal-600 dark:text-teal-400'
+                          }`}
+                        >
+                          <LayoutGrid className="w-4 h-4 text-emerald-500 animate-pulse" />
+                          <span>🌿 Моя Экосистема</span>
+                        </button>
+
                         <button
                           onClick={() => {
                             setProfileFullname(currentUser.fullname || "");
@@ -2480,6 +2722,19 @@ export default function App() {
                       </div>
                       
                       <div className="space-y-1">
+                         <button
+                           onClick={() => { 
+                             setActiveTab('ecosystem'); 
+                             setIsSpecMenuOpen(false); 
+                           }}
+                           className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                             activeTab === 'ecosystem' ? 'bg-amber-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-750 dark:text-neutral-50 font-extrabold text-[#d97706]'
+                           }`}
+                         >
+                           <LayoutGrid className="w-4 h-4 text-emerald-500 animate-pulse" />
+                           <span>🌿 Наша Экосистема</span>
+                         </button>
+
                          <button
                            onClick={() => { 
                              setActiveTab('workplace'); 
@@ -2675,6 +2930,12 @@ export default function App() {
             {/* Admin Panel Sections Toggles */}
             <div className="flex flex-wrap gap-1.5 p-1 bg-black/5 dark:bg-white/5 rounded-xl border border-dashed border-neutral-300/30">
               <button 
+                onClick={() => setActiveTab('ecosystem')}
+                className={`py-2 px-4 rounded-lg font-bold text-xs transition-colors cursor-pointer ${activeTab === 'ecosystem' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-200/50 opacity-80 text-teal-650 dark:text-teal-400 font-extrabold'}`}
+              >
+                🌿 Моя Экосистема
+              </button>
+              <button 
                 onClick={() => {
                   setProfileFullname(currentUser.fullname || "");
                   setProfilePhone(currentUser.phone || "");
@@ -2749,6 +3010,31 @@ export default function App() {
               </button>
             </div>
 
+            {/* TAB: ECOSYSTEM */}
+            {activeTab === 'ecosystem' && (
+              <EcosystemPortal
+                currentUser={currentUser}
+                objects={objects}
+                schedules={schedules}
+                reports={reports}
+                onNavigateToObjects={() => {
+                  if (currentUser?.role === 'owner') {
+                    setOwnerActiveTab('characteristics');
+                  } else {
+                    setActiveTab('objects');
+                  }
+                }}
+                onNavigateToSchedules={() => {
+                  if (currentUser?.role === 'owner') {
+                    setOwnerActiveTab('characteristics');
+                  } else {
+                    setActiveTab('schedule');
+                  }
+                }}
+                currentTheme={theme}
+              />
+            )}
+
             {/* TAB: OBJECTS */}
             {activeTab === 'objects' && (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -2820,6 +3106,21 @@ export default function App() {
                           placeholder="ТРК Атриум"
                           className={getInputStyle()} 
                         />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-bold uppercase opacity-75">Тип объекта недвижимости *</label>
+                        <select
+                          value={objObjectType}
+                          onChange={(e: any) => setObjObjectType(e.target.value)}
+                          className={getInputStyle()}
+                        >
+                          <option value="house">🏠 Дом / Коттедж</option>
+                          <option value="admin_building">🏢 Административное здание</option>
+                          <option value="land">🗺️ Земельный участок</option>
+                          <option value="dacha">🏡 Дача / Усадьба</option>
+                          <option value="other">📦 Другое вспомогательное здание / Помещение</option>
+                        </select>
                       </div>
 
                       <div className="flex flex-col gap-1">
@@ -2920,6 +3221,39 @@ export default function App() {
                           className={getInputStyle()} 
                         />
                         <span className="text-[10px] opacity-50">Сервис перенаправит собственника по этой веб-ссылке на Яндекс.Диск</span>
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-bold uppercase opacity-75">📁 Общая характеристика (Кабинет Собственника)</label>
+                        <textarea 
+                          rows={2}
+                          value={objSpecs}
+                          onChange={(e) => setObjSpecs(e.target.value)}
+                          placeholder="Например: Общая площадь 12000 кв.м., 4 этажа, железобетонный каркас"
+                          className={getInputStyle()} 
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-bold uppercase opacity-75">⚙️ Ключевое оборудование (Кабинет Собственника)</label>
+                        <textarea 
+                          rows={2}
+                          value={objEquipmentSpecs}
+                          onChange={(e) => setObjEquipmentSpecs(e.target.value)}
+                          placeholder="Например: Приточно-вытяжная вентиляция AirCut, Чиллер Carrier 30XA, ГРЩSchneider Electric"
+                          className={getInputStyle()} 
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-bold uppercase opacity-75">🏗️ Ввод в эксплуатацию (Кабинет Собственника)</label>
+                        <input 
+                          type="text" 
+                          value={objInfo}
+                          onChange={(e) => setObjInfo(e.target.value)}
+                          placeholder="Например: Декабрь 2018 г."
+                          className={getInputStyle()} 
+                        />
                       </div>
 
                       <div className="pt-2 flex gap-2">
@@ -3128,10 +3462,9 @@ export default function App() {
                                         <div key={cat} className="rounded-lg border border-neutral-300/10 bg-neutral-100/5 dark:bg-black/15 overflow-hidden">
                                           
                                           {/* 2. КАТЕГОРИЯ HEADER (LEVEL 2) */}
-                                          <button 
-                                            type="button"
+                                          <div 
                                             onClick={() => setExpandedCats(prev => ({ ...prev, [catKey]: !isCatExpanded }))}
-                                            className="w-full text-left px-3.5 py-2.5 flex items-center justify-between cursor-pointer bg-neutral-100/20 hover:bg-neutral-100/40 dark:bg-white/2 dark:hover:bg-white/5 transition-colors border-b border-dashed border-neutral-300/10"
+                                            className="w-full text-left px-3.5 py-2.5 flex items-center justify-between cursor-pointer bg-neutral-100/20 hover:bg-neutral-100/40 dark:bg-white/2 dark:hover:bg-white/5 transition-colors border-b border-dashed border-neutral-300/10 select-none"
                                           >
                                             <div className="flex items-center gap-2">
                                               <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
@@ -3163,7 +3496,7 @@ export default function App() {
                                                 <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />
                                               )}
                                             </div>
-                                          </button>
+                                          </div>
 
                                           {/* LEVEL 3: DETAILED COLLAPSIBLE LIST - Responsive stretch to section layout */}
                                           {isCatExpanded && (
@@ -5032,6 +5365,8 @@ export default function App() {
                 getCardStyle={getCardStyle} 
                 getSubHeaderStyle={getSubHeaderStyle}
                 theme={theme}
+                globalSupportTickets={globalSupportTickets}
+                onTicketsRefresh={fetchGlobalSupportTickets}
               />
             )}
 
@@ -5095,8 +5430,8 @@ export default function App() {
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
-                                  if (file.size > 2 * 1024 * 1024) {
-                                    alert("Размер файла превышает 2МБ. Выберите меньший файл.");
+                                  if (file.size > 10 * 1024 * 1024) {
+                                    alert("Размер файла превышает 10МБ. Выберите меньший файл.");
                                     return;
                                   }
                                   const reader = new FileReader();
@@ -5109,7 +5444,7 @@ export default function App() {
                                 }
                               }}
                             />
-                            <span className="text-[10.5px] text-neutral-500 leading-tight">Нажмите на фото, чтобы обновить, или загрузите файл формата JPG, PNG, WebP (макс. 2МБ)</span>
+                            <span className="text-[10.5px] text-neutral-500 leading-tight">Нажмите на фото, чтобы обновить, или загрузите файл формата JPG, PNG, WebP (макс. 10МБ)</span>
                             {profileAvatarUrl && (
                               <button 
                                 type="button" 
@@ -5237,6 +5572,22 @@ export default function App() {
         {currentUser.role === 'owner' && (
           <div className="space-y-6">
             
+            {ownerActiveTab === 'ecosystem' && (
+              <EcosystemPortal
+                currentUser={currentUser}
+                objects={objects}
+                schedules={schedules}
+                reports={reports}
+                onNavigateToObjects={() => {
+                  setOwnerActiveTab('characteristics');
+                }}
+                onNavigateToSchedules={() => {
+                  setOwnerActiveTab('characteristics');
+                }}
+                currentTheme={theme}
+              />
+            )}
+
             {ownerActiveTab === 'characteristics' && (
               <div className="space-y-4 animate-fadeIn max-w-4xl mx-auto w-full">
                 <div className={getCardStyle()}>
@@ -5262,9 +5613,12 @@ export default function App() {
                         <div className="flex gap-2.5 items-center">
                           <Building className="w-5 h-5 text-blue-500" />
                           <div>
-                            <h4 className="font-black text-sm flex items-center gap-2">
+                            <h4 className="font-black text-sm flex items-center gap-2 flex-wrap">
                               <span>{obj.name}</span>
                               <span className="text-[10px] opacity-45 font-mono">ID: {obj.id}</span>
+                              <span className={`px-2 py-0.5 text-[9px] font-bold rounded-full border ${getObjectTypeLabel(obj.objectType).class}`}>
+                                {getObjectTypeLabel(obj.objectType).label}
+                              </span>
                             </h4>
                             <p className="text-xs opacity-65">{obj.address}</p>
                           </div>
@@ -5321,6 +5675,66 @@ export default function App() {
                               <p className="font-bold text-xs mt-1 text-slate-800 dark:text-zinc-200">{obj.info || "Параметры года постройки не указаны"}</p>
                             </div>
                           </div>
+
+                          {/* Linked Garden / Landscape Section */}
+                          {(() => {
+                            const linkedGards = getLinkedGardens(obj.id);
+                            if (linkedGards.length === 0) return null;
+                            return (
+                              <div className="p-4 bg-emerald-500/5 dark:bg-emerald-950/20 border border-emerald-500/15 rounded-xl space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-emerald-600 dark:text-emerald-450">🌿</span>
+                                  <h5 className="font-extrabold text-xs text-neutral-800 dark:text-zinc-100 uppercase tracking-wide">
+                                    Привязанный Сад и ландшафтная территория ({linkedGards.length})
+                                  </h5>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                                  {linkedGards.map((g: any) => (
+                                    <div key={g.id} className="p-3 bg-white dark:bg-zinc-900 rounded-lg border border-neutral-200 dark:border-zinc-800 space-y-1">
+                                      <div className="font-extrabold text-neutral-900 dark:text-neutral-50 flex items-center justify-between">
+                                        <span>{g.name}</span>
+                                        <span className="text-[10px] text-zinc-400 font-mono font-normal">{g.coords}</span>
+                                      </div>
+                                      <p className="text-[11px] text-zinc-500">📍 {g.address}</p>
+                                      <p className="text-[11px] text-zinc-650 dark:text-zinc-300">
+                                        🎨 <strong>Автор:</strong> {g.designer}
+                                      </p>
+                                      <p className="text-[11.5px] text-zinc-500 font-medium">
+                                        📖 <strong>Хроника:</strong> {g.creationHistory}
+                                      </p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })()}
+
+                          {/* Linked Structures (Постройки) Section */}
+                          {(() => {
+                            const linkedOuts = getLinkedOutbuildings(obj.id);
+                            if (linkedOuts.length === 0) return null;
+                            return (
+                              <div className="p-4 bg-blue-500/5 dark:bg-blue-950/20 border border-blue-500/15 rounded-xl space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-blue-600 dark:text-blue-400">🛖</span>
+                                  <h5 className="font-extrabold text-xs text-neutral-800 dark:text-zinc-100 uppercase tracking-wide">
+                                    Привязанные строения и постройки ({linkedOuts.length})
+                                  </h5>
+                                </div>
+                                <div className="flex flex-wrap gap-2 text-xs">
+                                  {linkedOuts.map((b: any) => (
+                                    <div key={b.id} className="p-2.5 px-4 bg-white dark:bg-zinc-900 rounded-lg border border-neutral-200 dark:border-zinc-800 flex items-center gap-2 shadow-sm">
+                                      <span className="text-base" style={{ filter: `drop-shadow(0 0 5px ${b.color})` }}>🏠</span>
+                                      <div>
+                                        <div className="font-bold text-neutral-900 dark:text-neutral-50">{b.label}</div>
+                                        <div className="text-[10px] text-zinc-400 font-mono">Размер: {b.width}x{b.height}% • План-координаты: {b.x}%, {b.y}%</div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })()}
 
                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             {/* Schedule item readings */}
@@ -6232,6 +6646,8 @@ export default function App() {
                 getCardStyle={getCardStyle} 
                 getSubHeaderStyle={getSubHeaderStyle}
                 theme={theme}
+                globalSupportTickets={globalSupportTickets}
+                onTicketsRefresh={fetchGlobalSupportTickets}
               />
             )}
 
@@ -6241,6 +6657,22 @@ export default function App() {
         {/* ======================= ROLE 3: SPECIALIST CHECKS RUNNER ======================= */}
         {currentUser.role === 'specialist' && (
           <div className="space-y-6">
+
+            {activeTab === 'ecosystem' && (
+              <EcosystemPortal
+                currentUser={currentUser}
+                objects={objects}
+                schedules={schedules}
+                reports={reports}
+                onNavigateToObjects={() => {
+                  setActiveTab('workplace');
+                }}
+                onNavigateToSchedules={() => {
+                  setActiveTab('workplace');
+                }}
+                currentTheme={theme}
+              />
+            )}
 
             {/* 1. WORKPLACE / DEFAULT TAB */}
             {(activeTab === 'workplace' || activeTab === 'objects' || !activeTab) && (
@@ -6290,8 +6722,8 @@ export default function App() {
                       onChange={async (e) => {
                         const file = e.target.files?.[0];
                         if (file) {
-                          if (file.size > 2 * 1024 * 1024) {
-                            alert("Размер файла превышает 2МБ.");
+                          if (file.size > 10 * 1024 * 1024) {
+                            alert("Размер файла превышает 10МБ.");
                             return;
                           }
                           const reader = new FileReader();
@@ -6540,7 +6972,189 @@ export default function App() {
 
                 {/* Checklist execution interactive dynamic form */}
                 <div className="lg:col-span-2 space-y-4">
-                  {!activeTemplate ? (
+                  {!activeTemplate && selectedObjId ? (
+                    (() => {
+                      const obj = objects.find(o => o.id === selectedObjId);
+                      if (!obj) return null;
+                      
+                      const objSchedules = schedules.filter(s => s.objectId === selectedObjId);
+                      const uniqueCategories = Array.from(new Set(objSchedules.map(s => s.category || "Общее")));
+                      
+                      return (
+                        <div className="space-y-6 animate-fade-in text-left">
+                          {/* Object passport card */}
+                          <div className={getCardStyle()}>
+                            <div className="border-b border-neutral-350/15 pb-4 mb-4">
+                              <span className="text-[10px] uppercase font-bold text-amber-600 tracking-widest block mb-1">Технический паспорт здания</span>
+                              <h3 className="font-extrabold text-lg text-slate-850 dark:text-zinc-100 flex items-center gap-2">
+                                🏢 {obj.name}
+                              </h3>
+                              <p className="text-xs text-slate-500 mt-1">{obj.address}</p>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                              <div className="p-3 bg-neutral-100/50 dark:bg-zinc-800/30 rounded-xl space-y-1 border border-neutral-300/10">
+                                <span className="opacity-60 block font-bold text-[10px] uppercase text-slate-500">Общая характеристика</span>
+                                <p className="font-medium text-slate-800 dark:text-zinc-200 leading-snug whitespace-pre-wrap">
+                                  {obj.specs || "—"}
+                                </p>
+                              </div>
+                              <div className="p-3 bg-neutral-100/50 dark:bg-zinc-800/30 rounded-xl space-y-1 border border-neutral-300/10">
+                                <span className="opacity-60 block font-bold text-[10px] uppercase text-slate-500">Ключевое оборудование</span>
+                                <p className="font-medium text-slate-800 dark:text-zinc-200 leading-snug whitespace-pre-wrap">
+                                  {obj.equipmentSpecs || "—"}
+                                </p>
+                              </div>
+                              <div className="p-3 bg-neutral-100/50 dark:bg-zinc-800/30 rounded-xl space-y-1 border border-neutral-300/10">
+                                <span className="opacity-60 block font-bold text-[10px] uppercase text-slate-500">Ввод в эксплуатацию</span>
+                                <p className="font-medium text-slate-800 dark:text-zinc-200 leading-snug whitespace-pre-wrap">
+                                  {obj.info || "—"}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Maintenance Schedule Table */}
+                          <div className={getCardStyle()}>
+                            <div className="border-b border-neutral-350/15 pb-4 mb-4">
+                              <h4 className="font-extrabold text-sm flex items-center gap-2 text-slate-850 dark:text-zinc-100">
+                                <Calendar className="w-4 h-4 text-amber-500" />
+                                Календарный график регламентного ТО
+                              </h4>
+                              <p className="text-[11px] text-slate-500 mt-0.5">Перечень всех запланированных осмотров и периодичностей для данного здания</p>
+                            </div>
+
+                            {objSchedules.length === 0 ? (
+                              <p className="text-xs opacity-60 text-center py-4">Графики ТО для данного объекта отсутствуют.</p>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-xs text-left">
+                                  <thead>
+                                    <tr className="border-b border-neutral-350/15 opacity-60">
+                                      <th className="pb-2 font-bold uppercase text-[9px] tracking-wider">Характеристика / Регламент</th>
+                                      <th className="pb-2 font-bold uppercase text-[9px] tracking-wider">Период</th>
+                                      <th className="pb-2 font-bold uppercase text-[9px] tracking-wider">Последнее ТО</th>
+                                      <th className="pb-2 font-bold uppercase text-[9px] tracking-wider">Статус упреждения</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-neutral-350/10">
+                                    {objSchedules.map(sch => {
+                                      const status = getScheduleStatus(sch);
+                                      return (
+                                        <tr key={sch.id} className="hover:bg-neutral-100/30 dark:hover:bg-zinc-800/20">
+                                          <td className="py-2.5 pr-2">
+                                            <span className="block font-bold text-slate-700 dark:text-zinc-200">{sch.title}</span>
+                                            <span className="text-[10px] text-amber-700 dark:text-amber-500 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded-md inline-block mt-0.5">{sch.category}</span>
+                                          </td>
+                                          <td className="py-2.5 font-mono">{sch.intervalDays} дн.</td>
+                                          <td className="py-2.5 font-mono opacity-80">{sch.lastDoneDate || "Не проводилось"}</td>
+                                          <td className="py-2.5">
+                                            <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${status.class}`}>
+                                              {status.label}
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Characteristics Categorized checklists explorer */}
+                          <div className={getCardStyle()}>
+                            <div className="border-b border-neutral-350/15 pb-4 mb-4">
+                              <h4 className="font-extrabold text-sm flex items-center gap-2 text-slate-850 dark:text-zinc-100">
+                                <Wrench className="w-4 h-4 text-amber-500" />
+                                Опросные листы по характеристикам оборудования
+                              </h4>
+                              <p className="text-[11px] text-slate-500 mt-0.5">Выберите техническую характеристику и изучите проверочный чек-лист заранее</p>
+                            </div>
+
+                            <div className="space-y-4">
+                              {/* Category switcher */}
+                              <div className="flex flex-wrap gap-2">
+                                {uniqueCategories.map(cat => {
+                                  const isActive = specSelectedCategory === cat;
+                                  return (
+                                    <button
+                                      key={cat}
+                                      onClick={() => setSpecSelectedCategory(isActive ? "" : cat)}
+                                      className={`px-3 py-1.5 text-xs font-bold rounded-lg cursor-pointer border transition-all ${
+                                        isActive 
+                                          ? "bg-amber-600 border-amber-600 text-white" 
+                                          : "bg-slate-100 dark:bg-zinc-800/40 hover:bg-slate-200 text-slate-705 dark:text-zinc-300 border-neutral-300/20"
+                                      }`}
+                                    >
+                                      🛠️ {cat}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+
+                              {/* Selected category checklist explorer */}
+                              {specSelectedCategory ? (
+                                <div className="space-y-3 p-4 rounded-xl bg-neutral-100/30 border border-neutral-300/10 animate-fade-in text-xs">
+                                  <h5 className="font-extrabold text-amber-600">Чек-листы по характеристике «{specSelectedCategory}»:</h5>
+                                  {(() => {
+                                    const catSchedules = objSchedules.filter(s => s.category === specSelectedCategory);
+                                    if (catSchedules.length === 0) return <p className="opacity-60 text-xs">Нет привязанных регламентов.</p>;
+                                    
+                                    return (
+                                      <div className="space-y-4 divide-y divide-neutral-350/10">
+                                        {catSchedules.map((sch, schIdx) => {
+                                          const tpl = templates.find(t => t.id === sch.checklistTemplateId);
+                                          const isExpanded = specExpandedTplId === sch.id;
+                                          
+                                          return (
+                                            <div key={sch.id} className={`${schIdx > 0 ? "pt-4" : ""} space-y-2`}>
+                                              <div className="flex justify-between items-start gap-4">
+                                                <div>
+                                                  <div className="font-bold text-slate-800 dark:text-zinc-100">{sch.title}</div>
+                                                  <div className="text-[10px] opacity-60">Регламент: {tpl?.name || "Стандартный шаблон"}</div>
+                                                </div>
+                                                <button
+                                                  onClick={() => setSpecExpandedTplId(isExpanded ? "" : sch.id)}
+                                                  className="p-1 px-2.5 bg-neutral-200/60 dark:bg-zinc-800 text-[10px] hover:bg-neutral-300/60 dark:hover:bg-zinc-700 rounded font-bold cursor-pointer transition-all"
+                                                >
+                                                  {isExpanded ? "Свернуть ▲" : "Изучить чек-лист ▼"}
+                                                </button>
+                                              </div>
+
+                                              {isExpanded && tpl && (
+                                                <div className="bg-white dark:bg-zinc-900/60 p-3 rounded-lg border border-neutral-300/10 space-y-2.5 animate-fade-in">
+                                                  <div className="font-medium opacity-75 italic text-[11px]">{tpl.description}</div>
+                                                  <div className="space-y-2 pl-3 border-l-2 border-l-amber-500">
+                                                    {tpl.questions.map((q, qidx) => (
+                                                      <div key={q.id || qidx} className="text-[11px] leading-relaxed">
+                                                        <span className="font-bold text-slate-500">{qidx + 1}. </span>
+                                                        <span className="font-semibold text-slate-700 dark:text-zinc-300">{q.text} </span>
+                                                        <span className="text-[9px] bg-neutral-100 text-neutral-500 px-1 py-0.2 rounded font-mono uppercase">
+                                                          {q.type === 'boolean' ? 'Да/Нет' : q.type === 'number' ? 'Число' : q.type === 'photo' ? 'Фото' : q.type === 'select' ? 'Выбор' : 'Текст'}
+                                                        </span>
+                                                        {q.required && <span className="text-red-500 ml-0.5">*</span>}
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                </div>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              ) : (
+                                <p className="text-xs opacity-65 italic text-slate-500">Кликните по любой характеристике (категории) выше, чтобы просмотреть привязанные графики ТО и изучить шаги проверочных чек-листов.</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()
+                  ) : !activeTemplate ? (
                     <div className="p-8 border border-dashed text-center rounded-xl text-neutral-400">
                       <Calendar className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                       <h4 className="font-extrabold text-slate-700">Анкета не загружена</h4>
@@ -7182,6 +7796,8 @@ export default function App() {
                 getCardStyle={getCardStyle} 
                 getSubHeaderStyle={getSubHeaderStyle}
                 theme={theme}
+                globalSupportTickets={globalSupportTickets}
+                onTicketsRefresh={fetchGlobalSupportTickets}
               />
             )}
 
@@ -7266,7 +7882,7 @@ export default function App() {
 
                 {/* Specialist link copy-paste */}
                 <div className="bg-neutral-50 border p-3 rounded-xl text-left space-y-1">
-                  <div className="text-[9px] uppercase tracking-wider text-neutral-400 font-bold block">Прямая ссылка (для симуляции без телефона)</div>
+                  <div className="text-[9px] uppercase tracking-wider text-neutral-400 font-bold block">Прямая ссылка (для отправки исполнителю)</div>
                   <div className="flex items-center gap-2">
                     <input 
                       type="text" 
@@ -7295,14 +7911,6 @@ export default function App() {
                 >
                   Закрыть окно
                 </button>
-                <a 
-                  href={qrLink} 
-                  target="_blank" 
-                  rel="noopener noreferrer" 
-                  className="py-2 px-3 bg-emerald-600 hover:bg-emerald-700 font-bold text-xs text-white rounded shadow-sm hover:shadow transition-all flex items-center gap-1.5"
-                >
-                  Симулировать переход инженера ➔
-                </a>
               </div>
 
             </div>
@@ -7377,8 +7985,8 @@ export default function App() {
                       onChange={(e) => {
                         const file = e.target.files?.[0];
                         if (file) {
-                          if (file.size > 2 * 1024 * 1024) {
-                            alert("Размер файла превышает 2МБ. Выберите меньший файл.");
+                          if (file.size > 10 * 1024 * 1024) {
+                            alert("Размер файла превышает 10МБ. Выберите меньший файл.");
                             return;
                           }
                           const reader = new FileReader();
@@ -7411,7 +8019,7 @@ export default function App() {
                       )}
                     </div>
                     <span className="text-[9px] text-neutral-400 dark:text-neutral-500 italic block">
-                      Файл JPG, PNG. До 2 МБ. Отображается в чек-листах и графиках контактов.
+                      Файл JPG, PNG. До 10 МБ. Отображается в чек-листах и графиках контактов.
                     </span>
                   </div>
                 </div>
@@ -7788,6 +8396,167 @@ export default function App() {
           </div>
         ))}
       </div>
+
+      {/* MODAL: SUPPORT APPEAL RECEIVED / UPDATED POPUP */}
+      {activeSupportNotif && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 z-[20000] animate-fadeIn">
+          <div className="bg-white dark:bg-zinc-900 border border-neutral-300/15 p-6 rounded-3xl max-w-lg w-full shadow-2xl space-y-5 animate-scaleUp text-neutral-800 dark:text-neutral-100 text-left relative overflow-hidden">
+            {/* Ambient upper glowing border */}
+            <div className={`absolute top-0 left-0 right-0 h-1.5 ${
+              activeSupportNotif.type === 'incoming_appeal' 
+                ? 'bg-gradient-to-r from-amber-500 to-indigo-500' 
+                : 'bg-gradient-to-r from-emerald-500 to-blue-500'
+            }`}></div>
+
+            <button
+              type="button"
+              onClick={() => setActiveSupportNotif(null)}
+              className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-neutral-150 dark:hover:bg-zinc-805 transition-all text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            {activeSupportNotif.type === 'incoming_appeal' ? (
+              // Case 1: Admin seeing a new ticket
+              <div className="space-y-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2.5 rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
+                    <Bell className="w-5 h-5 animate-bounce" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-black uppercase tracking-wider text-amber-600 dark:text-indigo-400 block leading-none mb-1">Поступило новое обращение</span>
+                    <h3 className="font-extrabold text-base tracking-tight text-neutral-900 dark:text-neutral-50"># {activeSupportNotif.ticket.id}</h3>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-neutral-100/50 dark:bg-zinc-950 border border-neutral-300/10 space-y-2.5 text-xs">
+                  <div>
+                    <span className="opacity-50 block text-[9px] uppercase font-bold text-neutral-500">Отправитель:</span>
+                    <div className="font-black text-neutral-800 dark:text-neutral-200 flex items-center gap-2">
+                      <span>{activeSupportNotif.ticket.userName}</span>
+                      <span className="text-[9px] bg-neutral-200 dark:bg-zinc-800 px-1.5 py-0.5 rounded uppercase font-bold text-neutral-600 dark:text-neutral-400">
+                        {activeSupportNotif.ticket.userRole === 'specialist' ? 'Специалист' : 'Собственник'}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <span className="opacity-50 block text-[9px] uppercase font-bold text-neutral-500">Контакты:</span>
+                    <span className="font-semibold text-neutral-700 dark:text-neutral-300">{activeSupportNotif.ticket.userEmail} {activeSupportNotif.ticket.userPhone ? `| ${activeSupportNotif.ticket.userPhone}` : ''}</span>
+                  </div>
+
+                  <div>
+                    <span className="opacity-50 block text-[9px] uppercase font-bold text-neutral-500">Тема:</span>
+                    <span className="font-extrabold text-neutral-900 dark:text-neutral-50 text-sm leading-tight block">{activeSupportNotif.ticket.subject}</span>
+                  </div>
+
+                  <div className="pt-2 border-t border-neutral-300/10">
+                    <span className="opacity-50 block text-[9px] uppercase font-bold text-neutral-500 mb-1">Сообщение:</span>
+                    <p className="whitespace-pre-wrap leading-relaxed font-sans font-medium text-neutral-600 dark:text-neutral-300 bg-black/5 dark:bg-white/5 p-3 rounded-lg border border-neutral-350/5 text-[11px] max-h-32 overflow-y-auto">
+                      {activeSupportNotif.ticket.message}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-neutral-300/10">
+                  <button
+                    type="button"
+                    onClick={() => setActiveSupportNotif(null)}
+                    className="px-4.5 py-2 text-xs font-bold rounded-xl bg-neutral-100 hover:bg-neutral-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-neutral-700 dark:text-neutral-300 transition-all cursor-pointer"
+                  >
+                    Позже
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('support');
+                      setActiveSupportNotif(null);
+                    }}
+                    className="px-5 py-2 text-xs font-extrabold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-600/15 hover:shadow-indigo-600/25 transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Ответить на обращение</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              // Case 2: User seeing a support response or status change
+              <div className="space-y-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2.5 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
+                    <Mail className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 block leading-none mb-1">Получен ответ технической службы</span>
+                    <h3 className="font-extrabold text-base tracking-tight text-neutral-900 dark:text-neutral-50">Обращение #{activeSupportNotif.ticket.id}</h3>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-neutral-100/50 dark:bg-zinc-950 border border-neutral-300/10 space-y-3 text-xs">
+                  <div>
+                    <span className="opacity-50 block text-[9px] uppercase font-bold text-neutral-500">Тема вашего обращения:</span>
+                    <span className="font-extrabold text-neutral-850 dark:text-neutral-150 leading-tight block">{activeSupportNotif.ticket.subject}</span>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <div>
+                      <span className="opacity-50 block text-[9px] uppercase font-bold text-neutral-500">Предыдущий статус:</span>
+                      <span className="font-semibold text-neutral-500">
+                        {activeSupportNotif.oldStatus === 'new' ? 'Новое' : activeSupportNotif.oldStatus === 'in_progress' ? 'В работе' : 'Решено'}
+                      </span>
+                    </div>
+                    <span className="opacity-50">➡️</span>
+                    <div>
+                      <span className="opacity-50 block text-[9px] uppercase font-bold text-neutral-500">Текущий статус:</span>
+                      <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                        activeSupportNotif.ticket.status === 'resolved' 
+                          ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400' 
+                          : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                      }`}>
+                        {activeSupportNotif.ticket.status === 'new' ? 'Новое' : activeSupportNotif.ticket.status === 'in_progress' ? 'В работе' : 'Решено'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {activeSupportNotif.ticket.adminNotes && (
+                    <div className="pt-2.5 border-t border-neutral-300/10">
+                      <span className="text-emerald-600 dark:text-emerald-400 block text-[10px] uppercase font-bold tracking-wider mb-1">Официальный ответ:</span>
+                      <p className="whitespace-pre-wrap leading-relaxed font-sans font-bold text-neutral-800 dark:text-neutral-200 bg-emerald-500/5 p-3 rounded-lg border border-emerald-500/10 text-xs shadow-inner max-h-32 overflow-y-auto">
+                        {activeSupportNotif.ticket.adminNotes}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between gap-2.5 pt-3 border-t border-neutral-300/10">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (currentUser?.role === 'owner') {
+                        setOwnerActiveTab('support');
+                      } else {
+                        setActiveTab('support');
+                      }
+                      setActiveSupportNotif(null);
+                    }}
+                    className="px-4 py-2 text-xs font-bold rounded-xl bg-neutral-100 hover:bg-neutral-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-neutral-700 dark:text-neutral-300 transition-all cursor-pointer"
+                  >
+                    Посмотреть все
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSupportNotif(null)}
+                    className="px-5 py-2 text-xs font-black rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-600/15 hover:shadow-emerald-600/25 transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <CheckSquare className="w-3.5 h-3.5" />
+                    <span>Понятно, спасибо!</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
     </div>
   );

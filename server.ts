@@ -106,9 +106,9 @@ const uploadLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Parse JSON bodies up to 10mb for photo base64 uploads
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+// Parse JSON bodies up to 20mb for photo base64 uploads
+app.use(express.json({ limit: "20mb" }));
+app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 
 // Mount Cookie Parser
 app.use(cookieParser(activeSessionSecret));
@@ -1540,7 +1540,10 @@ app.post("/api/yandex/sync", async (req, res) => {
             name: objName,
             address: objAddress,
             description: objDescription,
-            yandexDiskPath: target.yandexDiskPath
+            yandexDiskPath: target.yandexDiskPath,
+            specs: scheduleData.object?.specs || existingObj.specs || null,
+            equipmentSpecs: scheduleData.object?.equipmentSpecs || existingObj.equipmentSpecs || null,
+            info: scheduleData.object?.info || existingObj.info || null
           });
         } else {
           await dbStore.addObject({
@@ -1549,15 +1552,25 @@ app.post("/api/yandex/sync", async (req, res) => {
             address: objAddress,
             description: objDescription,
             yandexDiskPath: target.yandexDiskPath,
-            ownerId: "usr_owner"
+            ownerId: "usr_owner",
+            specs: scheduleData.object?.specs || null,
+            equipmentSpecs: scheduleData.object?.equipmentSpecs || null,
+            info: scheduleData.object?.info || null
           });
         }
         objectsSynced++;
 
         const equipment = scheduleData.equipment || [];
+        const syncedSchIds: string[] = [];
+
         for (const [index, eq] of equipment.entries()) {
-          const itemKey = eq.id || `eq_${index}_${transliterate(eq.title || '').replace(/[^a-z0-9]/g, '')}`;
+          const cleanTitle = transliterate(eq.title || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+          const cleanCategory = transliterate(eq.category || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+          // Create stable, index-independent key name (unless ID is explicitly defined inside equipment JSON)
+          const itemKey = eq.id || `eq_${cleanCategory}_${cleanTitle}`;
           const schId = `sch_${objId}_${itemKey}`;
+          syncedSchIds.push(schId);
+
           const existingSch = await dbStore.getScheduleById(schId);
           
           const currentLastDoneDate = existingSch ? existingSch.lastDoneDate : null;
@@ -1583,6 +1596,15 @@ app.post("/api/yandex/sync", async (req, res) => {
             await dbStore.addSchedule(scheduleItem);
           }
           schedulesSynced++;
+        }
+
+        // Complete synchronization cleanup: Delete any schedules for this object that are NOT found in the sync list
+        const allSchedules = await dbStore.getSchedules();
+        const objectExistingSchedules = allSchedules.filter(s => s.objectId === objId);
+        for (const sch of objectExistingSchedules) {
+          if (!syncedSchIds.includes(sch.id)) {
+            await dbStore.deleteSchedule(sch.id);
+          }
         }
 
         logsSummary.push(`Объект "${objName}" синхронизирован успешно: импортировано ${equipment.length} графиков.`);

@@ -23,6 +23,8 @@ interface SupportTabProps {
   getCardStyle: () => string;
   getSubHeaderStyle: () => string;
   theme?: string;
+  globalSupportTickets?: SupportTicket[];
+  onTicketsRefresh?: () => void;
 }
 
 export default function SupportTab({ 
@@ -30,7 +32,9 @@ export default function SupportTab({
   systemSettings, 
   getCardStyle, 
   getSubHeaderStyle,
-  theme = 'cleanroom'
+  theme = 'cleanroom',
+  globalSupportTickets,
+  onTicketsRefresh
 }: SupportTabProps) {
   // Feedback form states
   const [subject, setSubject] = useState('');
@@ -45,9 +49,15 @@ export default function SupportTab({
   const [submitSuccess, setSubmitSuccess] = useState(false);
 
   // Tickets list
-  const [tickets, setTickets] = useState<SupportTicket[]>([]);
+  const [tickets, setTickets] = useState<SupportTicket[]>(globalSupportTickets || []);
   const [isLoadingTickets, setIsLoadingTickets] = useState(false);
   const [ticketFilter, setTicketFilter] = useState<'all' | 'new' | 'in_progress' | 'resolved'>('all');
+
+  useEffect(() => {
+    if (globalSupportTickets) {
+      setTickets(globalSupportTickets);
+    }
+  }, [globalSupportTickets]);
 
   // Admin resolution action states
   const [editingTicketId, setEditingTicketId] = useState<string | null>(null);
@@ -57,6 +67,10 @@ export default function SupportTab({
 
   // Load tickets on mount
   const fetchTickets = async () => {
+    if (onTicketsRefresh) {
+      onTicketsRefresh();
+      return;
+    }
     setIsLoadingTickets(true);
     try {
       const response = await fetch('/api/support/tickets');
@@ -65,7 +79,7 @@ export default function SupportTab({
         setTickets(data);
       }
     } catch (err) {
-      console.error('Error fetching support tickets:', err);
+      console.warn('Error fetching support tickets:', err);
     } finally {
       setIsLoadingTickets(false);
     }

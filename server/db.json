@@ -38,7 +38,8 @@
       "address": "г. Санкт-Петербург, Невский проспект, д. 25",
       "description": "Современный торгово-развлекательный комплекс, общая площадь 12 500 кв.м.",
       "ownerId": "usr_owner",
-      "yandexDiskPath": "Цифровой паспорт объекта/ТРК Атриум/Обслуживание/service_bot"
+      "yandexDiskPath": "Цифровой паспорт объекта/ТРК Атриум/Обслуживание/service_bot",
+      "objectType": "admin_building"
     },
     {
       "id": "obj_north_peak",
@@ -46,7 +47,8 @@
       "address": "г. Санкт-Петербург, ул. Профессора Попова, д. 12",
       "description": "Офисный центр класса A, 8 этажей, автономное отопление.",
       "ownerId": "usr_owner",
-      "yandexDiskPath": "Цифровой паспорт объекта/БЦ Северная Вершина/Обслуживание/service_bot"
+      "yandexDiskPath": "Цифровой паспорт объекта/БЦ Северная Вершина/Обслуживание/service_bot",
+      "objectType": "admin_building"
     }
   ],
   "templates": [
@@ -626,6 +628,15 @@
     },
     "emailBotAddress": "notify-bot@commercial-passport.ru",
     "telegramBotUsername": "CommercialPassportNotifyBot",
-    "maxBotUsername": "PassportTechSupportBot"
-  }
+    "maxBotUsername": "PassportTechSupportBot",
+    "appBackgroundType": "sakura",
+    "appBackgroundUrl": "https://images.unsplash.com/photo-1524413840807-0c3cb6fa808d?auto=format&fit=crop&w=2000&q=80",
+    "supportPhone": "",
+    "supportEmail": "support@commercial-passport.ru",
+    "supportTelegram": "",
+    "supportWhatsapp": "",
+    "supportMax": "",
+    "cardOpacity": 50
+  },
+  "supportTickets": []
 }
