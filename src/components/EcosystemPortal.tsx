@@ -25,7 +25,9 @@ import {
   Search,
   User,
   Heart,
-  Compass
+  Compass,
+  Star,
+  Sparkles
 } from "lucide-react";
 import { User as UserType, BuildingObject, ScheduleItem, CompletedChecklist } from "../types";
 
@@ -111,6 +113,39 @@ interface SecondaryBuilding {
   operationNotes: string;
   wishes: string;
   growthTimeline: Array<{ title: string; date: string; photoUrl: string }>;
+}
+
+interface GreenhouseBed {
+  id: string;
+  greenhouseId: string;
+  label: string;
+  plantName: string;
+  emoji: string;
+  xMeters: number;
+  yMeters: number;
+  wMeters: number;
+  hMeters: number;
+  irrigationSystem?: string; // e.g. "drip" | "manual" | "sprinkler" | "none"
+  irrigationSchedule?: string; // watering schedule text
+  zones?: Array<{
+    id: string;
+    emoji: string;
+    plantName: string;
+    ratio: number; // e.g. share of space (0-100 or relative weight)
+  }>;
+}
+
+interface SeedCatalogItem {
+  id: string;
+  name: string;             // Сорт / название, e.g. "Кураж F1"
+  emoji: string;            // e.g. "🥒"
+  category: string;         // e.g. "Томаты", "Огурцы", "Перцы", "Зелень", "Ягоды", "Другое"
+  characteristics: string;  // Характеристики сорта
+  fruitDescription: string; // Свойства / Описания плодов
+  careInstructions: string;  // Специфика ухода
+  rating: number;           // Оценка (1-5 звезд)
+  plantAgain: "yes" | "no" | "maybe"; // Решение: Сажать ли снова?
+  notes?: string;           // Исторический отзыв / Личные заметки
 }
 
 interface ChronicleDiaryEntry {
@@ -304,6 +339,273 @@ export default function EcosystemPortal({
       }
     ];
   });
+
+  // Greenhouses mapping to their planting beds/plots
+  const [greenhouseBeds, setGreenhouseBeds] = useState<GreenhouseBed[]>(() => {
+    const saved = localStorage.getItem("eco_greenhouse_beds");
+    if (saved) return JSON.parse(saved);
+    return [
+      {
+        id: "ghb_1",
+        greenhouseId: "pb_greenhouse_default",
+        label: "Левый ряд томатов",
+        plantName: "Черри 'Сладкий фонтан'",
+        emoji: "🍅",
+        xMeters: 0.5,
+        yMeters: 0.5,
+        wMeters: 0.8,
+        hMeters: 2.0
+      },
+      {
+        id: "ghb_2",
+        greenhouseId: "pb_greenhouse_default",
+        label: "Правый ряд огурцов",
+        plantName: "Огурец 'Герман F1'",
+        emoji: "🥒",
+        xMeters: 2.5,
+        yMeters: 0.5,
+        wMeters: 0.8,
+        hMeters: 2.0
+      }
+    ];
+  });
+
+  const [seedCatalog, setSeedCatalog] = useState<SeedCatalogItem[]>(() => {
+    const saved = localStorage.getItem("eco_seed_catalog");
+    if (saved) return JSON.parse(saved);
+    return [
+      {
+        id: "seed_1",
+        name: "Бычье Сердце",
+        emoji: "🍅",
+        category: "Томаты",
+        characteristics: "Индетерминантный (высокорослый), среднепоздний сорт. Высота куста до 1.5–1.8 м. Требует прочной опоры.",
+        fruitDescription: "Плоды очень крупные (300-500 г), мясистые, сердцевидной формы, малиново-красные. Вкус сладкий, сочный, с выраженной кислинкой.",
+        careInstructions: "Формирование в 1-2 стебля. Обязательное пасынкование. Умеренный полив под корень, регулярные подкормки.",
+        rating: 5,
+        plantAgain: "yes",
+        notes: "Урожай 2025 года превзошел ожидания. Самые крупные плоды весили до 600г. Отлично для свежих салатов и сока!"
+      },
+      {
+        id: "seed_2",
+        name: "Герман F1",
+        emoji: "🥒",
+        category: "Огурцы",
+        characteristics: "Партенокарпический (самоопыляемый) ультраранний гибрид кустового типа. Пучковая завязь.",
+        fruitDescription: "Корнишоны длиной 10-12 см, плотные хрустящие, абсолютно без горечи, с частыми бугорками.",
+        careInstructions: "Полив теплой водой через день. Светолюбивый, отзывчив на регулярные подкормки.",
+        rating: 5,
+        plantAgain: "yes",
+        notes: "Очень надежный гибрид, устойчив к мучнистой росе. Идеален для засолки на зиму — огурцы остаются твердыми."
+      },
+      {
+        id: "seed_3",
+        name: "Калифорнийское чудо",
+        emoji: "🫑",
+        category: "Перцы",
+        characteristics: "Среднеранний сорт сладкого болгарского перца. Куст компактный, высотой 60-70 см.",
+        fruitDescription: "Плоды кубовидные, четырехгранные, весом 120-150 г, толщина стенок до 8 мм. Сладкие и ароматные.",
+        careInstructions: "Светолюбив и теплолюбив. Полив регулярный теплой водой. Требуется подвязка побегов.",
+        rating: 4,
+        plantAgain: "maybe",
+        notes: "Стенки сочные. Из-за холодного начала лета долго вызревали. Стоит сажать рассадой в теплицу посвежее."
+      },
+      {
+        id: "seed_4",
+        name: "Альбион",
+        emoji: "🍓",
+        category: "Клубника",
+        characteristics: "Ремонтантный сорт клубники (плодоносит волнами все лето с мая до заморозков). Мощный куст.",
+        fruitDescription: "Ягоды крупные (30-50 г), продолговатые, глянцевые, темно-красные. Мякоть плотная, ароматная.",
+        careInstructions: "Регулярный полив, мульчирование соломой или агроволокном, удаление усов.",
+        rating: 5,
+        plantAgain: "yes",
+        notes: "Давал потрясающие ягоды до самого октября! Плотные плоды хорошо транспортируются."
+      },
+      {
+        id: "seed_5",
+        name: "Фиолетовый Ереванский",
+        emoji: "🥬",
+        category: "Зелень",
+        characteristics: "Среднеспелый сорт базилика. Куст раскидистый, высотой 40-60 см со множеством побегов.",
+        fruitDescription: "Листья гладкие, фиолетовые, ароматные, с пикантным гвоздично-перечным вкусом.",
+        careInstructions: "Любит тепло и солнце. Регулярная срезка верхушек побегов увеличивает урожайность.",
+        rating: 4,
+        plantAgain: "yes",
+        notes: "Шикарный сорт базилика. Быстро отрастает после срезки, чудесен для свежих салатов и соуса песто."
+      }
+    ];
+  });
+
+  const [seedEditingId, setSeedEditingId] = useState<string | null>(null);
+  const [seedSearchQuery, setSeedSearchQuery] = useState<string>("");
+  const [seedCategoryFilter, setSeedCategoryFilter] = useState<string>("all");
+  const [isAddingSeed, setIsAddingSeed] = useState<boolean>(false);
+  const [seedForm, setSeedForm] = useState<Partial<SeedCatalogItem>>({
+    name: "",
+    emoji: "🍅",
+    category: "Томаты",
+    characteristics: "",
+    fruitDescription: "",
+    careInstructions: "",
+    rating: 5,
+    plantAgain: "yes",
+    notes: ""
+  });
+
+  useEffect(() => {
+    localStorage.setItem("eco_seed_catalog", JSON.stringify(seedCatalog));
+  }, [seedCatalog]);
+
+  const [selectedGreenhouseIdForEditor, setSelectedGreenhouseIdForEditor] = useState<string | null>(null);
+  const [selectedGreenhouseBedId, setSelectedGreenhouseBedId] = useState<string | null>(null);
+
+  const [activeGhDragId, setActiveGhDragId] = useState<string | null>(null);
+  const [activeGhResizeId, setActiveGhResizeId] = useState<string | null>(null);
+  const [activeGhResizeDir, setActiveGhResizeDir] = useState<string | null>(null);
+  const ghDragStartRef = useRef<{
+    initMouseX: number;
+    initMouseY: number;
+    initX: number;
+    initY: number;
+    initW: number;
+    initH: number;
+  }>({ initMouseX: 0, initMouseY: 0, initX: 0, initY: 0, initW: 0, initH: 0 });
+  const ghCanvasRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem("eco_greenhouse_beds", JSON.stringify(greenhouseBeds));
+  }, [greenhouseBeds]);
+
+  useEffect(() => {
+    if (!activeGhDragId && !activeGhResizeId) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const canvasEl = ghCanvasRef.current;
+      if (!canvasEl) return;
+      const rect = canvasEl.getBoundingClientRect();
+      const gh = planBuildings.find(item => item.id === selectedGreenhouseIdForEditor);
+      if (!gh) return;
+
+      const W_gh = gh.wMeters || 4;
+      const H_gh = gh.hMeters || 3;
+
+      const currentMouseX = e.clientX;
+      const currentMouseY = e.clientY;
+
+      const startMouseX = ghDragStartRef.current.initMouseX;
+      const startMouseY = ghDragStartRef.current.initMouseY;
+
+      const deltaXPixels = currentMouseX - startMouseX;
+      const deltaYPixels = currentMouseY - startMouseY;
+
+      const deltaXMeters = (deltaXPixels / rect.width) * W_gh;
+      const deltaYMeters = -(deltaYPixels / rect.height) * H_gh;
+
+      const startX = ghDragStartRef.current.initX;
+      const startY = ghDragStartRef.current.initY;
+      const startW = ghDragStartRef.current.initW;
+      const startH = ghDragStartRef.current.initH;
+
+      if (activeGhDragId) {
+        let newX = startX + deltaXMeters;
+        let newY = startY + deltaYMeters;
+
+        newX = parseFloat(Math.max(0, Math.min(W_gh - startW, newX)).toFixed(1));
+        newY = parseFloat(Math.max(0, Math.min(H_gh - startH, newY)).toFixed(1));
+
+        setGreenhouseBeds(prev => prev.map(b => {
+          if (b.id === activeGhDragId) {
+            return { ...b, xMeters: newX, yMeters: newY };
+          }
+          return b;
+        }));
+      } else if (activeGhResizeId) {
+        let newX = startX;
+        let newY = startY;
+        let newW = startW;
+        let newH = startH;
+
+        const dir = activeGhResizeDir || "";
+
+        if (dir.includes("e")) {
+          newW = startW + deltaXMeters;
+        }
+        if (dir.includes("w")) {
+          newW = startW - deltaXMeters;
+          newX = startX + deltaXMeters;
+        }
+        if (dir.includes("n")) {
+          newH = startH + deltaYMeters;
+        }
+        if (dir.includes("s")) {
+          newH = startH - deltaYMeters;
+          newY = startY + deltaYMeters;
+        }
+
+        const minSize = 0.2;
+        if (newW < minSize) {
+          if (dir.includes("w")) {
+            newX = startX + (startW - minSize);
+          }
+          newW = minSize;
+        }
+        if (newH < minSize) {
+          if (dir.includes("s")) {
+            newY = startY + (startH - minSize);
+          }
+          newH = minSize;
+        }
+
+        if (newX < 0) {
+          newW += newX;
+          newX = 0;
+        }
+        if (newY < 0) {
+          newH += newY;
+          newY = 0;
+        }
+        if (newX + newW > W_gh) {
+          newW = W_gh - newX;
+        }
+        if (newY + newH > H_gh) {
+          newH = H_gh - newY;
+        }
+
+        newX = parseFloat(newX.toFixed(1));
+        newY = parseFloat(newY.toFixed(1));
+        newW = parseFloat(newW.toFixed(1));
+        newH = parseFloat(newH.toFixed(1));
+
+        setGreenhouseBeds(prev => prev.map(b => {
+          if (b.id === activeGhResizeId) {
+            return {
+              ...b,
+              xMeters: newX,
+              yMeters: newY,
+              wMeters: newW,
+              hMeters: newH
+            };
+          }
+          return b;
+        }));
+      }
+    };
+
+    const handleMouseUp = () => {
+      setActiveGhDragId(null);
+      setActiveGhResizeId(null);
+      setActiveGhResizeDir(null);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [activeGhDragId, activeGhResizeId, activeGhResizeDir, selectedGreenhouseIdForEditor, planBuildings]);
 
   // Chronicles
   const [chronicles, setChronicles] = useState<ChronicleDiaryEntry[]>(() => {
@@ -963,10 +1265,8 @@ export default function EcosystemPortal({
   };
 
   const handleDeleteCompany = (id: string) => {
-    if (confirm("Вы действительно хотите удалить эту сервисную службу из списка обслуживания?")) {
-      setServiceCompanies(prev => prev.filter(c => c.id !== id));
-      if (activeQrCompany?.id === id) setActiveQrCompany(null);
-    }
+    setServiceCompanies(prev => prev.filter(c => c.id !== id));
+    if (activeQrCompany?.id === id) setActiveQrCompany(null);
   };
 
   const handleTriggerOnetimeAccess = (companyId: string) => {
@@ -1077,9 +1377,7 @@ export default function EcosystemPortal({
   };
 
   const handleDeleteServiceCompany = (id: string) => {
-    if (confirm("Вы уверены, что хотите удалить эту службу?")) {
-      setServiceCompanies(prev => prev.filter(item => item.id !== id));
-    }
+    setServiceCompanies(prev => prev.filter(item => item.id !== id));
   };
 
   // Handlers for Planogram Drawing Interaction
@@ -1227,9 +1525,7 @@ export default function EcosystemPortal({
   };
 
   const handleDeleteSecondaryBuilding = (id: string) => {
-    if (confirm("Вы уверены, что хотите удалить характеристики постройки?")) {
-      setSecondaryBuildings(prev => prev.filter(b => b.id !== id));
-    }
+    setSecondaryBuildings(prev => prev.filter(b => b.id !== id));
   };
 
   const appendPhotoToBuilding = (buildingId: string) => {
@@ -1463,115 +1759,123 @@ export default function EcosystemPortal({
               </p>
             </div>
           </div>
-
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-            <button
-              onClick={() => setIsTransferModalOpen(true)}
-              className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-[11px] rounded-lg transition-transform active:scale-95 flex items-center gap-1.5 cursor-pointer"
-              title="Передача цифрового паспорта новому владельцу при сделке"
-            >
-              <Share2 className="w-3.5 h-3.5" />
-              <span>Передать объект новому Собственнику</span>
-            </button>
-          </div>
         </div>
+
+        {/* Selected Object bar and actions - inside active object header */}
+        {activeObject && (
+          <div className="p-4 rounded-xl bg-white/5 border border-white/5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4 shadow-sm animate-fadeIn">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl p-1 bg-white/5 dark:bg-black/20 rounded-lg">
+                {activeObject.objectType === "house" ? "🏠" : 
+                 activeObject.objectType === "admin_building" ? "🏢" : 
+                 activeObject.objectType === "land" ? "🗺️" : 
+                 activeObject.objectType === "dacha" ? "🏡" : "📦"}
+              </span>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-extrabold text-sm text-white">{activeObject.name}</span>
+                  <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded font-mono text-zinc-300 font-bold">
+                    ID: {activeObject.id}
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-extrabold bg-emerald-500/10 px-1.5 py-0.5 rounded-full animate-pulse">
+                    ● Активный объект
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-400 font-medium font-sans">📍 {activeObject.address}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+              <button
+                onClick={() => setIsTransferModalOpen(true)}
+                className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs rounded-xl transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer justify-center flex-1 sm:flex-none"
+                title="Передать объект новому собственнику (при продаже/передаче)"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span>Передать объект новому собственнику</span>
+              </button>
+              <button
+                onClick={() => setSelectedObjectId("")}
+                className="px-3.5 py-1.5 bg-white/10 hover:bg-white/15 border border-white/10 text-xs font-black text-white rounded-xl flex items-center gap-1.5 transition cursor-pointer justify-center flex-1 sm:flex-none"
+              >
+                ⇄ Сменить объект
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* RE-ORDERED APP NAVIGATION (Chronicles first!) */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 pt-1">
           <button
             onClick={() => setActiveSubApp("chronicles")}
-            className={`p-3.5 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-between ${
+            className={`p-4 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-start h-full ${
               activeSubApp === "chronicles" 
                 ? "bg-gradient-to-br from-purple-600 to-purple-800 text-white border-purple-500 shadow-lg" 
-                : "bg-white/5 hover:bg-white/10 text-zinc-300 border-white/5"
+                : "bg-white/5 hover:bg-white/10 text-zinc-200 border-white/5"
             }`}
           >
-            <History className="w-5 h-5 mb-3 text-purple-400" />
-            <div>
-              <span className="font-extrabold text-xs block">1. История & Хроники усадьбы</span>
-              <span className="text-[9px] opacity-70 block">Фотодневник, вехи построек и идеи</span>
-            </div>
+            <History className="w-5 h-5 mb-2.5 text-purple-400 shrink-0" />
+            <span className="font-extrabold text-xs block leading-tight min-h-[32px] flex items-center">
+              1. История & Хроники усадьбы
+            </span>
+            <span className="text-[9px] opacity-70 block leading-normal mt-1 border-t border-white/5 pt-1">
+              Фотодневник, вехи построек и идеи
+            </span>
           </button>
 
           <button
             onClick={() => {
               setActiveSubApp("passport");
             }}
-            className={`p-3.5 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-between ${
+            className={`p-4 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-start h-full ${
               activeSubApp === "passport" 
                 ? "bg-gradient-to-br from-blue-600 to-blue-800 text-white border-blue-500 shadow-lg" 
-                : "bg-white/5 hover:bg-white/10 text-zinc-300 border-white/5"
+                : "bg-white/5 hover:bg-white/10 text-zinc-200 border-white/5"
             }`}
           >
-            <Home className="w-5 h-5 mb-3 text-blue-400" />
-            <div>
-              <span className="font-extrabold text-xs block">2. Цифровой паспорт объекта</span>
-              <span className="text-[9px] opacity-70 block">Оборудование, регламенты, акты</span>
-            </div>
+            <Home className="w-5 h-5 mb-2.5 text-blue-400 shrink-0" />
+            <span className="font-extrabold text-xs block leading-tight min-h-[32px] flex items-center">
+              2. Цифровой паспорт объекта
+            </span>
+            <span className="text-[9px] opacity-70 block leading-normal mt-1 border-t border-white/5 pt-1">
+              Оборудование, регламенты, акты
+            </span>
           </button>
 
           <button
             onClick={() => setActiveSubApp("garden")}
-            className={`p-3.5 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-between ${
+            className={`p-4 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-start h-full ${
               activeSubApp === "garden" 
                 ? "bg-gradient-to-br from-emerald-600 to-emerald-800 text-white border-emerald-500 shadow-lg" 
-                : "bg-white/5 hover:bg-white/10 text-zinc-300 border-white/5"
+                : "bg-white/5 hover:bg-white/10 text-zinc-200 border-white/5"
             }`}
           >
-            <Sprout className="w-5 h-5 mb-3 text-emerald-400" />
-            <div>
-              <span className="font-extrabold text-xs block">3. Мой Сад & Территория</span>
-              <span className="text-[9px] opacity-70 block">Интерактивный чертеж, уход, аудит</span>
-            </div>
+            <Sprout className="w-5 h-5 mb-2.5 text-emerald-400 shrink-0" />
+            <span className="font-extrabold text-xs block leading-tight min-h-[32px] flex items-center">
+              3. Мой Сад & Территория
+            </span>
+            <span className="text-[9px] opacity-70 block leading-normal mt-1 border-t border-white/5 pt-1">
+              Интерактивный чертеж, уход, аудит
+            </span>
           </button>
 
           <button
             onClick={() => setActiveSubApp("buildings")}
-            className={`p-3.5 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-between ${
+            className={`p-4 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-start h-full ${
               activeSubApp === "buildings" 
                 ? "bg-gradient-to-br from-amber-600 to-amber-800 text-white border-amber-500 shadow-lg" 
-                : "bg-white/5 hover:bg-white/10 text-zinc-300 border-white/5"
+                : "bg-white/5 hover:bg-white/10 text-zinc-200 border-white/5"
             }`}
           >
-            <Hammer className="w-5 h-5 mb-3 text-amber-400" />
-            <div>
-              <span className="font-extrabold text-xs block">4. Дополнительные строения</span>
-              <span className="text-[9px] opacity-70 block">Паспорт бань, беседок, гаражей и хозблоков</span>
-            </div>
+            <Hammer className="w-5 h-5 mb-2.5 text-amber-400 shrink-0" />
+            <span className="font-extrabold text-xs block leading-tight min-h-[32px] flex items-center">
+              4. Дополнительные строения
+            </span>
+            <span className="text-[9px] opacity-70 block leading-normal mt-1 border-t border-white/5 pt-1">
+              Паспорт бань, беседок и хозблоков
+            </span>
           </button>
         </div>
       </div>
-
-      {activeObject && (
-        <div className="p-4 rounded-xl bg-white dark:bg-zinc-900 border border-neutral-300/15 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
-          <div className="flex items-center gap-3">
-            <span className="text-2xl p-1 bg-neutral-100 dark:bg-zinc-800 rounded-lg">
-              {activeObject.objectType === "house" ? "🏠" : 
-               activeObject.objectType === "admin_building" ? "🏢" : 
-               activeObject.objectType === "land" ? "🗺️" : 
-               activeObject.objectType === "dacha" ? "🏡" : "📦"}
-            </span>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-extrabold text-sm text-neutral-900 dark:text-neutral-50">{activeObject.name}</span>
-                <span className="text-[10px] bg-neutral-100 dark:bg-zinc-800 px-2 py-0.5 rounded font-mono text-zinc-500 font-bold">
-                  ID: {activeObject.id}
-                </span>
-                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-extrabold bg-emerald-500/10 px-1.5 py-0.5 rounded-full">
-                  ● Активный объект экосистемы
-                </span>
-              </div>
-              <p className="text-xs text-zinc-500 font-medium">📍 {activeObject.address}</p>
-            </div>
-          </div>
-          <button
-            onClick={() => setSelectedObjectId("")}
-            className="px-3.5 py-1.5 bg-neutral-100 hover:bg-neutral-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-xs font-black text-neutral-800 dark:text-zinc-100 rounded-xl flex items-center gap-1.5 transition cursor-pointer self-stretch sm:self-auto justify-center"
-          >
-            ⇄ Сменить объект
-          </button>
-        </div>
-      )}
 
 
       {/* ======================================================= */}
@@ -1653,11 +1957,10 @@ export default function EcosystemPortal({
 
                           <button
                             onClick={() => {
-                              if (confirm("Удалить эту запись из хронологии вашего дома?")) {
-                                handleDeleteChronicle(ch.id);
-                              }
+                              handleDeleteChronicle(ch.id);
                             }}
-                            className="p-1 text-zinc-400 hover:text-red-500 rounded transition-colors"
+                            className="p-1 text-zinc-400 hover:text-red-500 rounded transition-colors cursor-pointer"
+                            title="Удалить запись из хронологии"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -2172,6 +2475,12 @@ export default function EcosystemPortal({
               className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "services" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
             >
               🚜 Сервисы & Садовники
+            </button>
+            <button
+              onClick={() => setGardenSubTab("seeds")}
+              className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "seeds" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
+            >
+              🎒 Каталог семян & сортов
             </button>
           </div>
 
@@ -3304,6 +3613,40 @@ export default function EcosystemPortal({
                           </select>
                         </div>
 
+                        {/* Special Greenhouse planting layout button */}
+                        {b.subType === "greenhouse" && (
+                          <div className="p-3 bg-emerald-500/5 dark:bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-2">
+                            <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 block uppercase font-mono">
+                              🌱 Доступен интерактивный план
+                            </span>
+                            <p className="text-[10px] text-zinc-500 leading-tight">
+                              Для этой теплицы можно спроектировать внутренние грядки, распределить сорта посадок (томаты, огурцы, зелень) и зафиксировать их координаты.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const matchedBeds = greenhouseBeds.filter(x => x.greenhouseId === b.id);
+                                if (matchedBeds.length === 0) {
+                                  const defaultBeds = greenhouseBeds.filter(x => x.greenhouseId === "pb_greenhouse_default");
+                                  if (defaultBeds.length > 0) {
+                                    const copiedBeds = defaultBeds.map(db => ({
+                                      ...db,
+                                      id: `ghb_${db.id}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                                      greenhouseId: b.id
+                                    }));
+                                    setGreenhouseBeds(prev => [...prev, ...copiedBeds]);
+                                  }
+                                }
+                                setSelectedGreenhouseIdForEditor(b.id);
+                                setSelectedGreenhouseBedId(null);
+                              }}
+                              className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1 shadow-sm"
+                            >
+                              <span>🌿 Спланировать посадки ({greenhouseBeds.filter(x => x.greenhouseId === b.id).length || 0})</span>
+                            </button>
+                          </div>
+                        )}
+
                         {/* Style / Fill Presets */}
                         <div>
                           <label className="block font-bold text-zinc-400 text-[9px] uppercase mb-1">Цветовая гамма на схеме:</label>
@@ -3550,11 +3893,10 @@ export default function EcosystemPortal({
                         <button
                           type="button"
                           onClick={() => {
-                            if (confirm("Удалить этот садовый проект из цифрового каталога?")) {
-                              setGardens(prev => prev.filter(x => x.id !== g.id));
-                            }
+                            setGardens(prev => prev.filter(x => x.id !== g.id));
                           }}
-                          className="absolute top-4 right-4 text-zinc-400 hover:text-red-500"
+                          className="absolute top-4 right-4 text-zinc-400 hover:text-red-500 cursor-pointer"
+                          title="Удалить этот садовый проект"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -3859,6 +4201,493 @@ export default function EcosystemPortal({
                 </div>
 
               </div>
+
+            </div>
+          )}
+
+          {gardenSubTab === "seeds" && (
+            <div className="space-y-6 animate-fadeIn text-xs text-neutral-850 dark:text-neutral-100">
+              
+              {/* Top Banner and Filter Row */}
+              <div className="p-5 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-neutral-850 rounded-xl space-y-4 shadow-sm">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <h4 className="font-extrabold text-base text-neutral-950 dark:text-white flex items-center gap-2">
+                      🎒 Электронный реестр семян, сортов и саженцев
+                    </h4>
+                    <p className="text-[11px] text-zinc-500">
+                      Сохраняйте характеристики сортов, особенности ухода и личные отзывы о плодах. Оценивайте успешность выращивания, чтобы сформировать идеальный план посадок на будущие сезоны.
+                    </p>
+                  </div>
+                  
+                  {!isAddingSeed && !seedEditingId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSeedForm({
+                          name: "",
+                          emoji: "🍅",
+                          category: "Томаты",
+                          characteristics: "",
+                          fruitDescription: "",
+                          careInstructions: "",
+                          rating: 5,
+                          plantAgain: "yes",
+                          notes: ""
+                        });
+                        setIsAddingSeed(true);
+                      }}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-lg cursor-pointer flex items-center justify-center gap-1.5 transition-all shadow-sm shrink-0"
+                    >
+                      <Plus className="w-4 h-4 text-white" />
+                      <span>Добавить новый сорт</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Filters view */}
+                {!isAddingSeed && !seedEditingId && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t border-neutral-100 dark:border-zinc-850">
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-zinc-400 pointer-events-none" />
+                      <input
+                        type="text"
+                        placeholder="Поиск по сорту или заметкам..."
+                        value={seedSearchQuery}
+                        onChange={(e) => setSeedSearchQuery(e.target.value)}
+                        className="w-full text-xs pl-8 pr-3 py-2 bg-neutral-50 dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-800 rounded-lg outline-none focus:ring-1 focus:ring-emerald-500 font-medium text-neutral-900 dark:text-neutral-50"
+                      />
+                    </div>
+
+                    <div>
+                      <select
+                        value={seedCategoryFilter}
+                        onChange={(e) => setSeedCategoryFilter(e.target.value)}
+                        className="w-full text-xs p-2 bg-neutral-50 dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-800 rounded-lg outline-none focus:ring-1 focus:ring-emerald-500 font-bold text-neutral-800 dark:text-neutral-100 cursor-pointer"
+                      >
+                        <option value="all">🥦 Все культуры</option>
+                        <option value="Томаты">🍅 Томаты</option>
+                        <option value="Огурцы">🥒 Огурцы</option>
+                        <option value="Перцы">🫑 Перцы</option>
+                        <option value="Ягоды">🍓 Ягоды</option>
+                        <option value="Зелень">🥬 Зелень</option>
+                        <option value="Другое">🌱 Другие культуры</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] uppercase font-black text-neutral-400 font-mono shrink-0">Всего в базе:</span>
+                      <span className="py-1 px-2.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono font-black text-xs rounded-lg">
+                        {seedCatalog.length} сортов
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Form View for Adding / Editing Category seeds */}
+              {(isAddingSeed || seedEditingId) && (
+                <div className="p-6 bg-white dark:bg-zinc-900 border border-neutral-250 dark:border-neutral-800 rounded-xl space-y-4 shadow-md animate-fadeIn text-left">
+                  <div className="flex items-center justify-between border-b border-neutral-150 dark:border-zinc-800 pb-3">
+                    <h4 className="font-extrabold text-sm text-neutral-950 dark:text-white flex items-center gap-2">
+                      <span>{seedEditingId ? "✏️ Редактирование сорта" : "🌱 Добавление нового сорта в каталог"}</span>
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddingSeed(false);
+                        setSeedEditingId(null);
+                      }}
+                      className="text-zinc-400 hover:text-red-500 font-bold text-xs uppercase cursor-pointer"
+                    >
+                      Отмена
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Name */}
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold text-neutral-500 uppercase">Название / Сорт растения (например, Бычье сердце, Кураж F1):</label>
+                      <input
+                        type="text"
+                        value={seedForm.name || ""}
+                        onChange={(e) => setSeedForm({ ...seedForm, name: e.target.value })}
+                        placeholder="Например, Генерал F1, Амурский тигр"
+                        className="w-full p-2.5 bg-neutral-50 dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-800 rounded-lg text-xs font-bold text-neutral-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                    </div>
+
+                    {/* Category & Emoji selectors */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="block text-[10px] font-bold text-neutral-500 uppercase">Категория:</label>
+                        <select
+                          value={seedForm.category || "Томаты"}
+                          onChange={(e) => {
+                            const cat = e.target.value;
+                            let emo = "🌱";
+                            if (cat === "Томаты") emo = "🍅";
+                            else if (cat === "Огурцы") emo = "🥒";
+                            else if (cat === "Перцы") emo = "🫑";
+                            else if (cat === "Ягоды") emo = "🍓";
+                            else if (cat === "Зелень") emo = "🥬";
+                            setSeedForm({ ...seedForm, category: cat, emoji: emo });
+                          }}
+                          className="w-full p-2.5 bg-neutral-50 dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-800 rounded-lg text-xs font-bold text-neutral-900 dark:text-white cursor-pointer"
+                        >
+                          <option value="Томаты">🍅 Томаты</option>
+                          <option value="Огурцы">🥒 Огурцы</option>
+                          <option value="Перцы">🫑 Перцы</option>
+                          <option value="Ягоды">🍓 Ягоды</option>
+                          <option value="Зелень">🥬 Зелень</option>
+                          <option value="Другое">🌱 Другое</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-[10px] font-bold text-neutral-500 uppercase">Иконка (Emoji):</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={seedForm.emoji || "🍅"}
+                            onChange={(e) => setSeedForm({ ...seedForm, emoji: e.target.value })}
+                            className="w-12 p-2 bg-neutral-50 dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-800 rounded-lg text-center text-sm font-bold text-neutral-900 dark:text-white"
+                          />
+                          <div className="flex flex-wrap gap-1 max-w-[120px]">
+                            {["🍅", "🥒", "🫑", "🍓", "🥬", "🍆", "🥕", "🌶️", "🍉", "🍈", "🌱"].map((em) => (
+                              <button
+                                key={em}
+                                type="button"
+                                onClick={() => setSeedForm({ ...seedForm, emoji: em })}
+                                className={`text-base p-0.5 hover:scale-125 cursor-pointer transition-transform ${seedForm.emoji === em ? "border border-emerald-500 rounded bg-emerald-500/10" : ""}`}
+                              >
+                                {em}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Characteristics */}
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold text-neutral-500 uppercase">Характеристики сорта (срок созревания, параметры куста):</label>
+                      <textarea
+                        value={seedForm.characteristics || ""}
+                        onChange={(e) => setSeedForm({ ...seedForm, characteristics: e.target.value })}
+                        placeholder="Например, Раннеспелый, детерминантный куст до 80 см, не требует пасынкования."
+                        rows={3}
+                        className="w-full p-2.5 bg-neutral-50 dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-800 rounded-lg text-xs text-neutral-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                    </div>
+
+                    {/* Fruit Description */}
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold text-neutral-500 uppercase">Описание плодов (величины, вкус, назначение):</label>
+                      <textarea
+                        value={seedForm.fruitDescription || ""}
+                        onChange={(e) => setSeedForm({ ...seedForm, fruitDescription: e.target.value })}
+                        placeholder="Например, Плоды ярко-желтые, массой 100-150г, плотные, сочные, сладкие. Идеальны для маринования."
+                        rows={3}
+                        className="w-full p-2.5 bg-neutral-50 dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-800 rounded-lg text-xs text-neutral-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                    </div>
+
+                    {/* Special Care */}
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold text-neutral-500 uppercase">Особенности ухода (полив, прищипывание, удобрения):</label>
+                      <textarea
+                        value={seedForm.careInstructions || ""}
+                        onChange={(e) => setSeedForm({ ...seedForm, careInstructions: e.target.value })}
+                        placeholder="Например, Требует повышенных доз фосфорно-калийных удобрений при цветении, полив по графику 2 раза в неделю."
+                        rows={2}
+                        className="w-full p-2.5 bg-neutral-50 dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-800 rounded-lg text-xs text-neutral-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                    </div>
+
+                    {/* History notes */}
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold text-neutral-500 uppercase">Личные заметки, история выращивания и отзывы сезона:</label>
+                      <textarea
+                        value={seedForm.notes || ""}
+                        onChange={(e) => setSeedForm({ ...seedForm, notes: e.target.value })}
+                        placeholder="Например, Высаживали в теплицу в мае 2025. Урожайность составила 4кг с куста. Из плюсов — не болели фитофторой. Очень довольны."
+                        rows={2}
+                        className="w-full p-2.5 bg-neutral-50 dark:bg-zinc-950 border border-neutral-250 dark:border-zinc-800 rounded-lg text-xs text-neutral-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                    </div>
+
+                    {/* User evaluation rating */}
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold text-neutral-500 uppercase">Субъективная оценка сорта (Звёзд):</label>
+                      <div className="flex items-center gap-2">
+                        {[1, 2, 3, 4, 5].map((starVal) => (
+                          <button
+                            key={starVal}
+                            type="button"
+                            onClick={() => setSeedForm({ ...seedForm, rating: starVal })}
+                            className="p-1 px-1.5 focus:outline-none cursor-pointer"
+                          >
+                            <Star
+                              className={`w-6 h-6 transition-all ${
+                                starVal <= (seedForm.rating || 5)
+                                  ? "text-yellow-500 fill-yellow-500 scale-110"
+                                  : "text-stone-300 dark:text-zinc-700"
+                              }`}
+                            />
+                          </button>
+                        ))}
+                        <span className="text-xs font-black font-mono ml-2 text-neutral-900 dark:text-white">({seedForm.rating || 5} из 5 звёзд)</span>
+                      </div>
+                    </div>
+
+                    {/* Decision to plant again */}
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold text-neutral-500 uppercase">Решение о повторной высадке в будущем:</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSeedForm({ ...seedForm, plantAgain: "yes" })}
+                          className={`p-2.5 rounded-lg border text-xs font-bold cursor-pointer transition-all ${
+                            seedForm.plantAgain === "yes"
+                              ? "bg-emerald-500/10 border-emerald-500 text-emerald-600 dark:text-emerald-400 font-extrabold"
+                              : "bg-neutral-50 border-neutral-200 dark:bg-zinc-950 dark:border-zinc-800 text-zinc-500"
+                          }`}
+                        >
+                          👍 Да, сажать снова
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSeedForm({ ...seedForm, plantAgain: "maybe" })}
+                          className={`p-2.5 rounded-lg border text-xs font-bold cursor-pointer transition-all ${
+                            seedForm.plantAgain === "maybe"
+                              ? "bg-amber-500/10 border-amber-500 text-amber-600 dark:text-amber-400 font-extrabold"
+                              : "bg-neutral-50 border-neutral-200 dark:bg-zinc-950 dark:border-zinc-800 text-zinc-500"
+                          }`}
+                        >
+                          ❓ Под вопросом
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSeedForm({ ...seedForm, plantAgain: "no" })}
+                          className={`p-2.5 rounded-lg border text-xs font-bold cursor-pointer transition-all ${
+                            seedForm.plantAgain === "no"
+                              ? "bg-red-500/10 border-red-500 text-red-600 dark:text-red-400 font-extrabold"
+                              : "bg-neutral-50 border-neutral-200 dark:bg-zinc-950 dark:border-zinc-800 text-zinc-500"
+                          }`}
+                        >
+                          👎 Нет, больше не сажать
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 justify-end pt-4 border-t border-neutral-150 dark:border-zinc-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddingSeed(false);
+                        setSeedEditingId(null);
+                      }}
+                      className="px-4 py-2 border rounded-lg text-neutral-600 font-bold hover:bg-neutral-50 dark:border-zinc-700 dark:text-neutral-350 dark:hover:bg-zinc-800 cursor-pointer"
+                    >
+                      Отмена
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!seedForm.name) {
+                          alert("Пожалуйста, введите название или сорт растения.");
+                          return;
+                        }
+                        if (seedEditingId) {
+                          // Update
+                          setSeedCatalog(prev => prev.map(item => item.id === seedEditingId ? { ...item, ...seedForm } as SeedCatalogItem : item));
+                        } else {
+                          // Add new
+                          const newItem: SeedCatalogItem = {
+                            id: `seed_${Date.now()}`,
+                            name: seedForm.name,
+                            emoji: seedForm.emoji || "🍅",
+                            category: seedForm.category || "Томаты",
+                            characteristics: seedForm.characteristics || "",
+                            fruitDescription: seedForm.fruitDescription || "",
+                            careInstructions: seedForm.careInstructions || "",
+                            rating: seedForm.rating || 5,
+                            plantAgain: seedForm.plantAgain || "yes",
+                            notes: seedForm.notes || ""
+                          };
+                          setSeedCatalog(prev => [...prev, newItem]);
+                        }
+                        setIsAddingSeed(false);
+                        setSeedEditingId(null);
+                      }}
+                      className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-extrabold cursor-pointer transition-all"
+                    >
+                      💾 Сохранить в каталог
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Catalog Grid of Varieties */}
+              {!isAddingSeed && !seedEditingId && (() => {
+                const filteredSeeds = seedCatalog.filter(seed => {
+                  const matchSearch = seed.name.toLowerCase().includes(seedSearchQuery.toLowerCase()) || 
+                                     (seed.characteristics || "").toLowerCase().includes(seedSearchQuery.toLowerCase()) ||
+                                     (seed.fruitDescription || "").toLowerCase().includes(seedSearchQuery.toLowerCase()) ||
+                                     (seed.notes || "").toLowerCase().includes(seedSearchQuery.toLowerCase());
+                  const matchCat = seedCategoryFilter === "all" || seed.category === seedCategoryFilter;
+                  return matchSearch && matchCat;
+                });
+
+                if (filteredSeeds.length === 0) {
+                  return (
+                    <div className="p-12 text-center bg-white dark:bg-zinc-900 border rounded-xl space-y-3">
+                      <p className="text-zinc-500 font-bold text-sm">Сорта с такими критериями не найдены в картотеке.</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSeedSearchQuery("");
+                          setSeedCategoryFilter("all");
+                        }}
+                        className="text-emerald-500 font-extrabold hover:underline"
+                      >
+                        Сбросить фильтры поиска
+                      </button>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5 text-left">
+                    {filteredSeeds.map((seed) => {
+                      return (
+                        <div
+                          key={seed.id}
+                          className="p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-neutral-800 space-y-4 relative shadow-sm hover:shadow-md transition-all flex flex-col justify-between"
+                        >
+                          <div>
+                            {/* Header details: emoji, category, name, and decision */}
+                            <div className="flex items-start justify-between gap-2 border-b border-neutral-100 dark:border-zinc-850 pb-2.5">
+                              <div className="flex items-center gap-2">
+                                <span className="text-2xl select-none" role="img">{seed.emoji}</span>
+                                <div>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <h4 className="font-extrabold text-sm text-neutral-900 dark:text-neutral-50">{seed.name}</h4>
+                                    <span className="px-2 py-0.5 rounded-full font-mono text-[8px] font-black uppercase tracking-wider bg-neutral-100 dark:bg-zinc-800 text-stone-600 dark:text-zinc-300">
+                                      {seed.category}
+                                    </span>
+                                  </div>
+                                  
+                                  {/* Star row */}
+                                  <div className="flex items-center gap-0.5 mt-0.5">
+                                    {Array.from({ length: 5 }).map((_, i) => (
+                                      <Star
+                                        key={i}
+                                        className={`w-3.5 h-3.5 ${
+                                          i < (seed.rating || 5)
+                                            ? "text-yellow-400 fill-yellow-400"
+                                            : "text-stone-200 dark:text-zinc-700"
+                                        }`}
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div>
+                                {seed.plantAgain === "yes" ? (
+                                  <span className="px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 rounded-lg text-[9px] font-black uppercase font-mono flex items-center gap-1">
+                                    <span>💚 Сажать снова</span>
+                                  </span>
+                                ) : seed.plantAgain === "no" ? (
+                                  <span className="px-2.5 py-1 bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 rounded-lg text-[9px] font-black uppercase font-mono flex items-center gap-1">
+                                    <span>❌ Больше не сажать</span>
+                                  </span>
+                                ) : (
+                                  <span className="px-2.5 py-1 bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 rounded-lg text-[9px] font-black uppercase font-mono flex items-center gap-1">
+                                    <span>🌗 Под вопросом</span>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Specifications breakdown */}
+                            <div className="space-y-2.5 pt-2.5">
+                              {seed.characteristics && (
+                                <div className="space-y-0.5">
+                                  <span className="block text-[8px] text-neutral-400 uppercase font-black tracking-wider">📋 Характеристики куста:</span>
+                                  <p className="text-[10.5px] text-neutral-800 dark:text-neutral-200 font-medium leading-relaxed bg-zinc-500/5 p-2 px-2.5 rounded-lg">
+                                    {seed.characteristics}
+                                  </p>
+                                </div>
+                              )}
+
+                              {seed.fruitDescription && (
+                                <div className="space-y-0.5">
+                                  <span className="block text-[8px] text-neutral-400 uppercase font-black tracking-wider">🍎 Описание и вкус плодов:</span>
+                                  <p className="text-[10.5px] text-neutral-850 dark:text-neutral-100 font-medium leading-relaxed bg-emerald-500/5 dark:bg-emerald-500/10 p-2 px-2.5 rounded-lg border border-emerald-500/10">
+                                    {seed.fruitDescription}
+                                  </p>
+                                </div>
+                              )}
+
+                              {seed.careInstructions && (
+                                <div className="space-y-0.5">
+                                  <span className="block text-[8px] text-neutral-400 uppercase font-black tracking-wider">🩺 Режим ухода и особенности:</span>
+                                  <p className="text-[10.5px] text-cyan-700 dark:text-sky-305 font-medium leading-relaxed bg-sky-500/5 p-2 px-2.5 rounded-lg">
+                                    {seed.careInstructions}
+                                  </p>
+                                </div>
+                              )}
+
+                              {seed.notes && (
+                                <div className="space-y-0.5 border-t border-dashed border-stone-200 dark:border-zinc-800 pt-2 bg-amber-500/5 p-2 px-2.5 rounded-lg">
+                                  <span className="block text-[8.5px] text-amber-600 dark:text-amber-400 uppercase font-black tracking-wider flex items-center gap-1">
+                                    <span>📝 История выращивания и отзывы:</span>
+                                  </span>
+                                  <p className="text-[10.5px] text-neutral-700 dark:text-zinc-300 italic leading-snug">
+                                    « {seed.notes} »
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Actions: Edit / Delete */}
+                          <div className="flex items-center justify-between border-t border-neutral-100 dark:border-zinc-850 pt-3 mt-2.5">
+                            <span className="text-[8px] font-mono text-zinc-400">ID: {seed.id}</span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSeedForm(seed);
+                                  setSeedEditingId(seed.id);
+                                }}
+                                className="px-2.5 py-1 text-[10px] font-bold text-neutral-600 dark:text-neutral-350 hover:text-emerald-500 dark:hover:text-emerald-400 border border-neutral-200 hover:border-emerald-500/20 dark:border-zinc-800 rounded-lg bg-neutral-50/50 dark:bg-black/20 cursor-pointer transition-colors"
+                              >
+                                Редактировать
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (confirm(`Вы уверены, что хотите удалить сорт "${seed.name}" из картотеки?`)) {
+                                    setSeedCatalog(prev => prev.filter(item => item.id !== seed.id));
+                                  }
+                                }}
+                                className="px-2 py-1 text-[10px] font-bold text-red-500 hover:text-red-700 bg-red-500/5 hover:bg-red-500/10 border border-red-500/10 rounded-lg cursor-pointer transition-colors"
+                              >
+                                Удалить
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
 
             </div>
           )}
@@ -4248,6 +5077,20 @@ export default function EcosystemPortal({
                 <span>Прочитано: 125 раз</span>
                 <span className="text-purple-400 font-extrabold">Летопись усадьбы</span>
               </div>
+            </div>
+
+            {/* Real Active Web Link */}
+            <div className="p-3 bg-neutral-50 dark:bg-black/25 rounded-2xl border border-neutral-100 dark:border-zinc-800 text-center space-y-1">
+              <span className="text-[10px] font-bold text-zinc-400 block uppercase font-mono text-left pl-1">Активная веб-ссылка публикации:</span>
+              <a 
+                href={`https://digital-diary.estate/p/${shareEntry.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs font-extrabold text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300 underline break-all inline-block hover:scale-[1.01] transition-transform"
+                title="Открыть публикацию на новой вкладке"
+              >
+                https://digital-diary.estate/p/{shareEntry.id}
+              </a>
             </div>
 
             {/* Copy button */}
@@ -4705,6 +5548,918 @@ export default function EcosystemPortal({
           </div>
         </div>
       )}
+
+
+      {/* ======================================================= */}
+      {/* INTERACTIVE GREENHOUSE PLANTING PLAN MODAL */}
+      {selectedGreenhouseIdForEditor && (() => {
+        const gh = planBuildings.find(item => item.id === selectedGreenhouseIdForEditor);
+        if (!gh) return null;
+
+        const W_gh = gh.wMeters || 4;
+        const H_gh = gh.hMeters || 3;
+
+        // Filter beds belonging to this greenhouse
+        const beds = greenhouseBeds.filter(b => b.greenhouseId === selectedGreenhouseIdForEditor);
+        const selectedBed = beds.find(b => b.id === selectedGreenhouseBedId);
+
+        const cropPresets = [
+          { emoji: "🍅", name: "Томат Черри", label: "Томаты" },
+          { emoji: "🥒", name: "Огурец Корнишон", label: "Огурцы" },
+          { emoji: "🫑", name: "Перец Сладкий", label: "Перцы" },
+          { emoji: "🍓", name: "Клубника Садовая", label: "Клубника" },
+          { emoji: "🥬", name: "Листовой Салат", label: "Зелень" },
+          { emoji: "🍆", name: "Баклажан Рома", label: "Баклажаны" },
+          { emoji: "🥕", name: "Редис Красный", label: "Редис / Морковь" },
+        ];
+
+        const handleAddBed = (emoji: string, defaultName: string, labelText: string) => {
+          const wVal = 0.8;
+          const hVal = 1.2;
+          // sequence offset
+          const offset = (beds.length % 3) * 0.5;
+          const newBed: GreenhouseBed = {
+            id: `ghb_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            greenhouseId: selectedGreenhouseIdForEditor,
+            label: `${labelText} грядка`,
+            plantName: defaultName,
+            emoji: emoji,
+            xMeters: Math.min(W_gh - wVal, 0.5 + offset),
+            yMeters: Math.min(H_gh - hVal, 0.5 + offset),
+            wMeters: wVal,
+            hMeters: hVal
+          };
+          setGreenhouseBeds(prev => [...prev, newBed]);
+          setSelectedGreenhouseBedId(newBed.id);
+        };
+
+        const handleUpdateBed = (bedId: string, fields: Partial<GreenhouseBed>) => {
+          setGreenhouseBeds(prev => prev.map(item => {
+            if (item.id !== bedId) return item;
+            const merged = { ...item, ...fields };
+            const wVal = Math.max(0.2, Math.min(W_gh, merged.wMeters || 0.2));
+            const hVal = Math.max(0.2, Math.min(H_gh, merged.hMeters || 0.2));
+            const xVal = Math.max(0, Math.min(W_gh - wVal, merged.xMeters || 0));
+            const yVal = Math.max(0, Math.min(H_gh - hVal, merged.yMeters || 0));
+            return {
+              ...merged,
+              wMeters: parseFloat(wVal.toFixed(1)),
+              hMeters: parseFloat(hVal.toFixed(1)),
+              xMeters: parseFloat(xVal.toFixed(1)),
+              yMeters: parseFloat(yVal.toFixed(1))
+            };
+          }));
+        };
+
+        const handleNudgeBed = (direction: "left" | "right" | "up" | "down") => {
+          if (!selectedBed) return;
+          let dx = 0;
+          let dy = 0;
+          if (direction === "left") dx = -0.1;
+          if (direction === "right") dx = 0.1;
+          if (direction === "down") dy = -0.1;
+          if (direction === "up") dy = 0.1;
+
+          handleUpdateBed(selectedBed.id, {
+            xMeters: (selectedBed.xMeters || 0) + dx,
+            yMeters: (selectedBed.yMeters || 0) + dy
+          });
+        };
+
+        const handleDeleteBed = (bedId: string) => {
+          setGreenhouseBeds(prev => prev.filter(x => x.id !== bedId));
+          if (selectedGreenhouseBedId === bedId) setSelectedGreenhouseBedId(null);
+        };
+
+        const handleClearAllBeds = () => {
+          if (confirm("Вы действительно хотите полностью очистить схему посадок в этой теплице?")) {
+            setGreenhouseBeds(prev => prev.filter(x => x.greenhouseId !== selectedGreenhouseIdForEditor));
+            setSelectedGreenhouseBedId(null);
+          }
+        };
+
+        // Click on greenhouse dirt grid
+        const handleGridClick = (e: React.MouseEvent<HTMLDivElement>) => {
+          // ensure we only trigger on main container click, not children
+          if (e.target !== e.currentTarget) return;
+
+          const rect = e.currentTarget.getBoundingClientRect();
+          const clickX = e.clientX - rect.left;
+          const clickY = e.clientY - rect.top;
+
+          // Convert to meters
+          const xM = parseFloat(((clickX / rect.width) * W_gh).toFixed(1));
+          const yM = parseFloat((((rect.height - clickY) / rect.height) * H_gh).toFixed(1));
+
+          const wVal = 0.8;
+          const hVal = 1.2;
+
+          // Place tomato bed as default on empty click
+          const newBed: GreenhouseBed = {
+            id: `ghb_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            greenhouseId: selectedGreenhouseIdForEditor,
+            label: `Грядка ${beds.length + 1}`,
+            plantName: "Томат Черри",
+            emoji: "🍅",
+            xMeters: Math.max(0, Math.min(W_gh - wVal, xM - wVal / 2)),
+            yMeters: Math.max(0, Math.min(H_gh - hVal, yM - hVal / 2)),
+            wMeters: wVal,
+            hMeters: hVal
+          };
+
+          setGreenhouseBeds(prev => [...prev, newBed]);
+          setSelectedGreenhouseBedId(newBed.id);
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-black/75 backdrop-blur-md flex items-center justify-center p-2 sm:p-4">
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl sm:rounded-3xl max-w-5xl w-full border border-neutral-200 dark:border-zinc-800 shadow-2xl flex flex-col md:flex-row overflow-hidden animate-scaleUp max-h-[96vh] md:max-h-[90vh]">
+              
+              {/* LEFT COLUMN: INTERACTIVE DESIGNER MAP */}
+              <div className="flex-grow flex-shrink p-4 sm:p-6 flex flex-col justify-between border-b md:border-b-0 md:border-r border-neutral-200 dark:border-zinc-800 bg-neutral-50 dark:bg-black/10 overflow-y-auto min-h-0">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-1.5">
+                    <span className="p-1.5 bg-emerald-100 dark:bg-emerald-950/40 rounded-lg text-emerald-600 block">🌱</span>
+                    <div>
+                      <h3 className="font-extrabold text-xs sm:text-sm text-neutral-900 dark:text-neutral-50 flex items-center gap-1 flex-wrap">
+                        <span>Схема посадок: {gh.label}</span>
+                        <span className="text-[10px] font-mono bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded">
+                          {W_gh}м x {H_gh}м
+                        </span>
+                      </h3>
+                      <p className="text-[9px] sm:text-[10px] text-zinc-400 leading-tight">
+                        Координатная сетка (шаг 0.5м). Зажмите грядку для перемещения или потяните маркеры на углах для изменения размеров.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Visual Grid Area */}
+                  <div className="relative w-full max-w-xs sm:max-w-sm md:max-w-md mx-auto border-4 border-amber-940/30 dark:border-zinc-800 rounded-2xl overflow-hidden shadow-inner bg-[#f3ede3] dark:bg-zinc-950/70 p-0.5" style={{ touchAction: "none" }}>
+                    
+                    {/* The click target container for soil */}
+                    <div 
+                      ref={ghCanvasRef}
+                      onClick={handleGridClick}
+                      className="relative w-full cursor-crosshair overflow-hidden rounded-xl transition-all"
+                      style={{ 
+                        aspectRatio: `${W_gh}/${H_gh}`,
+                        backgroundSize: '20px 20px',
+                        backgroundImage: 'radial-gradient(circle, rgba(139, 92, 26, 0.15) 1px, transparent 1px)' 
+                      }}
+                    >
+                      {/* Grid Lines Overlay representing actual meters */}
+                      <div className="absolute inset-0 pointer-events-none opacity-25 border border-amber-900/10">
+                        {Array.from({ length: Math.ceil(W_gh * 2) }).map((_, i) => (
+                          <div 
+                            key={`grid_x_${i}`}
+                            className="absolute bg-amber-900/30"
+                            style={{ 
+                              left: `${(i * 0.5 / W_gh) * 100}%`, 
+                              width: '1px', 
+                              top: 0, 
+                              bottom: 0 
+                            }}
+                          />
+                        ))}
+                        {Array.from({ length: Math.ceil(H_gh * 2) }).map((_, i) => (
+                          <div 
+                            key={`grid_y_${i}`}
+                            className="absolute bg-amber-900/30"
+                            style={{ 
+                              bottom: `${(i * 0.5 / H_gh) * 100}%`, 
+                              height: '1px', 
+                              left: 0, 
+                              right: 0 
+                            }}
+                          />
+                        ))}
+                      </div>
+
+                      {/* Placed Beds on Greenhouse Layout */}
+                      {beds.map((bItem) => {
+                        const isSelected = selectedGreenhouseBedId === bItem.id;
+                        const lPercent = (bItem.xMeters / W_gh) * 100;
+                        const wPercent = (bItem.wMeters / W_gh) * 100;
+                        const hPercent = (bItem.hMeters / H_gh) * 100;
+                        const tPercent = ((H_gh - bItem.yMeters - bItem.hMeters) / H_gh) * 100;
+
+                        return (
+                          <div
+                            key={bItem.id}
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              setSelectedGreenhouseBedId(bItem.id);
+                            }}
+                            onMouseDown={(e) => {
+                              // start dragging the bed
+                              e.stopPropagation();
+                              setSelectedGreenhouseBedId(bItem.id);
+                              setActiveGhDragId(bItem.id);
+                              setActiveGhResizeId(null);
+                              ghDragStartRef.current = {
+                                initMouseX: e.clientX,
+                                initMouseY: e.clientY,
+                                initX: bItem.xMeters,
+                                initY: bItem.yMeters,
+                                initW: bItem.wMeters,
+                                initH: bItem.hMeters
+                              };
+                            }}
+                            className={`absolute rounded-xl border-2 select-none flex flex-col justify-between p-1.5 transition-all text-neutral-800 dark:text-neutral-100 ${
+                              isSelected 
+                                ? "border-emerald-500 bg-emerald-50/95 dark:bg-emerald-950/40 shadow-lg ring-2 ring-emerald-300 dark:ring-emerald-800 scale-[1.01] z-20 cursor-move" 
+                                : "border-stone-450 bg-stone-100/90 dark:bg-zinc-900/90 hover:border-stone-500 z-10 cursor-pointer"
+                            }`}
+                            style={{
+                              left: `${lPercent}%`,
+                              top: `${tPercent}%`,
+                              width: `${wPercent}%`,
+                              height: `${hPercent}%`
+                            }}
+                          >
+                            {bItem.zones && bItem.zones.length > 0 ? (
+                              <div className="absolute inset-0 flex flex-col rounded-[10px] overflow-hidden bg-white/40 dark:bg-zinc-950/40">
+                                {bItem.zones.map((zone, zIdx) => {
+                                  const totalZRatio = bItem.zones?.reduce((acc, curr) => acc + curr.ratio, 0) || 1;
+                                  const zPercent = ((zone.ratio || 10) / totalZRatio) * 100;
+                                  return (
+                                    <div
+                                      key={zone.id || zIdx}
+                                      className="flex-grow flex items-center justify-between px-1.5 border-b last:border-b-0 border-dashed border-stone-300 dark:border-zinc-700 min-h-0 overflow-hidden"
+                                      style={{ height: `${zPercent}%` }}
+                                    >
+                                      <div className="flex items-center gap-1 min-w-0">
+                                        <span className="text-xs shrink-0 select-none">{zone.emoji || "🌱"}</span>
+                                        <span className="text-[8px] font-black truncate max-w-[65px] text-neutral-900 dark:text-neutral-50 leading-none">
+                                          {zone.plantName}
+                                        </span>
+                                      </div>
+                                      <span className="text-[7px] font-mono text-zinc-500 shrink-0">
+                                        {Math.round(zPercent)}%
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                                {/* Overlay name & size */}
+                                <div className="absolute -bottom-0.5 right-0.5 bg-neutral-900/80 text-white text-[7px] font-mono px-1 rounded origin-bottom-right scale-[0.8] select-none pointer-events-none whitespace-nowrap">
+                                  {bItem.label} ({bItem.wMeters}x{bItem.hMeters}м)
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="flex items-start justify-between min-w-0">
+                                  <span className="text-sm font-bold block shrink-0">{bItem.emoji || "🌱"}</span>
+                                  <span className="text-[8px] font-mono text-stone-500 dark:text-zinc-400 truncate ml-1">
+                                    {bItem.wMeters}x{bItem.hMeters}м
+                                  </span>
+                                </div>
+                                
+                                <div className="text-left mt-auto overflow-hidden leading-tight">
+                                  <span className="font-extrabold text-[9px] block text-neutral-900 dark:text-neutral-200 truncate leading-none mb-0.5">
+                                    {bItem.label}
+                                  </span>
+                                  <span className="text-[8px] text-zinc-500 dark:text-zinc-400 truncate leading-none block">
+                                    {bItem.plantName || "Пусто"}
+                                  </span>
+                                </div>
+                              </>
+                            )}
+
+                            {/* Water irrigation icon overlay if set */}
+                            {bItem.irrigationSystem && bItem.irrigationSystem !== "none" && (
+                              <div
+                                className="absolute top-0.5 right-1 bg-sky-500/15 border border-sky-400/20 text-sky-650 dark:text-sky-400 px-0.5 rounded text-[8px] font-bold flex items-center gap-0.5 pointer-events-none z-10"
+                                title={`Полив: ${bItem.irrigationSystem} - ${bItem.irrigationSchedule || "по расписанию"}`}
+                              >
+                                <span className="text-[7px]">💧</span>
+                                <span className="text-[6.5px] font-mono font-black uppercase tracking-tighter shrink-0">
+                                  {bItem.irrigationSystem === "drip" ? "Кап" : bItem.irrigationSystem === "sprinkler" ? "Спр" : bItem.irrigationSystem === "subsurface" ? "Вну" : "Руч"}
+                                </span>
+                              </div>
+                            )}
+
+                            {/* Resize Corner Anchors and Direct Delete Action */}
+                            {isSelected && (
+                              <>
+                                {/* NW corner */}
+                                <div
+                                  onMouseDown={(e) => {
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    setActiveGhResizeId(bItem.id);
+                                    setActiveGhResizeDir("nw");
+                                    setActiveGhDragId(null);
+                                    ghDragStartRef.current = {
+                                      initMouseX: e.clientX,
+                                      initMouseY: e.clientY,
+                                      initX: bItem.xMeters,
+                                      initY: bItem.yMeters,
+                                      initW: bItem.wMeters,
+                                      initH: bItem.hMeters
+                                    };
+                                  }}
+                                  className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white hover:bg-emerald-500 border-2 border-emerald-500 rounded-full cursor-nwse-resize z-30 hover:scale-125 transition-transform"
+                                  title="Растянуть: Вверх-Влево"
+                                />
+                                {/* NE corner */}
+                                <div
+                                  onMouseDown={(e) => {
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    setActiveGhResizeId(bItem.id);
+                                    setActiveGhResizeDir("ne");
+                                    setActiveGhDragId(null);
+                                    ghDragStartRef.current = {
+                                      initMouseX: e.clientX,
+                                      initMouseY: e.clientY,
+                                      initX: bItem.xMeters,
+                                      initY: bItem.yMeters,
+                                      initW: bItem.wMeters,
+                                      initH: bItem.hMeters
+                                    };
+                                  }}
+                                  className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-white hover:bg-emerald-500 border-2 border-emerald-500 rounded-full cursor-nesw-resize z-30 hover:scale-125 transition-transform"
+                                  title="Растянуть: Вверх-Вправо"
+                                />
+                                {/* SW corner */}
+                                <div
+                                  onMouseDown={(e) => {
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    setActiveGhResizeId(bItem.id);
+                                    setActiveGhResizeDir("sw");
+                                    setActiveGhDragId(null);
+                                    ghDragStartRef.current = {
+                                      initMouseX: e.clientX,
+                                      initMouseY: e.clientY,
+                                      initX: bItem.xMeters,
+                                      initY: bItem.yMeters,
+                                      initW: bItem.wMeters,
+                                      initH: bItem.hMeters
+                                    };
+                                  }}
+                                  className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white hover:bg-emerald-500 border-2 border-emerald-500 rounded-full cursor-nesw-resize z-30 hover:scale-125 transition-transform"
+                                  title="Растянуть: Вниз-Влево"
+                                />
+                                {/* SE corner */}
+                                <div
+                                  onMouseDown={(e) => {
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    setActiveGhResizeId(bItem.id);
+                                    setActiveGhResizeDir("se");
+                                    setActiveGhDragId(null);
+                                    ghDragStartRef.current = {
+                                      initMouseX: e.clientX,
+                                      initMouseY: e.clientY,
+                                      initX: bItem.xMeters,
+                                      initY: bItem.yMeters,
+                                      initW: bItem.wMeters,
+                                      initH: bItem.hMeters
+                                    };
+                                  }}
+                                  className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white hover:bg-emerald-500 border-2 border-emerald-500 rounded-full cursor-nwse-resize z-30 hover:scale-125 transition-transform"
+                                  title="Растянуть: Вниз-Вправо"
+                                />
+
+                                {/* Quick Direct Delete Button atop the selected Bed */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteBed(bItem.id);
+                                  }}
+                                  className="absolute -top-3.5 left-1/2 -translate-x-1/2 w-5 h-5 bg-red-650 hover:bg-red-500 text-white rounded-full shadow-md z-40 cursor-pointer flex items-center justify-center border border-white hover:scale-110 active:scale-95 transition-all"
+                                  title="Удалить эту грядку"
+                                >
+                                  <Trash2 className="w-3 h-3 text-white" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center text-[10px] text-zinc-400 mt-4 pt-4 border-t border-neutral-200 dark:border-zinc-800">
+                  <span className="flex items-center gap-1">
+                    💡 <em>Выделите грядку, чтобы растянуть её по сетке, переместить мышкой или удалить</em>
+                  </span>
+                  <button
+                    onClick={handleClearAllBeds}
+                    type="button"
+                    className="px-2 py-1 hover:bg-red-500/10 text-red-500 font-bold rounded cursor-pointer transition-colors"
+                  >
+                    🗑 Очистить схему
+                  </button>
+                </div>
+              </div>
+
+              {/* RIGHT COLUMN: ACTION CONTROLS & INSPECTOR */}
+              <div className="w-full md:w-80 p-4 sm:p-6 flex flex-col justify-between gap-4 sm:gap-5 bg-white dark:bg-zinc-900 text-neutral-800 dark:text-neutral-100 overflow-y-auto max-h-[45vh] md:max-h-full min-h-0 border-t md:border-t-0 border-neutral-200 dark:border-zinc-800 shrink-0">
+                <div className="space-y-5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-purple-600 dark:text-purple-400 font-mono">
+                      Палитра & Инспектор
+                    </span>
+                    <button 
+                      onClick={() => { setSelectedGreenhouseIdForEditor(null); setSelectedGreenhouseBedId(null); }}
+                      className="p-1 hover:bg-neutral-100 dark:hover:bg-zinc-800 rounded text-zinc-450 cursor-pointer"
+                    >
+                      <X className="w-4.5 h-4.5" />
+                    </button>
+                  </div>
+
+                  {selectedBed ? (
+                    /* BED PROPERTIES INSPECTOR */
+                    <div className="space-y-4 animate-fadeIn text-xs">
+                      <div className="p-3 bg-emerald-500/5 dark:bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
+                        <span className="text-[9px] font-black uppercase text-emerald-600 dark:text-emerald-400 block font-mono">
+                          Настройки грядки
+                        </span>
+                        <h4 className="font-extrabold text-sm flex items-center gap-1.5 mt-0.5">
+                          <span>{selectedBed.emoji}</span>
+                          <span>{selectedBed.label}</span>
+                        </h4>
+                      </div>
+
+                      {/* Bed Label */}
+                      <div className="space-y-1">
+                        <label className="block text-[10px] font-bold text-zinc-450 uppercase">Название грядки на схеме:</label>
+                        <input
+                          type="text"
+                          value={selectedBed.label}
+                          onChange={(e) => handleUpdateBed(selectedBed.id, { label: e.target.value })}
+                          className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs text-neutral-900 dark:text-white border border-neutral-200 dark:border-zinc-800 font-bold"
+                          placeholder="например, Левый ряд черри"
+                        />
+                      </div>
+
+                      {/* Plant / Crop Variety Name */}
+                      <div className="space-y-1">
+                        <label className="block text-[10px] font-bold text-zinc-455 uppercase">Сорт посевной культуры:</label>
+                        <input
+                          type="text"
+                          value={selectedBed.plantName}
+                          onChange={(e) => handleUpdateBed(selectedBed.id, { plantName: e.target.value })}
+                          className="w-full p-2 rounded bg-neutral-55 dark:bg-black/35 text-xs text-neutral-900 dark:text-white border border-neutral-200 dark:border-zinc-800"
+                          placeholder="например, Томат 'Бычье Сердце'"
+                        />
+                      </div>
+
+                      {/* Catalog Quick Pick */}
+                      {seedCatalog && seedCatalog.length > 0 && (
+                        <div className="space-y-1 bg-emerald-500/5 p-2 rounded-lg border border-emerald-500/15">
+                          <label className="block text-[8px] font-black uppercase text-emerald-600 dark:text-emerald-400 font-mono">
+                            🏷️ Связать сортом из Вашего Каталога Семян:
+                          </label>
+                          <select
+                            value=""
+                            onChange={(e) => {
+                              const sItem = seedCatalog.find(item => item.id === e.target.value);
+                              if (sItem) {
+                                handleUpdateBed(selectedBed.id, {
+                                  plantName: `${sItem.category} '${sItem.name}'`,
+                                  emoji: sItem.emoji,
+                                });
+                              }
+                            }}
+                            className="w-full p-1.5 rounded bg-white dark:bg-zinc-950 text-[10.5px] text-neutral-800 dark:text-neutral-100 border border-neutral-200 dark:border-zinc-800 font-bold cursor-pointer"
+                          >
+                            <option value="">-- Быстрый выбор сорта --</option>
+                            {seedCatalog.map((sItem) => (
+                              <option key={sItem.id} value={sItem.id}>
+                                {sItem.emoji} {sItem.category} · {sItem.name} ({sItem.plantAgain === 'yes' ? '👍' : sItem.plantAgain === 'no' ? '👎' : '🌗'})
+                              </option>
+                            ))}
+                          </select>
+                          
+                          {/* If current plantName matches a seed in catalog, show quick care note! */}
+                          {(() => {
+                            const matchedSeed = seedCatalog.find(s => 
+                              selectedBed.plantName.toLowerCase().includes(s.name.toLowerCase())
+                            );
+                            if (matchedSeed) {
+                              return (
+                                <div className="mt-1.5 pt-1.5 border-t border-emerald-500/15 text-[9.5px] text-emerald-700 dark:text-emerald-400 leading-tight space-y-1 text-left">
+                                  <div className="font-extrabold flex items-center gap-1">
+                                    <span>🌟 Совпадение в каталоге: {matchedSeed.emoji} {matchedSeed.name}</span>
+                                    <span className="text-[8px] bg-emerald-500/20 px-1 py-0.5 rounded origin-left scale-90 font-mono">Оценка: {matchedSeed.rating}★</span>
+                                  </div>
+                                  {matchedSeed.careInstructions && (
+                                    <p className="opacity-85 font-medium"><strong>Режим ухода:</strong> {matchedSeed.careInstructions}</p>
+                                  )}
+                                  {matchedSeed.fruitDescription && (
+                                    <p className="opacity-80"><strong>О плодах:</strong> {matchedSeed.fruitDescription}</p>
+                                  )}
+                                </div>
+                              );
+                            }
+                            return null;
+                          })()}
+                        </div>
+                      )}
+
+                      {/* Emoji select */}
+                      <div className="space-y-1">
+                        <label className="block text-[10px] font-bold text-zinc-450 uppercase mb-1">Выращиваемая культура (иконка):</label>
+                        <div className="grid grid-cols-4 gap-1">
+                          {cropPresets.map((crop) => (
+                            <button
+                              key={crop.emoji}
+                              type="button"
+                              onClick={() => {
+                                handleUpdateBed(selectedBed.id, { 
+                                  emoji: crop.emoji,
+                                  plantName: selectedBed.plantName.includes("'") ? selectedBed.plantName : crop.name
+                                });
+                              }}
+                              className={`p-1 text-center rounded border text-sm hover:bg-neutral-50/50 cursor-pointer ${
+                                selectedBed.emoji === crop.emoji 
+                                  ? "border-emerald-500 bg-emerald-500/10 font-bold" 
+                                  : "border-neutral-200 dark:border-zinc-800"
+                              }`}
+                              title={crop.label}
+                            >
+                              {crop.emoji}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* --- MULTI-CROP ZONING --- */}
+                      <div className="space-y-2 border-t border-b border-neutral-100 dark:border-zinc-800 py-3 bg-zinc-500/5 p-2 rounded-xl">
+                        <div className="flex items-center justify-between">
+                          <span className="block text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase font-mono">🌿 Сложное зонирование грядки:</span>
+                          <span className="text-[10px] bg-neutral-200 dark:bg-zinc-800 px-1.5 py-0.5 rounded font-bold font-mono">
+                            {(selectedBed.zones || []).length > 0 ? `${(selectedBed.zones || []).length} сорт.` : "Единая"}
+                          </span>
+                        </div>
+
+                        {(!selectedBed.zones || selectedBed.zones.length === 0) ? (
+                          <div className="space-y-1">
+                            <p className="text-[10px] text-zinc-450 dark:text-zinc-400 leading-tight">
+                              Вы можете разделить одну грядку на несколько секторов под разные сорта или культуры на одной площади.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const initialZones = [
+                                  { id: `z_${Date.now()}_1`, emoji: selectedBed.emoji || "🍅", plantName: selectedBed.plantName || "Основной сорт", ratio: 50 },
+                                  { id: `z_${Date.now()}_2`, emoji: "🥬", plantName: "Салат / Зелень", ratio: 50 }
+                                ];
+                                handleUpdateBed(selectedBed.id, { zones: initialZones });
+                              }}
+                              className="w-full py-1.5 bg-emerald-600/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/15 font-bold text-[10px] rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1"
+                            >
+                              <span>✨ Разделить на 2 зоны</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <div className="space-y-1.5 max-h-48 overflow-y-auto pr-0.5">
+                              {selectedBed.zones.map((zone, idx) => (
+                                <div key={zone.id} className="p-2 bg-white dark:bg-zinc-950 border border-neutral-200 dark:border-zinc-800 rounded-lg space-y-1.5 text-left">
+                                  <div className="flex items-center gap-1 text-[9px] text-zinc-400 font-bold justify-between">
+                                    <span>Зона #{idx + 1} ({Math.round((zone.ratio / (selectedBed.zones?.reduce((s, z) => s + z.ratio, 0) || 100)) * 100)}%)</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updated = (selectedBed.zones || []).filter(z => z.id !== zone.id);
+                                        handleUpdateBed(selectedBed.id, { zones: updated.length <= 1 ? [] : updated });
+                                      }}
+                                      className="text-red-500 hover:text-red-650 font-bold uppercase text-[8px] cursor-pointer"
+                                      title="Удалить зону"
+                                    >
+                                      Удалить
+                                    </button>
+                                  </div>
+
+                                  <div className="flex items-center gap-1">
+                                    <select
+                                      value={zone.emoji}
+                                      onChange={(e) => {
+                                        const updated = (selectedBed.zones || []).map(z => z.id === zone.id ? { ...z, emoji: e.target.value } : z);
+                                        handleUpdateBed(selectedBed.id, { zones: updated });
+                                      }}
+                                      className="bg-neutral-50 dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 text-[11px] p-1 rounded font-bold cursor-pointer"
+                                    >
+                                      <option value="🍅">🍅 Томаты</option>
+                                      <option value="🥒">🥒 Огурцы</option>
+                                      <option value="🥬">🥬 Зелень</option>
+                                      <option value="🫑">🫑 Перцы</option>
+                                      <option value="🍓">🍓 Ягоды</option>
+                                      <option value="🍆">🍆 Баклажаны</option>
+                                      <option value="🥕">🥕 Морковь</option>
+                                      <option value="🌿">🌿 Травы</option>
+                                      <option value="🌱">🌱 Саженец</option>
+                                    </select>
+
+                                    <input
+                                      type="text"
+                                      value={zone.plantName}
+                                      onChange={(e) => {
+                                        const updated = (selectedBed.zones || []).map(z => z.id === zone.id ? { ...z, plantName: e.target.value } : z);
+                                        handleUpdateBed(selectedBed.id, { zones: updated });
+                                      }}
+                                      className="flex-1 p-1 bg-neutral-50 dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 text-[10px] rounded leading-none text-neutral-900 dark:text-neutral-100 font-medium"
+                                      placeholder="Культура/сорт"
+                                    />
+                                  </div>
+
+                                  <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-neutral-100 dark:border-zinc-900">
+                                    <span className="text-[8px] text-zinc-400 uppercase font-bold">Пропорция:</span>
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const updated = (selectedBed.zones || []).map(z => z.id === zone.id ? { ...z, ratio: Math.max(10, z.ratio - 10) } : z);
+                                          handleUpdateBed(selectedBed.id, { zones: updated });
+                                        }}
+                                        className="w-4 h-4 border rounded bg-white hover:bg-neutral-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-[10px] font-black flex items-center justify-center cursor-pointer select-none"
+                                      >
+                                        -
+                                      </button>
+                                      <span className="text-[10px] font-mono font-bold px-1 min-w-[20px] text-center">{zone.ratio}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const updated = (selectedBed.zones || []).map(z => z.id === zone.id ? { ...z, ratio: Math.min(200, z.ratio + 10) } : z);
+                                          handleUpdateBed(selectedBed.id, { zones: updated });
+                                        }}
+                                        className="w-4 h-4 border rounded bg-white hover:bg-neutral-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-[10px] font-black flex items-center justify-center cursor-pointer select-none"
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="flex gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const newZone = { id: `z_${Date.now()}`, emoji: "🌱", plantName: "Доп. сорт", ratio: 30 };
+                                  handleUpdateBed(selectedBed.id, { zones: [...(selectedBed.zones || []), newZone] });
+                                }}
+                                className="flex-1 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[9px] rounded-lg cursor-pointer transition-all flex items-center justify-center gap-1"
+                              >
+                                ＋ Добавить зону
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleUpdateBed(selectedBed.id, { zones: [] });
+                                }}
+                                className="py-1 px-2 border hover:bg-red-500 hover:text-white border-red-500 bg-red-500/10 text-red-500 text-[9px] font-bold rounded-lg cursor-pointer transition-all"
+                              >
+                                Сбросить
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* --- IRRIGATION & WATERING RULES --- */}
+                      <div className="space-y-2 border-b border-neutral-100 dark:border-zinc-800 pb-3 bg-sky-500/5 p-2 rounded-xl">
+                        <label className="block text-[10px] font-black uppercase text-sky-600 dark:text-sky-400 font-mono flex items-center gap-1">
+                          <span>💧 Настройка полива грядки:</span>
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <span className="block text-[8px] text-zinc-450 font-bold uppercase">Система полива:</span>
+                            <select
+                              value={selectedBed.irrigationSystem || "none"}
+                              onChange={(e) => handleUpdateBed(selectedBed.id, { irrigationSystem: e.target.value })}
+                              className="w-full p-1.5 rounded bg-white dark:bg-zinc-950 text-[10px] text-neutral-900 dark:text-white border border-neutral-200 dark:border-zinc-800 font-bold cursor-pointer"
+                            >
+                              <option value="none">❌ Без полива</option>
+                              <option value="drip">💧 Капельная</option>
+                              <option value="sprinkler">🚿 Спринклер</option>
+                              <option value="subsurface">🪱 Подземная</option>
+                              <option value="manual">🪣 Вручную</option>
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <span className="block text-[8px] text-zinc-455 font-bold uppercase">Режим по умолчанию:</span>
+                            <select
+                              value={selectedBed.irrigationSchedule || "Ежедневно вечером"}
+                              onChange={(e) => handleUpdateBed(selectedBed.id, { irrigationSchedule: e.target.value })}
+                              className="w-full p-1.5 rounded bg-white dark:bg-zinc-950 text-[10px] text-neutral-900 dark:text-white border border-neutral-200 dark:border-zinc-800 font-bold cursor-pointer"
+                            >
+                              <option value="Ежедневно вечером">🌇 Вечером</option>
+                              <option value="2 раза в день (утро/вечер)">🌅 2 р. в день</option>
+                              <option value="Каждые 2 дня по 15 мин">⏰ Раз в 2 дня</option>
+                              <option value="По датчику влажности (<45%)">🩺 По датчику</option>
+                              <option value="По требованию (вручную)">👤 Вручную</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="space-y-0.5">
+                          <span className="block text-[8px] text-zinc-450 font-bold uppercase">Своя заметка о частоте / объеме полива:</span>
+                          <input
+                            type="text"
+                            value={selectedBed.irrigationSchedule || ""}
+                            onChange={(e) => handleUpdateBed(selectedBed.id, { irrigationSchedule: e.target.value })}
+                            placeholder="например, Раз в три дня по 5 л"
+                            className="w-full p-1 border rounded bg-white dark:bg-zinc-950 text-[10px] border-neutral-200 dark:border-zinc-800"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Dimensions meters details */}
+                      <div className="grid grid-cols-2 gap-2.5 bg-neutral-50/50 dark:bg-black/20 p-2.5 rounded-xl border">
+                        <div>
+                          <label className="block text-[9px] font-extrabold text-zinc-450 uppercase mb-0.5">Ширина (W):</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0.2"
+                            max={W_gh}
+                            value={selectedBed.wMeters}
+                            onChange={(e) => handleUpdateBed(selectedBed.id, { wMeters: parseFloat(e.target.value) || 0.5 })}
+                            className="w-full p-1 border rounded font-mono font-bold text-center text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-extrabold text-zinc-450 uppercase mb-0.5">Высота/Длина (H):</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0.2"
+                            max={H_gh}
+                            value={selectedBed.hMeters}
+                            onChange={(e) => handleUpdateBed(selectedBed.id, { hMeters: parseFloat(e.target.value) || 0.5 })}
+                            className="w-full p-1 border rounded font-mono font-bold text-center text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Position in meters details */}
+                      <div className="grid grid-cols-2 gap-2.5 bg-neutral-50/50 dark:bg-black/20 p-2.5 rounded-xl border">
+                        <div>
+                          <label className="block text-[9px] font-extrabold text-zinc-450 uppercase mb-0.5">Позиция X (м):</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max={W_gh - selectedBed.wMeters}
+                            value={selectedBed.xMeters}
+                            onChange={(e) => handleUpdateBed(selectedBed.id, { xMeters: parseFloat(e.target.value) || 0 })}
+                            className="w-full p-1 border rounded font-mono text-center text-xs text-emerald-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-extrabold text-zinc-455 uppercase mb-0.5">Позиция Y (м):</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max={H_gh - selectedBed.hMeters}
+                            value={selectedBed.yMeters}
+                            onChange={(e) => handleUpdateBed(selectedBed.id, { yMeters: parseFloat(e.target.value) || 0 })}
+                            className="w-full p-1 border rounded font-mono text-center text-xs text-emerald-500"
+                          />
+                        </div>
+                      </div>
+
+                      {/* PRECISION SHIFT CONTROLS - NUDGE */}
+                      <div className="space-y-1 bg-zinc-50 dark:bg-zinc-800/30 p-2 rounded-xl border">
+                        <span className="block text-[9px] font-bold text-zinc-450 uppercase text-center mb-1">
+                          Точное смещение грядки по сетке (шаг 0.1м):
+                        </span>
+                        <div className="grid grid-cols-3 gap-1 max-w-[130px] mx-auto text-center">
+                          <div />
+                          <button
+                            type="button"
+                            onClick={() => handleNudgeBed("up")}
+                            className="p-1 px-2 border rounded hover:bg-neutral-50 dark:bg-black/25 font-black text-xs cursor-pointer select-none"
+                            title="Сместить вверх"
+                          >
+                            ↑
+                          </button>
+                          <div />
+
+                          <button
+                            type="button"
+                            onClick={() => handleNudgeBed("left")}
+                            className="p-1 px-2 border rounded hover:bg-neutral-50 dark:bg-black/25 font-black text-xs cursor-pointer select-none"
+                            title="Сместить влево"
+                          >
+                            ←
+                          </button>
+                          <div />
+                          <button
+                            type="button"
+                            onClick={() => handleNudgeBed("right")}
+                            className="p-1 px-2 border rounded hover:bg-neutral-50 dark:bg-black/25 font-black text-xs cursor-pointer select-none"
+                            title="Сместить вправо"
+                          >
+                            →
+                          </button>
+
+                          <div />
+                          <button
+                            type="button"
+                            onClick={() => handleNudgeBed("down")}
+                            className="p-1 px-2 border rounded hover:bg-neutral-50 dark:bg-black/25 font-black text-xs cursor-pointer select-none"
+                            title="Сместить вниз"
+                          >
+                            ↓
+                          </button>
+                          <div />
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex gap-2 pt-2 border-t">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedGreenhouseBedId(null)}
+                          className="flex-1 py-1.5 bg-neutral-150 hover:bg-neutral-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-neutral-800 dark:text-neutral-200 rounded-lg text-[10px] font-extrabold cursor-pointer transition-colors"
+                        >
+                          Снять выделение
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteBed(selectedBed.id)}
+                          className="p-1.5 bg-red-650 hover:bg-red-700 text-white hover:bg-red-500 rounded-lg cursor-pointer text-[10px]"
+                          title="Удалить эту грядку"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* PALETTE FOR STAMPING NEW BEDS */
+                    <div className="space-y-4 animate-fadeIn text-xs">
+                      <div className="p-3 bg-neutral-50/80 dark:bg-black/20 rounded-xl border text-zinc-500">
+                        <p className="leading-tight text-[11px]">
+                          Выберите культуру из палитры ниже для мгновенной высадки её на свободное место:
+                        </p>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <span className="block text-[10px] uppercase font-bold text-zinc-400">Каталог семян / растений:</span>
+                        <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
+                          {cropPresets.map((preset) => (
+                            <button
+                              key={preset.name}
+                              type="button"
+                              onClick={() => handleAddBed(preset.emoji, preset.name, preset.label)}
+                              className="w-full p-2 rounded-xl border border-neutral-200 dark:border-zinc-800 bg-neutral-50/50 dark:bg-black/10 hover:bg-emerald-500/5 hover:border-emerald-500/30 text-left transition-all cursor-pointer flex items-center justify-between"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm">{preset.emoji}</span>
+                                <div>
+                                  <span className="font-extrabold text-[11px] block text-neutral-850 dark:text-white leading-none">
+                                    {preset.label}
+                                  </span>
+                                  <span className="text-[9px] text-zinc-400 leading-none">
+                                    Размер по умолчанию: 0.8 х 1.2м
+                                  </span>
+                                </div>
+                              </div>
+                              <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400">
+                                ＋ Высадить
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleAddBed("🌱", "Зеленый саженец", "Дополнительная")}
+                        className="w-full py-2 bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white font-black text-[11px] rounded-xl flex items-center justify-center gap-1 cursor-pointer shadow-sm transition-all"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Добавить пустую грядку</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-4 border-t border-neutral-220 dark:border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedGreenhouseIdForEditor(null); setSelectedGreenhouseBedId(null); }}
+                    className="w-full py-2.5 bg-neutral-900 hover:bg-neutral-800 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-white text-xs font-black rounded-xl cursor-pointer transition-colors shadow"
+                  >
+                    Вернуться к карте участка
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        );
+      })()}
 
 
     </div>
