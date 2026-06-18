@@ -1708,6 +1708,111 @@ app.post("/api/test-telegram-notification", async (req, res) => {
   }
 });
 
+// ---------------- TELEGRAM WEBHOOK ----------------
+
+app.post("/api/telegram/webhook", async (req, res) => {
+  try {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) {
+      console.error("[telegram/webhook] TELEGRAM_BOT_TOKEN is not configured");
+      return res.sendStatus(500);
+    }
+
+    const update = req.body;
+    const message = update?.message;
+
+    if (!message) {
+      // Acknowledge non-message updates silently
+      return res.sendStatus(200);
+    }
+
+    const chatId: number = message.chat?.id;
+    const text: string = message.text || "";
+    const username: string = message.from?.username || message.from?.first_name || "пользователь";
+
+    console.log(`[telegram/webhook] Received message from chat_id=${chatId} username=${username}: ${text}`);
+
+    if (text.startsWith("/start")) {
+      const welcomeText =
+        `Привет, ${username}! 👋\n\n` +
+        `Я бот системы технического обслуживания.\n` +
+        `Ваш chat_id: <code>${chatId}</code>\n\n` +
+        `Укажите этот chat_id в настройках профиля, чтобы получать уведомления о регламентах и задачах.`;
+
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: welcomeText,
+          parse_mode: "HTML",
+        }),
+      });
+    }
+
+    return res.sendStatus(200);
+  } catch (error: any) {
+    console.error("[telegram/webhook] Error:", error);
+    return res.sendStatus(500);
+  }
+});
+
+app.get("/api/telegram/register-webhook", async (req, res) => {
+  try {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) {
+      return res.status(500).json({
+        success: false,
+        error: "TELEGRAM_BOT_TOKEN is not configured in environment variables",
+      });
+    }
+
+    const domain = process.env.RAILWAY_PUBLIC_DOMAIN;
+    if (!domain) {
+      return res.status(500).json({
+        success: false,
+        error: "RAILWAY_PUBLIC_DOMAIN is not configured in environment variables",
+      });
+    }
+
+    const webhookUrl = `https://${domain}/api/telegram/webhook`;
+
+    const telegramRes = await fetch(
+      `https://api.telegram.org/bot${token}/setWebhook`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: webhookUrl }),
+      }
+    );
+
+    const data = await telegramRes.json() as any;
+
+    if (!telegramRes.ok || !data.ok) {
+      console.error("[telegram/register-webhook] Failed to set webhook:", data);
+      return res.status(502).json({
+        success: false,
+        error: "Telegram API rejected the webhook registration",
+        details: data,
+      });
+    }
+
+    console.log(`[telegram/register-webhook] Webhook registered: ${webhookUrl}`);
+    return res.json({
+      success: true,
+      webhookUrl,
+      telegramResponse: data,
+    });
+  } catch (error: any) {
+    console.error("[telegram/register-webhook] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error",
+      details: error.message,
+    });
+  }
+});
+
 // ---------------- SERVER STARTUP ----------------
 
 startServer();
