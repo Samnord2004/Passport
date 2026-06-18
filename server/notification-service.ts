@@ -140,20 +140,20 @@ class NotificationQueue {
       else if (channel === 'max') {
         rec = recipientUser.maxChatId || '';
         if (rec) {
-          const maxToken = process.env.MAX_BOT_TOKEN;
+          const maxToken = process.env.VK_MAX_BOT_TOKEN;
           if (!maxToken) {
-            errorDetails = 'MAX_BOT_TOKEN is missing in environment variables';
+            errorDetails = 'VK_MAX_BOT_TOKEN is missing in environment variables';
             console.warn(`[NotificationQueue] [MAX] ${errorDetails}. Skipping real dispatch.`);
           } else {
             try {
-              // MAX Chat Bot API call
-              const res = await fetch(`https://api.max.ru/v1/chats/${rec}/messages`, {
+              // VK MAX Bot API call
+              const res = await fetch(`https://api.max.ru/bot/v1/messages/send`, {
                 method: "POST",
                 headers: { 
                   "Content-Type": "application/json",
                   "Authorization": `Bearer ${maxToken}`
                 },
-                body: JSON.stringify({ text: message })
+                body: JSON.stringify({ user_id: rec, text: message })
               });
               isRealSent = res.ok;
               if (!res.ok) {
