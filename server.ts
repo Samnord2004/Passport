@@ -1643,6 +1643,71 @@ app.post("/api/photos/upload", uploadLimiter, (req, res) => {
   });
 });
 
+// ---------------- TEST TELEGRAM NOTIFICATION ----------------
+
+app.post("/api/test-telegram-notification", async (req, res) => {
+  try {
+    const userId = (req.session as any).userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Требуется авторизация" });
+    }
+
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) {
+      return res.status(500).json({
+        success: false,
+        error: "TELEGRAM_BOT_TOKEN is not configured in environment variables",
+      });
+    }
+
+    const user = await dbStore.getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ error: "Пользователь не найден" });
+    }
+
+    const chatId = user.telegramChatId;
+    if (!chatId) {
+      return res.status(400).json({
+        success: false,
+        error: "Telegram chat ID is not configured for this user. Please set your telegramChatId in profile settings.",
+      });
+    }
+
+    const { message = "Test notification from Passport app" } = req.body;
+
+    const telegramRes = await fetch(
+      `https://api.telegram.org/bot${token}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: message }),
+      }
+    );
+
+    if (!telegramRes.ok) {
+      const errText = await telegramRes.text().catch(() => "");
+      return res.status(502).json({
+        success: false,
+        error: `Telegram API returned status ${telegramRes.status}`,
+        details: errText,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Test notification sent successfully",
+      sentTo: chatId,
+    });
+  } catch (error: any) {
+    console.error("[test-telegram-notification] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error",
+      details: error.message,
+    });
+  }
+});
+
 // ---------------- SERVER STARTUP ----------------
 
 startServer();
