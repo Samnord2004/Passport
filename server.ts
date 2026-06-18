@@ -4,6 +4,7 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
+import pg from "pg";
 import bcrypt from "bcryptjs";
 import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
@@ -159,17 +160,40 @@ const sessionConfig: any = {
   resave: false,
   saveUninitialized: false,
   cookie: {
-    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    secure: true, // Needs to be true for sameSite: "none"
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    secure: process.env.NODE_ENV === "production", // Secure cookies in production
     sameSite: "none" // Allow session cookies inside iframes
   }
 };
 
-if (dbStore.isUsingPostgres() && dbStore.getPostgresPool()) {
+// Use PostgreSQL session store when DATABASE_URL is available, to persist sessions
+// across restarts and support horizontal scaling. Falls back to MemoryStore otherwise.
+if (process.env.DATABASE_URL) {
+  try {
+    const sessionPool = new pg.Pool({
+      connectionString: process.env.DATABASE_URL,
+      connectionTimeoutMillis: 5000,
+    });
+    sessionConfig.store = new PgSession({
+      pool: sessionPool,
+      createTableIfMissing: true, // Auto-create the session table if it doesn't exist
+      tableName: "session",
+      ttl: 24 * 60 * 60, // 24 hours in seconds
+    });
+    console.log("[Session] Using PostgreSQL session store (DATABASE_URL).");
+  } catch (err: any) {
+    console.warn(`[Session] Failed to initialize PostgreSQL session store: ${err.message}. Falling back to MemoryStore.`);
+  }
+} else if (dbStore.isUsingPostgres() && dbStore.getPostgresPool()) {
   sessionConfig.store = new PgSession({
     pool: dbStore.getPostgresPool()!,
-    createTableIfMissing: false // Already managed by automatically runMigrations()
+    createTableIfMissing: true,
+    tableName: "session",
+    ttl: 24 * 60 * 60,
   });
+  console.log("[Session] Using PostgreSQL session store (DataStore pool).");
+} else {
+  console.warn("[Session] No DATABASE_URL found — using in-memory session store. Sessions will be lost on restart.");
 }
 
 app.use(session(sessionConfig));
