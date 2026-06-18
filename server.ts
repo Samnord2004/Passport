@@ -1648,7 +1648,89 @@ app.post("/api/photos/upload", uploadLimiter, (req, res) => {
   });
 });
 
+// ---------------- VK MAX NOTIFICATION ----------------
+
+async function sendVKMaxNotification(userId: string, message: string): Promise<{ success: boolean; error?: string }> {
+  const token = process.env.VK_MAX_BOT_TOKEN;
+  if (!token) {
+    const error = "VK_MAX_BOT_TOKEN is not configured in environment variables";
+    console.warn(`[VK MAX] ${error}`);
+    return { success: false, error };
+  }
+
+  try {
+    const res = await fetch("https://api.max.ru/bot/v1/messages/send", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({ user_id: userId, text: message })
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      const error = `VK MAX API returned status ${res.status}: ${errText}`;
+      console.error(`[VK MAX] Failed to send message to user_id=${userId}: ${error}`);
+      return { success: false, error };
+    }
+
+    console.log(`[VK MAX] Message sent successfully to user_id=${userId}`);
+    return { success: true };
+  } catch (e: any) {
+    const error = e.message || "VK MAX connection failure";
+    console.error(`[VK MAX] Exception while sending message to user_id=${userId}:`, e);
+    return { success: false, error };
+  }
+}
+
+app.post("/api/test-vk-max-notification", async (req, res) => {
+  try {
+    const token = process.env.VK_MAX_BOT_TOKEN;
+    if (!token) {
+      return res.status(500).json({
+        success: false,
+        error: "VK_MAX_BOT_TOKEN is not configured in environment variables",
+      });
+    }
+
+    const targetUserId = process.env.VK_MAX_USER_ID;
+    if (!targetUserId) {
+      return res.status(500).json({
+        success: false,
+        error: "VK_MAX_USER_ID is not configured in environment variables",
+      });
+    }
+
+    const { message = "Тестовое уведомление от системы Цифровой паспорт объекта" } = req.body;
+
+    const result = await sendVKMaxNotification(targetUserId, message);
+
+    if (!result.success) {
+      return res.status(502).json({
+        success: false,
+        error: result.error,
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "VK MAX test notification sent successfully",
+      sentTo: targetUserId,
+    });
+  } catch (error: any) {
+    console.error("[test-vk-max-notification] Error:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error",
+      details: error.message,
+    });
+  }
+});
+
 // ---------------- TEST TELEGRAM NOTIFICATION ----------------
+
+
 
 app.post("/api/test-telegram-notification", async (req, res) => {
   try {
