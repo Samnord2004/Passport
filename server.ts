@@ -134,6 +134,11 @@ app.use((req: any, res, next) => {
   const safeMethods = ["GET", "HEAD", "OPTIONS", "TRACE"];
   if (!safeMethods.includes(req.method)) {
     if (req.path.startsWith("/api/")) {
+      // Telegram webhook POSTs arrive without any CSRF token or Bearer header — exempt it explicitly
+      if (req.path === "/api/telegram/webhook") {
+        return next();
+      }
+
       const headerToken = req.headers["x-csrf-token"];
       const hasBearer = req.headers["authorization"]?.startsWith("Bearer ");
       
@@ -1711,26 +1716,39 @@ app.post("/api/test-telegram-notification", async (req, res) => {
 // ---------------- TELEGRAM WEBHOOK ----------------
 
 app.post("/api/telegram/webhook", async (req, res) => {
+  // Always respond 200 immediately — Telegram will retry if we don't acknowledge quickly
+  res.sendStatus(200);
+
   try {
+    const update = req.body;
+
+    // Log the full raw update so we can see exactly what Telegram is sending
+    console.log("[telegram/webhook] Incoming update:", JSON.stringify(update, null, 2));
+
     const token = process.env.TELEGRAM_BOT_TOKEN;
     if (!token) {
-      console.error("[telegram/webhook] TELEGRAM_BOT_TOKEN is not configured");
-      return res.sendStatus(500);
+      console.error("[telegram/webhook] TELEGRAM_BOT_TOKEN is not configured — cannot reply to user");
+      return;
     }
 
-    const update = req.body;
-    const message = update?.message;
+    // Determine the update type for targeted logging
+    const updateType = Object.keys(update || {})
+      .filter(k => k !== "update_id")
+      .join(", ") || "unknown";
+    console.log(`[telegram/webhook] Update #${update?.update_id} — type: ${updateType}`);
 
+    // Handle regular messages and channel posts
+    const message = update?.message || update?.channel_post;
     if (!message) {
-      // Acknowledge non-message updates silently
-      return res.sendStatus(200);
+      console.log(`[telegram/webhook] No message/channel_post in this update (type: ${updateType}) — nothing to reply to`);
+      return;
     }
 
     const chatId: number = message.chat?.id;
     const text: string = message.text || "";
     const username: string = message.from?.username || message.from?.first_name || "пользователь";
 
-    console.log(`[telegram/webhook] Received message from chat_id=${chatId} username=${username}: ${text}`);
+    console.log(`[telegram/webhook] Message from chat_id=${chatId} username=${username}: "${text}"`);
 
     if (text.startsWith("/start")) {
       const welcomeText =
@@ -1739,7 +1757,9 @@ app.post("/api/telegram/webhook", async (req, res) => {
         `Ваш chat_id: <code>${chatId}</code>\n\n` +
         `Укажите этот chat_id в настройках профиля, чтобы получать уведомления о регламентах и задачах.`;
 
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      console.log(`[telegram/webhook] Sending /start reply to chat_id=${chatId}`);
+
+      const sendRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1748,12 +1768,16 @@ app.post("/api/telegram/webhook", async (req, res) => {
           parse_mode: "HTML",
         }),
       });
-    }
 
-    return res.sendStatus(200);
+      if (!sendRes.ok) {
+        const errBody = await sendRes.text().catch(() => "");
+        console.error(`[telegram/webhook] sendMessage failed (${sendRes.status}): ${errBody}`);
+      } else {
+        console.log(`[telegram/webhook] /start reply sent successfully to chat_id=${chatId}`);
+      }
+    }
   } catch (error: any) {
-    console.error("[telegram/webhook] Error:", error);
-    return res.sendStatus(500);
+    console.error("[telegram/webhook] Unhandled error:", error);
   }
 });
 
