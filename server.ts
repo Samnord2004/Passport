@@ -880,6 +880,369 @@ app.delete("/api/objects/:id", async (req, res) => {
 });
 
 
+// ============================================================
+// FAMILY ACCESS API — Семейный и доверенный доступ к объектам
+// ============================================================
+
+// Получить все записи семейного доступа для объекта
+app.get("/api/objects/:id/family-access", async (req, res) => {
+  const userId = (req.session as any).userId;
+  if (!userId) return res.status(401).json({ error: "Требуется авторизация" });
+
+  const user = await dbStore.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Пользователь не найден" });
+
+  const obj = await dbStore.getObjectById(req.params.id);
+  if (!obj) return res.status(404).json({ error: "Объект не найден" });
+
+  // Только владелец объекта или администратор может просматривать список доступов
+  if (user.role !== 'admin' && obj.ownerId !== userId) {
+    return res.status(403).json({ error: "Недостаточно прав" });
+  }
+
+  const familyAccess = (obj as any).familyAccess || [];
+  res.json(familyAccess);
+});
+
+// Выдать семейный / доверенный доступ к объекту
+app.post("/api/objects/:id/family-access", async (req, res) => {
+  const userId = (req.session as any).userId;
+  if (!userId) return res.status(401).json({ error: "Требуется авторизация" });
+
+  const user = await dbStore.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Пользователь не найден" });
+
+  const obj = await dbStore.getObjectById(req.params.id);
+  if (!obj) return res.status(404).json({ error: "Объект не найден" });
+
+  // Только владелец объекта или администратор могут выдавать доступ
+  if (user.role !== 'admin' && obj.ownerId !== userId) {
+    return res.status(403).json({ error: "Только владелец объекта может выдавать доступ" });
+  }
+
+  const { inviteEmail, inviteName, accessLevel } = req.body;
+  if (!inviteEmail || !inviteName || !accessLevel) {
+    return res.status(400).json({ error: "Email, имя и уровень доступа обязательны" });
+  }
+  if (!['view', 'edit'].includes(accessLevel)) {
+    return res.status(400).json({ error: "Уровень доступа должен быть 'view' или 'edit'" });
+  }
+
+  // Ищем существующего пользователя по email
+  const allUsers = await dbStore.getUsers();
+  const existingUser = allUsers.find(
+    u => u.email.toLowerCase() === inviteEmail.toLowerCase()
+  );
+
+  const newAccess = {
+    id: "fa_" + Math.random().toString(36).substr(2, 9),
+    objectId: obj.id,
+    grantedByOwnerId: userId,
+    userId: existingUser?.id || null,
+    inviteEmail: inviteEmail.toLowerCase().trim(),
+    inviteName: inviteName.trim(),
+    accessLevel,
+    createdAt: new Date().toISOString(),
+    status: existingUser ? 'active' : 'pending'
+  };
+
+  const currentAccess = (obj as any).familyAccess || [];
+  // Проверяем дублирование
+  const alreadyExists = currentAccess.some(
+    (fa: any) => fa.inviteEmail === newAccess.inviteEmail && fa.status !== 'revoked'
+  );
+  if (alreadyExists) {
+    return res.status(409).json({ error: "Этот пользователь уже имеет доступ к объекту" });
+  }
+
+  await dbStore.updateObject(obj.id, {
+    familyAccess: [...currentAccess, newAccess]
+  });
+
+  res.status(201).json({ success: true, access: newAccess });
+});
+
+// Изменить уровень доступа или отозвать доступ
+app.put("/api/objects/:id/family-access/:accessId", async (req, res) => {
+  const userId = (req.session as any).userId;
+  if (!userId) return res.status(401).json({ error: "Требуется авторизация" });
+
+  const user = await dbStore.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Пользователь не найден" });
+
+  const obj = await dbStore.getObjectById(req.params.id);
+  if (!obj) return res.status(404).json({ error: "Объект не найден" });
+
+  if (user.role !== 'admin' && obj.ownerId !== userId) {
+    return res.status(403).json({ error: "Недостаточно прав" });
+  }
+
+  const { accessLevel, status } = req.body;
+  const currentAccess: any[] = (obj as any).familyAccess || [];
+  const idx = currentAccess.findIndex(fa => fa.id === req.params.accessId);
+
+  if (idx === -1) return res.status(404).json({ error: "Запись доступа не найдена" });
+
+  if (accessLevel) currentAccess[idx].accessLevel = accessLevel;
+  if (status) currentAccess[idx].status = status;
+
+  await dbStore.updateObject(obj.id, { familyAccess: currentAccess });
+  res.json({ success: true, access: currentAccess[idx] });
+});
+
+// Отозвать доступ (удалить запись)
+app.delete("/api/objects/:id/family-access/:accessId", async (req, res) => {
+  const userId = (req.session as any).userId;
+  if (!userId) return res.status(401).json({ error: "Требуется авторизация" });
+
+  const user = await dbStore.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Пользователь не найден" });
+
+  const obj = await dbStore.getObjectById(req.params.id);
+  if (!obj) return res.status(404).json({ error: "Объект не найден" });
+
+  if (user.role !== 'admin' && obj.ownerId !== userId) {
+    return res.status(403).json({ error: "Недостаточно прав" });
+  }
+
+  const currentAccess: any[] = (obj as any).familyAccess || [];
+  const filtered = currentAccess.filter(fa => fa.id !== req.params.accessId);
+
+  await dbStore.updateObject(obj.id, { familyAccess: filtered });
+  res.json({ success: true });
+});
+
+// ============================================================
+// EQUIPMENT REGISTRY API — Реестр оборудования (таблица)
+// ============================================================
+
+// Получить реестр оборудования объекта
+app.get("/api/objects/:id/equipment", async (req, res) => {
+  const userId = (req.session as any).userId;
+  if (!userId) return res.status(401).json({ error: "Требуется авторизация" });
+
+  const obj = await dbStore.getObjectById(req.params.id);
+  if (!obj) return res.status(404).json({ error: "Объект не найден" });
+
+  // Специалисты видят реестр только если у них есть доступ к объекту
+  const user = await dbStore.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Пользователь не найден" });
+
+  const hasSpecialistAccess = (obj.allowedSpecialistIds || []).includes(userId);
+  const isOwnerOrAdmin = user.role === 'admin' || obj.ownerId === userId;
+  const hasFamilyAccess = ((obj as any).familyAccess || []).some(
+    (fa: any) => fa.userId === userId && fa.status === 'active'
+  );
+
+  if (!isOwnerOrAdmin && !hasSpecialistAccess && !hasFamilyAccess) {
+    return res.status(403).json({ error: "Недостаточно прав для просмотра реестра оборудования" });
+  }
+
+  res.json((obj as any).equipmentRegistry || []);
+});
+
+// Добавить элемент в реестр оборудования
+app.post("/api/objects/:id/equipment", async (req, res) => {
+  const userId = (req.session as any).userId;
+  if (!userId) return res.status(401).json({ error: "Требуется авторизация" });
+
+  const user = await dbStore.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Пользователь не найден" });
+
+  const obj = await dbStore.getObjectById(req.params.id);
+  if (!obj) return res.status(404).json({ error: "Объект не найден" });
+
+  // Редактировать могут: админ, владелец, члены семьи с уровнем 'edit'
+  const familyEntry = ((obj as any).familyAccess || []).find(
+    (fa: any) => fa.userId === userId && fa.status === 'active' && fa.accessLevel === 'edit'
+  );
+  const canEdit = user.role === 'admin' || obj.ownerId === userId || !!familyEntry;
+  if (!canEdit) return res.status(403).json({ error: "Недостаточно прав для редактирования" });
+
+  const { name, model, serialNumber, manufacturer, installDate, warrantyExpiry, location, notes } = req.body;
+  if (!name) return res.status(400).json({ error: "Название оборудования обязательно" });
+
+  const newItem = {
+    id: "eq_" + Math.random().toString(36).substr(2, 9),
+    name: name.trim(),
+    model: model?.trim() || "",
+    serialNumber: serialNumber?.trim() || "",
+    manufacturer: manufacturer?.trim() || "",
+    installDate: installDate || "",
+    warrantyExpiry: warrantyExpiry || "",
+    location: location?.trim() || "",
+    notes: notes?.trim() || ""
+  };
+
+  const registry = (obj as any).equipmentRegistry || [];
+  await dbStore.updateObject(obj.id, { equipmentRegistry: [...registry, newItem] });
+  res.status(201).json({ success: true, item: newItem });
+});
+
+// Обновить элемент реестра оборудования
+app.put("/api/objects/:id/equipment/:itemId", async (req, res) => {
+  const userId = (req.session as any).userId;
+  if (!userId) return res.status(401).json({ error: "Требуется авторизация" });
+
+  const user = await dbStore.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Пользователь не найден" });
+
+  const obj = await dbStore.getObjectById(req.params.id);
+  if (!obj) return res.status(404).json({ error: "Объект не найден" });
+
+  const familyEntry = ((obj as any).familyAccess || []).find(
+    (fa: any) => fa.userId === userId && fa.status === 'active' && fa.accessLevel === 'edit'
+  );
+  const canEdit = user.role === 'admin' || obj.ownerId === userId || !!familyEntry;
+  if (!canEdit) return res.status(403).json({ error: "Недостаточно прав для редактирования" });
+
+  const registry: any[] = (obj as any).equipmentRegistry || [];
+  const idx = registry.findIndex(item => item.id === req.params.itemId);
+  if (idx === -1) return res.status(404).json({ error: "Элемент не найден" });
+
+  registry[idx] = { ...registry[idx], ...req.body, id: registry[idx].id };
+  await dbStore.updateObject(obj.id, { equipmentRegistry: registry });
+  res.json({ success: true, item: registry[idx] });
+});
+
+// Удалить элемент из реестра оборудования
+app.delete("/api/objects/:id/equipment/:itemId", async (req, res) => {
+  const userId = (req.session as any).userId;
+  if (!userId) return res.status(401).json({ error: "Требуется авторизация" });
+
+  const user = await dbStore.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Пользователь не найден" });
+
+  const obj = await dbStore.getObjectById(req.params.id);
+  if (!obj) return res.status(404).json({ error: "Объект не найден" });
+
+  const familyEntry = ((obj as any).familyAccess || []).find(
+    (fa: any) => fa.userId === userId && fa.status === 'active' && fa.accessLevel === 'edit'
+  );
+  const canEdit = user.role === 'admin' || obj.ownerId === userId || !!familyEntry;
+  if (!canEdit) return res.status(403).json({ error: "Недостаточно прав для редактирования" });
+
+  const registry: any[] = (obj as any).equipmentRegistry || [];
+  await dbStore.updateObject(obj.id, {
+    equipmentRegistry: registry.filter(item => item.id !== req.params.itemId)
+  });
+  res.json({ success: true });
+});
+
+// ============================================================
+// LIFE SYSTEMS API — Системы жизнеобеспечения (техпаспорт)
+// ============================================================
+
+// Получить список систем жизнеобеспечения
+app.get("/api/objects/:id/life-systems", async (req, res) => {
+  const userId = (req.session as any).userId;
+  if (!userId) return res.status(401).json({ error: "Требуется авторизация" });
+
+  const obj = await dbStore.getObjectById(req.params.id);
+  if (!obj) return res.status(404).json({ error: "Объект не найден" });
+
+  const user = await dbStore.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Пользователь не найден" });
+
+  const hasSpecialistAccess = (obj.allowedSpecialistIds || []).includes(userId);
+  const isOwnerOrAdmin = user.role === 'admin' || obj.ownerId === userId;
+  const hasFamilyAccess = ((obj as any).familyAccess || []).some(
+    (fa: any) => fa.userId === userId && fa.status === 'active'
+  );
+
+  if (!isOwnerOrAdmin && !hasSpecialistAccess && !hasFamilyAccess) {
+    return res.status(403).json({ error: "Недостаточно прав" });
+  }
+
+  res.json((obj as any).lifeSystems || []);
+});
+
+// Добавить систему жизнеобеспечения
+app.post("/api/objects/:id/life-systems", async (req, res) => {
+  const userId = (req.session as any).userId;
+  if (!userId) return res.status(401).json({ error: "Требуется авторизация" });
+
+  const user = await dbStore.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Пользователь не найден" });
+
+  const obj = await dbStore.getObjectById(req.params.id);
+  if (!obj) return res.status(404).json({ error: "Объект не найден" });
+
+  const familyEntry = ((obj as any).familyAccess || []).find(
+    (fa: any) => fa.userId === userId && fa.status === 'active' && fa.accessLevel === 'edit'
+  );
+  const canEdit = user.role === 'admin' || obj.ownerId === userId || !!familyEntry;
+  if (!canEdit) return res.status(403).json({ error: "Недостаточно прав для редактирования" });
+
+  const { name, description, parameters, notes } = req.body;
+  if (!name || !description) {
+    return res.status(400).json({ error: "Наименование и описание системы обязательны" });
+  }
+
+  const newSystem = {
+    id: "ls_" + Math.random().toString(36).substr(2, 9),
+    name: name.trim(),
+    description: description.trim(),
+    parameters: parameters?.trim() || "",
+    notes: notes?.trim() || ""
+  };
+
+  const systems = (obj as any).lifeSystems || [];
+  await dbStore.updateObject(obj.id, { lifeSystems: [...systems, newSystem] });
+  res.status(201).json({ success: true, system: newSystem });
+});
+
+// Обновить систему жизнеобеспечения
+app.put("/api/objects/:id/life-systems/:systemId", async (req, res) => {
+  const userId = (req.session as any).userId;
+  if (!userId) return res.status(401).json({ error: "Требуется авторизация" });
+
+  const user = await dbStore.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Пользователь не найден" });
+
+  const obj = await dbStore.getObjectById(req.params.id);
+  if (!obj) return res.status(404).json({ error: "Объект не найден" });
+
+  const familyEntry = ((obj as any).familyAccess || []).find(
+    (fa: any) => fa.userId === userId && fa.status === 'active' && fa.accessLevel === 'edit'
+  );
+  const canEdit = user.role === 'admin' || obj.ownerId === userId || !!familyEntry;
+  if (!canEdit) return res.status(403).json({ error: "Недостаточно прав для редактирования" });
+
+  const systems: any[] = (obj as any).lifeSystems || [];
+  const idx = systems.findIndex(s => s.id === req.params.systemId);
+  if (idx === -1) return res.status(404).json({ error: "Система не найдена" });
+
+  systems[idx] = { ...systems[idx], ...req.body, id: systems[idx].id };
+  await dbStore.updateObject(obj.id, { lifeSystems: systems });
+  res.json({ success: true, system: systems[idx] });
+});
+
+// Удалить систему жизнеобеспечения
+app.delete("/api/objects/:id/life-systems/:systemId", async (req, res) => {
+  const userId = (req.session as any).userId;
+  if (!userId) return res.status(401).json({ error: "Требуется авторизация" });
+
+  const user = await dbStore.getUserById(userId);
+  if (!user) return res.status(401).json({ error: "Пользователь не найден" });
+
+  const obj = await dbStore.getObjectById(req.params.id);
+  if (!obj) return res.status(404).json({ error: "Объект не найден" });
+
+  const familyEntry = ((obj as any).familyAccess || []).find(
+    (fa: any) => fa.userId === userId && fa.status === 'active' && fa.accessLevel === 'edit'
+  );
+  const canEdit = user.role === 'admin' || obj.ownerId === userId || !!familyEntry;
+  if (!canEdit) return res.status(403).json({ error: "Недостаточно прав для редактирования" });
+
+  const systems: any[] = (obj as any).lifeSystems || [];
+  await dbStore.updateObject(obj.id, {
+    lifeSystems: systems.filter(s => s.id !== req.params.systemId)
+  });
+  res.json({ success: true });
+});
+
+
 // ---------------- CHECKLIST TEMPLATES CRUD ----------------
 
 app.get("/api/templates", async (req, res) => {
