@@ -16,6 +16,7 @@ import LoginScreen from "./components/LoginScreen";
 import { LegalTabContent } from "./components/LegalAgreements";
 import SupportTab from "./components/SupportTab";
 import EcosystemPortal from "./components/EcosystemPortal";
+import FamilyAccessPanel from "./components/FamilyAccessPanel";
 import { 
   Building, 
   Calendar, 
