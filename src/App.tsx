@@ -5840,6 +5840,26 @@ export default function App() {
               </div>
             )}
 
+            {/* ─── ДОБАВИТЬ: Семейный доступ и паспорт объекта ─── */}
+            {ownerActiveTab === 'characteristics' && currentUser && selectedObjectForOwner && (
+              <div className="mt-6 max-w-4xl mx-auto w-full">
+                <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200 mb-3">
+                  Управление доступом и паспортом объекта
+                </h3>
+                <FamilyAccessPanel
+                  object={selectedObjectForOwner}
+                  currentUserId={currentUser.id}
+                  currentUserRole={currentUser.role}
+                  canEdit={
+                    currentUser.role === 'admin' ||
+                    selectedObjectForOwner.ownerId === currentUser.id
+                  }
+                  onRefresh={() => setRefreshTrigger(prev => prev + 1)}
+                  showToast={showToast}
+                />
+              </div>
+            )}
+            
             {/* Registered Service Specialists Contact Info for Owners */}
             {ownerActiveTab === 'specialists' && (
               <div className="space-y-4 animate-fadeIn max-w-4xl mx-auto w-full">
