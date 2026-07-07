@@ -172,7 +172,12 @@ if (process.env.DATABASE_URL) {
   try {
     const sessionPool = new pg.Pool({
       connectionString: process.env.DATABASE_URL,
-      connectionTimeoutMillis: 5000,
+      connectionTimeoutMillis: 10000,
+      idleTimeoutMillis: 30000,
+      max: 20,
+    });
+    sessionPool.on("error", (err) => {
+      console.error("[Session] PostgreSQL pool error:", err.message);
     });
     sessionConfig.store = new PgSession({
       pool: sessionPool,

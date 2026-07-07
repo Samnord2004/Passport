@@ -598,12 +598,27 @@ export default function EcosystemPortal({
       setActiveGhResizeDir(null);
     };
 
+    const handleTouchMove = (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length > 0) {
+        handleMouseMove(e.touches[0] as unknown as MouseEvent);
+      }
+    };
+
+    const handleTouchEnd = () => {
+      handleMouseUp();
+    };
+
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("touchmove", handleTouchMove, { passive: false });
+    window.addEventListener("touchend", handleTouchEnd);
 
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("touchmove", handleTouchMove);
+      window.removeEventListener("touchend", handleTouchEnd);
     };
   }, [activeGhDragId, activeGhResizeId, activeGhResizeDir, selectedGreenhouseIdForEditor, planBuildings]);
 
@@ -1140,12 +1155,27 @@ export default function EcosystemPortal({
       setActiveCornerIndex(null);
     };
 
+    const handleTouchMove = (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length > 0) {
+        handleMouseMove(e.touches[0] as unknown as MouseEvent);
+      }
+    };
+
+    const handleTouchEnd = () => {
+      handleMouseUp();
+    };
+
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("touchmove", handleTouchMove, { passive: false });
+    window.addEventListener("touchend", handleTouchEnd);
 
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("touchmove", handleTouchMove);
+      window.removeEventListener("touchend", handleTouchEnd);
     };
   }, [activeDragId, activeDragType, activeResizeId, activeResizeDirection, activeCornerIndex, selectedObjectId, plantNodes, plotCorners]);
 
@@ -2623,6 +2653,33 @@ export default function EcosystemPortal({
               }
             };
 
+            const handleDragTouchStart = (e: React.TouchEvent, type: "building" | "plant", item: any) => {
+              if (e.touches.length === 0) return;
+              e.stopPropagation();
+              e.preventDefault();
+              const touch = e.touches[0];
+              setActiveDragId(item.id);
+              setActiveDragType(type);
+              dragStartRef.current = {
+                initMouseX: touch.clientX,
+                initMouseY: touch.clientY,
+                initX: item.xMeters || 0,
+                initY: item.yMeters || 0,
+                initW: item.wMeters || item.diameterMeters || 4,
+                initH: item.hMeters || item.diameterMeters || 4,
+              };
+
+              if (type === "building") {
+                setSelectedPlanBuildingId(item.id);
+                setSelectedPlant(null);
+                setActiveTemplate(null);
+              } else {
+                setSelectedPlant(item);
+                setSelectedPlanBuildingId(null);
+                setActiveTemplate(null);
+              }
+            };
+
             const handleResizeMouseDown = (e: React.MouseEvent, dir: string, item: any) => {
               e.stopPropagation();
               e.preventDefault();
@@ -2631,6 +2688,23 @@ export default function EcosystemPortal({
               dragStartRef.current = {
                 initMouseX: e.clientX,
                 initMouseY: e.clientY,
+                initX: item.xMeters || 0,
+                initY: item.yMeters || 0,
+                initW: item.wMeters || item.diameterMeters || 4,
+                initH: item.hMeters || item.diameterMeters || 4,
+              };
+            };
+
+            const handleResizeTouchStart = (e: React.TouchEvent, dir: string, item: any) => {
+              if (e.touches.length === 0) return;
+              e.stopPropagation();
+              e.preventDefault();
+              const touch = e.touches[0];
+              setActiveResizeId(item.id);
+              setActiveResizeDirection(dir);
+              dragStartRef.current = {
+                initMouseX: touch.clientX,
+                initMouseY: touch.clientY,
                 initX: item.xMeters || 0,
                 initY: item.yMeters || 0,
                 initW: item.wMeters || item.diameterMeters || 4,
@@ -2885,7 +2959,8 @@ export default function EcosystemPortal({
                         className="flex-1 relative border border-neutral-305 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-xl shadow-inner overflow-hidden select-none cursor-crosshair transition-all duration-300 min-h-[300px]"
                         style={{
                           aspectRatio: `${W} / ${H}`,
-                          maxHeight: "500px"
+                          maxHeight: "500px",
+                          touchAction: "none"
                         }}
                       >
                         {/* grid background patterns */}
@@ -2922,6 +2997,7 @@ export default function EcosystemPortal({
                             <div
                               key={b.id}
                               onMouseDown={isEditingPlanogram ? (e) => handleDragMouseDown(e, "building", b) : undefined}
+                              onTouchStart={isEditingPlanogram ? (e) => handleDragTouchStart(e, "building", b) : undefined}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setSelectedPlanBuildingId(b.id);
@@ -2967,21 +3043,25 @@ export default function EcosystemPortal({
                                   {/* Corner handles */}
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "nw", b)}
+                                    onTouchStart={(e) => handleResizeTouchStart(e, "nw", b)}
                                     className="absolute -top-1 -left-1 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-nwse-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вверх-Влево"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "ne", b)}
+                                    onTouchStart={(e) => handleResizeTouchStart(e, "ne", b)}
                                     className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-nesw-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вверх-Вправо"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "sw", b)}
+                                    onTouchStart={(e) => handleResizeTouchStart(e, "sw", b)}
                                     className="absolute -bottom-1 -left-1 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-nesw-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вниз-Влево"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "se", b)}
+                                    onTouchStart={(e) => handleResizeTouchStart(e, "se", b)}
                                     className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-nwse-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вниз-Вправо"
                                   />
@@ -2989,21 +3069,25 @@ export default function EcosystemPortal({
                                   {/* Edge handles */}
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "n", b)}
+                                    onTouchStart={(e) => handleResizeTouchStart(e, "n", b)}
                                     className="absolute -top-1 left-1/2 -translate-x-1/2 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-ns-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вверх"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "s", b)}
+                                    onTouchStart={(e) => handleResizeTouchStart(e, "s", b)}
                                     className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-ns-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вниз"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "w", b)}
+                                    onTouchStart={(e) => handleResizeTouchStart(e, "w", b)}
                                     className="absolute top-1/2 -left-1 -translate-y-1/2 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-ew-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Влево"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "e", b)}
+                                    onTouchStart={(e) => handleResizeTouchStart(e, "e", b)}
                                     className="absolute top-1/2 -right-1 -translate-y-1/2 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-ew-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вправо"
                                   />
@@ -3042,6 +3126,7 @@ export default function EcosystemPortal({
                             <div
                               key={p.id}
                               onMouseDown={isEditingPlanogram ? (e) => handleDragMouseDown(e, "plant", p) : undefined}
+                              onTouchStart={isEditingPlanogram ? (e) => handleDragTouchStart(e, "plant", p) : undefined}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setSelectedPlant(p);
@@ -3074,6 +3159,7 @@ export default function EcosystemPortal({
                               {isSel && isEditingPlanogram && (
                                 <div
                                   onMouseDown={(e) => handleResizeMouseDown(e, "plant_diameter", p)}
+                                  onTouchStart={(e) => handleResizeTouchStart(e, "plant_diameter", p)}
                                   className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3.5 h-3.5 bg-white border-2 border-amber-500 rounded-full cursor-ew-resize z-40 flex items-center justify-center shadow-md hover:scale-125 transition-transform"
                                   title="Изменить диаметр кроны (растянуть крону)"
                                 >
@@ -3092,6 +3178,11 @@ export default function EcosystemPortal({
                             <div
                               key={index}
                               onMouseDown={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                setActiveCornerIndex(index);
+                              }}
+                              onTouchStart={(e) => {
                                 e.stopPropagation();
                                 e.preventDefault();
                                 setActiveCornerIndex(index);
@@ -5765,6 +5856,22 @@ export default function EcosystemPortal({
                                 initH: bItem.hMeters
                               };
                             }}
+                            onTouchStart={(e) => {
+                              if (e.touches.length === 0) return;
+                              e.stopPropagation();
+                              const touch = e.touches[0];
+                              setSelectedGreenhouseBedId(bItem.id);
+                              setActiveGhDragId(bItem.id);
+                              setActiveGhResizeId(null);
+                              ghDragStartRef.current = {
+                                initMouseX: touch.clientX,
+                                initMouseY: touch.clientY,
+                                initX: bItem.xMeters,
+                                initY: bItem.yMeters,
+                                initW: bItem.wMeters,
+                                initH: bItem.hMeters
+                              };
+                            }}
                             className={`absolute rounded-xl border-2 select-none flex flex-col justify-between p-1.5 transition-all text-neutral-800 dark:text-neutral-100 ${
                               isSelected 
                                 ? "border-emerald-500 bg-emerald-50/95 dark:bg-emerald-950/40 shadow-lg ring-2 ring-emerald-300 dark:ring-emerald-800 scale-[1.01] z-20 cursor-move" 
@@ -5858,6 +5965,23 @@ export default function EcosystemPortal({
                                       initH: bItem.hMeters
                                     };
                                   }}
+                                  onTouchStart={(e) => {
+                                    if (e.touches.length === 0) return;
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    const touch = e.touches[0];
+                                    setActiveGhResizeId(bItem.id);
+                                    setActiveGhResizeDir("nw");
+                                    setActiveGhDragId(null);
+                                    ghDragStartRef.current = {
+                                      initMouseX: touch.clientX,
+                                      initMouseY: touch.clientY,
+                                      initX: bItem.xMeters,
+                                      initY: bItem.yMeters,
+                                      initW: bItem.wMeters,
+                                      initH: bItem.hMeters
+                                    };
+                                  }}
                                   className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white hover:bg-emerald-500 border-2 border-emerald-500 rounded-full cursor-nwse-resize z-30 hover:scale-125 transition-transform"
                                   title="Растянуть: Вверх-Влево"
                                 />
@@ -5872,6 +5996,23 @@ export default function EcosystemPortal({
                                     ghDragStartRef.current = {
                                       initMouseX: e.clientX,
                                       initMouseY: e.clientY,
+                                      initX: bItem.xMeters,
+                                      initY: bItem.yMeters,
+                                      initW: bItem.wMeters,
+                                      initH: bItem.hMeters
+                                    };
+                                  }}
+                                  onTouchStart={(e) => {
+                                    if (e.touches.length === 0) return;
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    const touch = e.touches[0];
+                                    setActiveGhResizeId(bItem.id);
+                                    setActiveGhResizeDir("ne");
+                                    setActiveGhDragId(null);
+                                    ghDragStartRef.current = {
+                                      initMouseX: touch.clientX,
+                                      initMouseY: touch.clientY,
                                       initX: bItem.xMeters,
                                       initY: bItem.yMeters,
                                       initW: bItem.wMeters,
@@ -5898,6 +6039,23 @@ export default function EcosystemPortal({
                                       initH: bItem.hMeters
                                     };
                                   }}
+                                  onTouchStart={(e) => {
+                                    if (e.touches.length === 0) return;
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    const touch = e.touches[0];
+                                    setActiveGhResizeId(bItem.id);
+                                    setActiveGhResizeDir("sw");
+                                    setActiveGhDragId(null);
+                                    ghDragStartRef.current = {
+                                      initMouseX: touch.clientX,
+                                      initMouseY: touch.clientY,
+                                      initX: bItem.xMeters,
+                                      initY: bItem.yMeters,
+                                      initW: bItem.wMeters,
+                                      initH: bItem.hMeters
+                                    };
+                                  }}
                                   className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white hover:bg-emerald-500 border-2 border-emerald-500 rounded-full cursor-nesw-resize z-30 hover:scale-125 transition-transform"
                                   title="Растянуть: Вниз-Влево"
                                 />
@@ -5912,6 +6070,23 @@ export default function EcosystemPortal({
                                     ghDragStartRef.current = {
                                       initMouseX: e.clientX,
                                       initMouseY: e.clientY,
+                                      initX: bItem.xMeters,
+                                      initY: bItem.yMeters,
+                                      initW: bItem.wMeters,
+                                      initH: bItem.hMeters
+                                    };
+                                  }}
+                                  onTouchStart={(e) => {
+                                    if (e.touches.length === 0) return;
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    const touch = e.touches[0];
+                                    setActiveGhResizeId(bItem.id);
+                                    setActiveGhResizeDir("se");
+                                    setActiveGhDragId(null);
+                                    ghDragStartRef.current = {
+                                      initMouseX: touch.clientX,
+                                      initMouseY: touch.clientY,
                                       initX: bItem.xMeters,
                                       initY: bItem.yMeters,
                                       initW: bItem.wMeters,
