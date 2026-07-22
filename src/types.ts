@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'owner' | 'specialist' | 'family_member';
+export type UserRole = 'admin' | 'owner' | 'specialist';
 
 export interface User {
   id: string;
@@ -20,65 +20,19 @@ export interface User {
   avatarUrl?: string;
 }
 
-// ─── НОВЫЙ ТИП: Семейный / доверенный доступ к объекту ───────────────────────
-export type FamilyAccessLevel = 'view' | 'edit';
-
-export interface FamilyAccess {
-  id: string;
-  objectId: string;       // к какому объекту относится
-  grantedByOwnerId: string; // кто выдал доступ (владелец)
-  userId?: string;          // существующий пользователь (если уже есть аккаунт)
-  inviteEmail: string;      // email приглашённого
-  inviteName: string;       // имя приглашённого
-  accessLevel: FamilyAccessLevel; // 'view' — только просмотр, 'edit' — редактирование
-  createdAt: string;        // ISO дата создания
-  acceptedAt?: string;      // ISO дата принятия приглашения
-  status: 'pending' | 'active' | 'revoked';
-}
-
-// ─── НОВЫЙ ТИП: Элемент реестра оборудования ─────────────────────────────────
-export interface EquipmentItem {
-  id: string;
-  name: string;           // Название оборудования
-  model?: string;         // Модель
-  serialNumber?: string;  // Серийный номер
-  manufacturer?: string;  // Производитель
-  installDate?: string;   // Дата установки
-  warrantyExpiry?: string;// Гарантия до
-  location?: string;      // Место расположения (этаж, помещение)
-  notes?: string;         // Примечания
-}
-
-// ─── НОВЫЙ ТИП: Система жизнеобеспечения (техпаспорт) ────────────────────────
-export interface LifeSystemItem {
-  id: string;
-  name: string;       // Наименование системы (напр. "Система отопления")
-  description: string;// Описание работы системы
-  parameters?: string;// Технические параметры
-  notes?: string;     // Примечания
-}
-
 export interface BuildingObject {
   id: string;
   name: string;
   address: string;
   description: string;
-  ownerId?: string;
-  yandexDiskPath: string;
-  yandexDiskUrl?: string;
-  allowedSpecialistIds?: string[];
-  // Старые текстовые поля (сохраняем для обратной совместимости)
-  specs?: string;
-  equipmentSpecs?: string;
-  info?: string;
+  ownerId?: string; // Links to User.id (owner)
+  yandexDiskPath: string; // Folder path on Yandex.Disk
+  yandexDiskUrl?: string; // Direct Web link to Yandex.Disk folders
+  allowedSpecialistIds?: string[]; // Allowed specialist IDs
+  specs?: string; // Общая характеристика
+  equipmentSpecs?: string; // Ключевое оборудование
+  info?: string; // Ввод в эксплуатацию
   objectType?: 'house' | 'admin_building' | 'land' | 'dacha' | 'other';
-  // ─── НОВЫЕ СТРУКТУРИРОВАННЫЕ ПОЛЯ ────────────────────────────────────────
-  // Реестр оборудования (таблица)
-  equipmentRegistry?: EquipmentItem[];
-  // Системы жизнеобеспечения (технический паспорт)
-  lifeSystems?: LifeSystemItem[];
-  // Семейный / доверенный доступ
-  familyAccess?: FamilyAccess[];
 }
 
 export interface ScheduleItem {
@@ -87,12 +41,12 @@ export interface ScheduleItem {
   category: string;
   title: string;
   intervalDays: number;
-  lastDoneDate: string | null;
-  responsibleUserId?: string;
+  lastDoneDate: string | null; // ISO Date "yyyy-mm-dd"
+  responsibleUserId?: string; // Specialist who is responsible
   notes?: string;
-  checklistTemplateId: string;
-  commissioningDate?: string | null;
-  lastNotificationDate?: string | null;
+  checklistTemplateId: string; // Reference to checklist template
+  commissioningDate?: string | null; // Date of commissioning
+  lastNotificationDate?: string | null; // ISO Date "yyyy-mm-dd" of last sent alert
 }
 
 export type QuestionType = 'boolean' | 'number' | 'text' | 'select' | 'photo';
@@ -101,7 +55,7 @@ export interface Question {
   id: string;
   text: string;
   type: QuestionType;
-  options?: string[];
+  options?: string[]; // Used if type is 'select'
   required: boolean;
 }
 
@@ -114,8 +68,8 @@ export interface ChecklistTemplate {
 
 export interface Answer {
   questionId: string;
-  value: string;
-  photoUrl?: string;
+  value: string; // can be number, boolean string, or text
+  photoUrl?: string; // saved Yandex.Disk url or local uploaded url
 }
 
 export interface CompletedChecklist {
@@ -123,7 +77,7 @@ export interface CompletedChecklist {
   objectId: string;
   scheduleItemId: string;
   checklistTemplateId: string;
-  dateDone: string;
+  dateDone: string; // ISO String
   answers: Answer[];
   specialistInfo: {
     fullname: string;
@@ -134,7 +88,7 @@ export interface CompletedChecklist {
   specialistUserId: string;
   pdfUrl?: string;
   approvedByOwner?: boolean;
-  ownerRating?: number;
+  ownerRating?: number; // 1-5 stars
   ownerRatingComment?: string;
 }
 
@@ -151,24 +105,24 @@ export interface NotificationLog {
 export interface SystemSettings {
   yandexDiskToken: string;
   yandexDiskConnected: boolean;
-  reminderDaysBefore: number;
-  logoUrl?: string;
-  customLogoEnabled?: boolean;
-  emailBotAddress?: string;
-  telegramBotUsername?: string;
-  maxBotUsername?: string;
-  supportPhone?: string;
-  supportEmail?: string;
-  supportTelegram?: string;
-  supportWhatsapp?: string;
-  supportMax?: string;
+  reminderDaysBefore: number; // e.g. 3 days notice
+  logoUrl?: string; // URL or Base64 of the custom logo
+  customLogoEnabled?: boolean; // Whether custom logo is enabled
+  emailBotAddress?: string; // Email of the custom email bot for notifications
+  telegramBotUsername?: string; // Real telegram bot name
+  maxBotUsername?: string; // Real MAX chat bot name
+  supportPhone?: string; // Support contact phone number
+  supportEmail?: string; // Support contact email to send feedback to
+  supportTelegram?: string; // Support Telegram username/link
+  supportWhatsapp?: string; // Support WhatsApp number/link
+  supportMax?: string; // Support MAX messenger username/link
   notificationChannels: {
     admin: { telegram: boolean; max: boolean; vk: boolean; email: boolean };
     owner: { telegram: boolean; max: boolean; vk: boolean; email: boolean };
   };
   appBackgroundType?: 'default' | 'villa' | 'blueprint' | 'custom' | 'sakura';
-  appBackgroundUrl?: string;
-  cardOpacity?: number;
+  appBackgroundUrl?: string; // Standard URL, Base64 or Unsplash image of custom background
+  cardOpacity?: number; // percentage from 10 to 100
   smtpHost?: string;
   smtpPort?: number;
   smtpUser?: string;
@@ -180,7 +134,7 @@ export interface SupportTicket {
   id: string;
   timestamp: string;
   userId: string;
-  userRole: 'specialist' | 'owner' | 'admin' | 'operator' | 'family_member';
+  userRole: 'specialist' | 'owner' | 'admin' | 'operator';
   userName: string;
   userEmail: string;
   userPhone: string;
@@ -189,4 +143,3 @@ export interface SupportTicket {
   adminNotes?: string;
   status: 'new' | 'in_progress' | 'resolved';
 }
-

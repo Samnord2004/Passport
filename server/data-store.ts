@@ -530,8 +530,11 @@ export class DataStore {
     await this.pool.query(`CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");`);
     try {
       await this.pool.query(`ALTER TABLE building_objects ADD COLUMN IF NOT EXISTS allowed_specialist_ids TEXT;`);
+      await this.pool.query(`ALTER TABLE building_objects ADD COLUMN IF NOT EXISTS specs TEXT;`);
+      await this.pool.query(`ALTER TABLE building_objects ADD COLUMN IF NOT EXISTS equipment_specs TEXT;`);
+      await this.pool.query(`ALTER TABLE building_objects ADD COLUMN IF NOT EXISTS info TEXT;`);
     } catch (e: any) {
-      console.warn("[Database] Migration column allowed_specialist_ids check/creation failed:", e.message);
+      console.warn("[Database] Migration column allowed_specialist_ids / specs / equipment_specs / info check/creation failed:", e.message);
     }
     try {
       await this.pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS key_skills TEXT;`);
@@ -946,7 +949,7 @@ export class DataStore {
   public async getObjects(): Promise<BuildingObject[]> {
     if (this.usePostgres && this.pool) {
       const { rows } = await this.pool.query(`
-        SELECT id, name, address, description, owner_id AS "ownerId", yandex_disk_path AS "yandexDiskPath", allowed_specialist_ids AS "allowedSpecialistIds", yandex_disk_url AS "yandexDiskUrl", object_type AS "objectType"
+        SELECT id, name, address, description, owner_id AS "ownerId", yandex_disk_path AS "yandexDiskPath", allowed_specialist_ids AS "allowedSpecialistIds", yandex_disk_url AS "yandexDiskUrl", object_type AS "objectType", specs, equipment_specs AS "equipmentSpecs", info
         FROM building_objects ORDER BY name ASC
       `);
       return rows.map((r: any) => ({
@@ -960,7 +963,7 @@ export class DataStore {
   public async getObjectById(objId: string): Promise<BuildingObject | null> {
     if (this.usePostgres && this.pool) {
       const { rows } = await this.pool.query(`
-        SELECT id, name, address, description, owner_id AS "ownerId", yandex_disk_path AS "yandexDiskPath", allowed_specialist_ids AS "allowedSpecialistIds", yandex_disk_url AS "yandexDiskUrl", object_type AS "objectType"
+        SELECT id, name, address, description, owner_id AS "ownerId", yandex_disk_path AS "yandexDiskPath", allowed_specialist_ids AS "allowedSpecialistIds", yandex_disk_url AS "yandexDiskUrl", object_type AS "objectType", specs, equipment_specs AS "equipmentSpecs", info
         FROM building_objects WHERE id = $1
       `, [objId]);
       if (!rows[0]) return null;
@@ -979,9 +982,9 @@ export class DataStore {
     if (this.usePostgres && this.pool) {
       const ownerVal = obj.ownerId && obj.ownerId.trim() !== "" ? obj.ownerId : null;
       await this.pool.query(
-        `INSERT INTO building_objects (id, name, address, description, owner_id, yandex_disk_path, allowed_specialist_ids, yandex_disk_url, object_type) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [obj.id, obj.name, obj.address, obj.description, ownerVal, obj.yandexDiskPath, allowedSpecStr, obj.yandexDiskUrl || null, obj.objectType || null]
+        `INSERT INTO building_objects (id, name, address, description, owner_id, yandex_disk_path, allowed_specialist_ids, yandex_disk_url, object_type, specs, equipment_specs, info) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [obj.id, obj.name, obj.address, obj.description, ownerVal, obj.yandexDiskPath, allowedSpecStr, obj.yandexDiskUrl || null, obj.objectType || null, obj.specs || null, obj.equipmentSpecs || null, obj.info || null]
       );
       return obj;
     }
@@ -1002,6 +1005,10 @@ export class DataStore {
 
       const diskUrlVal = updated.yandexDiskUrl !== undefined ? updated.yandexDiskUrl : existing.yandexDiskUrl || null;
       const objectTypeVal = updated.objectType !== undefined ? updated.objectType : existing.objectType || null;
+      
+      const specsVal = updated.specs !== undefined ? updated.specs : existing.specs || null;
+      const equipSpecsVal = updated.equipmentSpecs !== undefined ? updated.equipmentSpecs : existing.equipmentSpecs || null;
+      const infoVal = updated.info !== undefined ? updated.info : existing.info || null;
 
       await this.pool.query(
         `UPDATE building_objects SET 
@@ -1012,9 +1019,12 @@ export class DataStore {
           yandex_disk_path = COALESCE($5, yandex_disk_path),
           allowed_specialist_ids = $6,
           yandex_disk_url = $7,
-          object_type = $8
-         WHERE id = $9`,
-        [updated.name, updated.address, updated.description, companyOwner, updated.yandexDiskPath, allowedSpecStr, diskUrlVal, objectTypeVal, objId]
+          object_type = $8,
+          specs = $9,
+          equipment_specs = $10,
+          info = $11
+         WHERE id = $12`,
+        [updated.name, updated.address, updated.description, companyOwner, updated.yandexDiskPath, allowedSpecStr, diskUrlVal, objectTypeVal, specsVal, equipSpecsVal, infoVal, objId]
       );
       return this.getObjectById(objId);
     }

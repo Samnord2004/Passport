@@ -11,12 +11,12 @@ import {
   SystemSettings,
   SupportTicket
 } from "./types";
+import { parseEquipment, parseLifeSupport, parseBuildingInfo, EquipmentRow, LifeSupportRow, StructuralRow, parseSpecs } from "./utils/specParsers";
 import ThemeSelector, { ThemeStyle } from "./components/ThemeSelector";
 import LoginScreen from "./components/LoginScreen";
 import { LegalTabContent } from "./components/LegalAgreements";
 import SupportTab from "./components/SupportTab";
 import EcosystemPortal from "./components/EcosystemPortal";
-import FamilyAccessPanel from "./components/FamilyAccessPanel";
 import { 
   Building, 
   Calendar, 
@@ -376,6 +376,31 @@ export default function App() {
   const [objSpecs, setObjSpecs] = useState("");
   const [objEquipmentSpecs, setObjEquipmentSpecs] = useState("");
   const [objInfo, setObjInfo] = useState("");
+
+  // States for owner editing specs & schedules
+  const [isOwnerSchModalOpen, setIsOwnerSchModalOpen] = useState(false);
+  const [editingObjSpecsId, setEditingObjSpecsId] = useState<string | null>(null);
+  const [editSpecsSpecs, setEditSpecsSpecs] = useState("");
+  const [editSpecsEquip, setEditSpecsEquip] = useState("");
+  const [editSpecsInfo, setEditSpecsInfo] = useState("");
+
+  // States for structured digital passport tables
+  const [editLifeSupportRows, setEditLifeSupportRows] = useState<LifeSupportRow[]>([]);
+  const [editEquipmentRows, setEditEquipmentRows] = useState<EquipmentRow[]>([]);
+  const [editYearBuilt, setEditYearBuilt] = useState<string>("");
+  const [editStructuralRows, setEditStructuralRows] = useState<StructuralRow[]>([]);
+
+  // Structured fields for "Общая характеристика" (General specs) & "Ключевое оборудование"
+  const [objTotalArea, setObjTotalArea] = useState("");
+  const [objFloorsCount, setObjFloorsCount] = useState("");
+  const [objMaterial, setObjMaterial] = useState("");
+  const [objFoundation, setObjFoundation] = useState("");
+  const [objEquipmentRows, setObjEquipmentRows] = useState<EquipmentRow[]>([]);
+
+  const [editTotalArea, setEditTotalArea] = useState("");
+  const [editFloorsCount, setEditFloorsCount] = useState("");
+  const [editMaterial, setEditMaterial] = useState("");
+  const [editFoundation, setEditFoundation] = useState("");
 
   // Specialist rating states
   const [ratingReport, setRatingReport] = useState<CompletedChecklist | null>(null);
@@ -1023,6 +1048,18 @@ export default function App() {
   // Facility / Object CRUD
   const saveObjectSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const existingSpecs = editingObjId ? (objects.find(o => o.id === editingObjId)?.specs || "") : "";
+    const parsedSpecs = parseSpecs(existingSpecs);
+    const specsPayload = JSON.stringify({
+      totalArea: objTotalArea,
+      floorsCount: objFloorsCount,
+      material: objMaterial,
+      foundation: objFoundation,
+      lifeSupport: parsedSpecs.lifeSupport
+    });
+
+    const equipmentPayload = JSON.stringify(objEquipmentRows);
+
     const payload = {
       name: objName,
       address: objAddress,
@@ -1031,8 +1068,8 @@ export default function App() {
       yandexDiskPath: objDiskPath,
       yandexDiskUrl: objDiskUrl,
       allowedSpecialistIds: objAllowedSpecialistIds,
-      specs: objSpecs,
-      equipmentSpecs: objEquipmentSpecs,
+      specs: specsPayload,
+      equipmentSpecs: equipmentPayload,
       info: objInfo,
       objectType: objObjectType
     };
@@ -1083,6 +1120,14 @@ export default function App() {
     setObjInfo(o.info || "");
     setObjObjectType(o.objectType || "house");
 
+    // Populate structured states
+    const specsData = parseSpecs(o.specs);
+    setObjTotalArea(specsData.general.totalArea);
+    setObjFloorsCount(specsData.general.floorsCount);
+    setObjMaterial(specsData.general.material);
+    setObjFoundation(specsData.general.foundation);
+    setObjEquipmentRows(parseEquipment(o.equipmentSpecs));
+
     // Smooth scroll to object form
     setTimeout(() => {
       document.getElementById("object-form-container")?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1102,6 +1147,12 @@ export default function App() {
     setObjEquipmentSpecs("");
     setObjInfo("");
     setObjObjectType("house");
+
+    setObjTotalArea("");
+    setObjFloorsCount("");
+    setObjMaterial("");
+    setObjFoundation("");
+    setObjEquipmentRows([]);
   };
 
   // Specialist Profiles CRUD for Owners & Admins
@@ -3025,11 +3076,18 @@ export default function App() {
                     setActiveTab('objects');
                   }
                 }}
-                onNavigateToSchedules={() => {
+                onNavigateToSchedules={(objId) => {
                   if (currentUser?.role === 'owner') {
                     setOwnerActiveTab('characteristics');
+                    if (objId) {
+                      handleAddNewScheduleForObject(objId);
+                      setIsOwnerSchModalOpen(true);
+                    }
                   } else {
                     setActiveTab('schedule');
+                    if (objId) {
+                      handleAddNewScheduleForObject(objId);
+                    }
                   }
                 }}
                 currentTheme={theme}
@@ -3224,26 +3282,162 @@ export default function App() {
                         <span className="text-[10px] opacity-50">Сервис перенаправит собственника по этой веб-ссылке на Яндекс.Диск</span>
                       </div>
 
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs font-bold uppercase opacity-75">📁 Общая характеристика (Кабинет Собственника)</label>
-                        <textarea 
-                          rows={2}
-                          value={objSpecs}
-                          onChange={(e) => setObjSpecs(e.target.value)}
-                          placeholder="Например: Общая площадь 12000 кв.м., 4 этажа, железобетонный каркас"
-                          className={getInputStyle()} 
-                        />
+                      <div className="p-3 border border-neutral-300/10 rounded-lg bg-neutral-100/5 space-y-3">
+                        <span className="text-xs font-bold uppercase text-blue-600 dark:text-blue-400 block border-b border-neutral-300/10 pb-1">📁 Общая характеристика (Кабинет Собственника)</span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] uppercase font-bold opacity-75">Общая площадь *</label>
+                            <input 
+                              type="text" 
+                              required
+                              value={objTotalArea}
+                              onChange={(e) => setObjTotalArea(e.target.value)}
+                              placeholder="напр., 12000 кв.м."
+                              className={getInputStyle()} 
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] uppercase font-bold opacity-75">Этажность *</label>
+                            <input 
+                              type="text" 
+                              required
+                              value={objFloorsCount}
+                              onChange={(e) => setObjFloorsCount(e.target.value)}
+                              placeholder="напр., 4"
+                              className={getInputStyle()} 
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] uppercase font-bold opacity-75">Материал стен *</label>
+                            <input 
+                              type="text" 
+                              required
+                              value={objMaterial}
+                              onChange={(e) => setObjMaterial(e.target.value)}
+                              placeholder="напр., Газобетон, кирпич"
+                              className={getInputStyle()} 
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] uppercase font-bold opacity-75">Фундамент *</label>
+                            <input 
+                              type="text" 
+                              required
+                              value={objFoundation}
+                              onChange={(e) => setObjFoundation(e.target.value)}
+                              placeholder="напр., Ленточный монолит"
+                              className={getInputStyle()} 
+                            />
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="flex flex-col gap-1">
-                        <label className="text-xs font-bold uppercase opacity-75">⚙️ Ключевое оборудование (Кабинет Собственника)</label>
-                        <textarea 
-                          rows={2}
-                          value={objEquipmentSpecs}
-                          onChange={(e) => setObjEquipmentSpecs(e.target.value)}
-                          placeholder="Например: Приточно-вытяжная вентиляция AirCut, Чиллер Carrier 30XA, ГРЩSchneider Electric"
-                          className={getInputStyle()} 
-                        />
+                      <div className="p-3 border border-neutral-300/10 rounded-lg bg-neutral-100/5 space-y-3">
+                        <div className="flex justify-between items-center border-b border-neutral-300/10 pb-1">
+                          <span className="text-xs font-bold uppercase text-blue-600 dark:text-blue-400 block">⚙️ Ключевое оборудование (Кабинет Собственника)</span>
+                          <button
+                            type="button"
+                            onClick={() => setObjEquipmentRows([...objEquipmentRows, { equipment: "", brand: "", model: "", serial: "", year: "" }])}
+                            className="px-2 py-0.5 bg-blue-600 hover:bg-blue-750 text-white rounded text-[9px] font-bold"
+                          >
+                            ➕ Добавить оборудование
+                          </button>
+                        </div>
+                        
+                        {objEquipmentRows.length === 0 ? (
+                          <div className="text-center py-2 text-xs italic opacity-60">Оборудование не добавлено. Нажмите кнопку выше для добавления.</div>
+                        ) : (
+                          <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                            {objEquipmentRows.map((row, idx) => (
+                              <div key={idx} className="p-2.5 border border-neutral-200 dark:border-neutral-800 rounded bg-white/5 space-y-2 relative">
+                                <button
+                                  type="button"
+                                  onClick={() => setObjEquipmentRows(objEquipmentRows.filter((_, i) => i !== idx))}
+                                  className="absolute top-2 right-2 text-rose-500 hover:text-rose-700 font-bold p-1 text-[10px]"
+                                >
+                                  ❌ Удалить
+                                </button>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-4">
+                                  <div>
+                                    <label className="text-[9px] uppercase font-bold text-zinc-500">Оборудование *</label>
+                                    <input 
+                                      type="text"
+                                      required
+                                      value={row.equipment}
+                                      onChange={(e) => {
+                                        const newRows = [...objEquipmentRows];
+                                        newRows[idx].equipment = e.target.value;
+                                        setObjEquipmentRows(newRows);
+                                      }}
+                                      placeholder="напр., Котел"
+                                      className={`${getInputStyle()} py-1 text-xs`}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[9px] uppercase font-bold text-zinc-500">Марка *</label>
+                                    <input 
+                                      type="text"
+                                      required
+                                      value={row.brand}
+                                      onChange={(e) => {
+                                        const newRows = [...objEquipmentRows];
+                                        newRows[idx].brand = e.target.value;
+                                        setObjEquipmentRows(newRows);
+                                      }}
+                                      placeholder="напр., Buderus"
+                                      className={`${getInputStyle()} py-1 text-xs`}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[9px] uppercase font-bold text-zinc-500">Модель *</label>
+                                    <input 
+                                      type="text"
+                                      required
+                                      value={row.model}
+                                      onChange={(e) => {
+                                        const newRows = [...objEquipmentRows];
+                                        newRows[idx].model = e.target.value;
+                                        setObjEquipmentRows(newRows);
+                                      }}
+                                      placeholder="напр., Logamax plus"
+                                      className={`${getInputStyle()} py-1 text-xs`}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-[9px] uppercase font-bold text-zinc-500">Серийный номер *</label>
+                                    <input 
+                                      type="text"
+                                      required
+                                      value={row.serial}
+                                      onChange={(e) => {
+                                        const newRows = [...objEquipmentRows];
+                                        newRows[idx].serial = e.target.value;
+                                        setObjEquipmentRows(newRows);
+                                      }}
+                                      placeholder="напр., SN-928374-X"
+                                      className={`${getInputStyle()} py-1 text-xs`}
+                                    />
+                                  </div>
+                                  <div className="sm:col-span-2">
+                                    <label className="text-[9px] uppercase font-bold text-zinc-500">Год ввода в эксплуатацию *</label>
+                                    <input 
+                                      type="text"
+                                      required
+                                      value={row.year}
+                                      onChange={(e) => {
+                                        const newRows = [...objEquipmentRows];
+                                        newRows[idx].year = e.target.value;
+                                        setObjEquipmentRows(newRows);
+                                      }}
+                                      placeholder="напр., 2021"
+                                      className={`${getInputStyle()} py-1 text-xs`}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex flex-col gap-1">
@@ -5582,8 +5776,12 @@ export default function App() {
                 onNavigateToObjects={() => {
                   setOwnerActiveTab('characteristics');
                 }}
-                onNavigateToSchedules={() => {
+                onNavigateToSchedules={(objId) => {
                   setOwnerActiveTab('characteristics');
+                  if (objId) {
+                    handleAddNewScheduleForObject(objId);
+                    setIsOwnerSchModalOpen(true);
+                  }
                 }}
                 currentTheme={theme}
               />
@@ -5662,20 +5860,628 @@ export default function App() {
                       {isObjExpanded && (
                         <div className="p-5 space-y-5 bg-white/20 dark:bg-black/5 animate-slideDown">
                           {/* Characteristics / Specs list */}
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-b border-neutral-300/10 pb-4">
-                            <div className="p-3 bg-neutral-100/5 border border-neutral-300/10 rounded-xl">
-                              <span className="text-[9px] uppercase tracking-wider opacity-60 font-black block">📁 Общая характеристика:</span>
-                              <p className="font-bold text-xs mt-1 text-slate-800 dark:text-zinc-200">{obj.specs || "Характеристики не указаны"}</p>
+                          {editingObjSpecsId === obj.id ? (
+                            <form 
+                              onSubmit={async (e) => {
+                                e.preventDefault();
+                                try {
+                                  const response = await fetch(`/api/objects/${obj.id}`, {
+                                    method: "PUT",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                      specs: JSON.stringify({
+                                        totalArea: editTotalArea,
+                                        floorsCount: editFloorsCount,
+                                        material: editMaterial,
+                                        foundation: editFoundation,
+                                        lifeSupport: editLifeSupportRows
+                                      }),
+                                      equipmentSpecs: JSON.stringify(editEquipmentRows),
+                                      info: JSON.stringify({
+                                        yearBuilt: editYearBuilt,
+                                        structures: editStructuralRows
+                                      })
+                                    })
+                                  });
+                                  if (response.ok) {
+                                    setEditingObjSpecsId(null);
+                                    setRefreshTrigger(prev => prev + 1);
+                                    showToast("Характеристики здания успешно сохранены!", "success");
+                                  } else {
+                                    showToast("Не удалось обновить характеристики", "error");
+                                  }
+                                } catch (err) {
+                                  console.error(err);
+                                  showToast("Произошла ошибка при сохранении", "error");
+                                }
+                              }}
+                              className="bg-neutral-50 dark:bg-zinc-950 p-4 rounded-xl border border-blue-500/25 space-y-6 animate-fadeIn text-left text-xs"
+                            >
+                              <div className="flex justify-between items-center pb-2 border-b border-neutral-200 dark:border-neutral-800">
+                                <h5 className="font-extrabold text-xs text-blue-600 dark:text-blue-400 uppercase tracking-wider">✏️ Редактирование цифрового паспорта здания</h5>
+                              </div>
+
+                              {/* 0. General Specs editor */}
+                              <div className="space-y-4 border border-neutral-350/15 p-4 rounded-xl bg-neutral-100/5 hover:border-neutral-300 dark:bg-black/10 transition-all">
+                                <label className="text-[11px] font-black uppercase text-blue-600 dark:text-blue-450 block border-b border-neutral-250 dark:border-neutral-800 pb-1 font-bold">📁 Общая характеристика (Кабинет Собственника)</label>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-[10px] uppercase font-bold text-zinc-500">Общая площадь *</label>
+                                    <input 
+                                      type="text" 
+                                      required
+                                      value={editTotalArea}
+                                      onChange={(e) => setEditTotalArea(e.target.value)}
+                                      placeholder="напр., 12000 кв.м."
+                                      className={`${getInputStyle()} py-1 text-xs`}
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-[10px] uppercase font-bold text-zinc-500">Этажность *</label>
+                                    <input 
+                                      type="text" 
+                                      required
+                                      value={editFloorsCount}
+                                      onChange={(e) => setEditFloorsCount(e.target.value)}
+                                      placeholder="напр., 4"
+                                      className={`${getInputStyle()} py-1 text-xs`}
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-[10px] uppercase font-bold text-zinc-500">Материал стен *</label>
+                                    <input 
+                                      type="text" 
+                                      required
+                                      value={editMaterial}
+                                      onChange={(e) => setEditMaterial(e.target.value)}
+                                      placeholder="напр., Газобетон, кирпич"
+                                      className={`${getInputStyle()} py-1 text-xs`}
+                                    />
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-[10px] uppercase font-bold text-zinc-500">Фундамент *</label>
+                                    <input 
+                                      type="text" 
+                                      required
+                                      value={editFoundation}
+                                      onChange={(e) => setEditFoundation(e.target.value)}
+                                      placeholder="напр., Ленточный монолит"
+                                      className={`${getInputStyle()} py-1 text-xs`}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* 1. Life support table editor */}
+                              <div className="space-y-2 border border-neutral-350/15 p-4 rounded-xl bg-neutral-100/5 hover:border-neutral-300 dark:bg-black/10 transition-all">
+                                <div className="flex justify-between items-center pb-2 border-b border-neutral-250 dark:border-neutral-800">
+                                  <label className="text-[11px] font-black uppercase text-blue-600 dark:text-blue-450 block">📁 Характеристики систем жизнеобеспечения</label>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditLifeSupportRows([...editLifeSupportRows, { system: "", location: "", controlLocation: "" }])}
+                                    className="px-2.5 py-1 bg-blue-650 hover:bg-blue-700 text-white rounded text-[10px] font-bold flex items-center gap-0.5 cursor-pointer whitespace-nowrap"
+                                  >
+                                    <span>➕ Добавить систему</span>
+                                  </button>
+                                </div>
+                                {editLifeSupportRows.length === 0 ? (
+                                  <div className="text-center py-4 text-xs italic opacity-60">Таблица пуста. Нажмите кнопку выше, чтобы добавить первую систему.</div>
+                                ) : (
+                                  <div className="overflow-x-auto rounded border border-neutral-200 dark:border-neutral-800">
+                                    <table className="w-full text-xs text-left border-collapse">
+                                      <thead>
+                                        <tr className="bg-neutral-100 dark:bg-zinc-900 border-b border-neutral-200 dark:border-neutral-800 text-[10px] uppercase font-black text-neutral-500">
+                                          <th className="p-2 min-w-[150px]">Система жизнеобеспечения</th>
+                                          <th className="p-2 min-w-[150px]">Место размещения установки</th>
+                                          <th className="p-2 min-w-[150px]">Место размещения блока управления</th>
+                                          <th className="p-2 w-10 text-center"></th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {editLifeSupportRows.map((row, idx) => (
+                                          <tr key={idx} className="border-b last:border-b-0 border-neutral-150 dark:border-neutral-800">
+                                            <td className="p-1">
+                                              <input
+                                                type="text"
+                                                required
+                                                value={row.system}
+                                                onChange={(e) => {
+                                                  const newRows = [...editLifeSupportRows];
+                                                  newRows[idx].system = e.target.value;
+                                                  setEditLifeSupportRows(newRows);
+                                                }}
+                                                placeholder="напр., Отопление, Вентиляция"
+                                                className={`${getInputStyle()} py-1 text-xs`}
+                                              />
+                                            </td>
+                                            <td className="p-1">
+                                              <input
+                                                type="text"
+                                                required
+                                                value={row.location}
+                                                onChange={(e) => {
+                                                  const newRows = [...editLifeSupportRows];
+                                                  newRows[idx].location = e.target.value;
+                                                  setEditLifeSupportRows(newRows);
+                                                }}
+                                                placeholder="напр., Техническое помещение"
+                                                className={`${getInputStyle()} py-1 text-xs`}
+                                              />
+                                            </td>
+                                            <td className="p-1">
+                                              <input
+                                                type="text"
+                                                required
+                                                value={row.controlLocation}
+                                                onChange={(e) => {
+                                                  const newRows = [...editLifeSupportRows];
+                                                  newRows[idx].controlLocation = e.target.value;
+                                                  setEditLifeSupportRows(newRows);
+                                                }}
+                                                placeholder="напр., Электрощит на 1-м этаже"
+                                                className={`${getInputStyle()} py-1 text-xs`}
+                                              />
+                                            </td>
+                                            <td className="p-1 text-center">
+                                              <button
+                                                type="button"
+                                                onClick={() => setEditLifeSupportRows(editLifeSupportRows.filter((_, i) => i !== idx))}
+                                                className="p-1.5 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+                                              >
+                                                <Trash2 className="w-4 h-4" />
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* 2. Equipment registry table editor */}
+                              <div className="space-y-2 border border-neutral-350/15 p-4 rounded-xl bg-neutral-100/5 hover:border-neutral-300 dark:bg-black/10 transition-all">
+                                <div className="flex justify-between items-center pb-2 border-b border-neutral-250 dark:border-neutral-800">
+                                  <label className="text-[11px] font-black uppercase text-blue-600 dark:text-blue-450 block">⚙️ Реестр ключевого оборудования</label>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditEquipmentRows([...editEquipmentRows, { equipment: "", brand: "", model: "", serial: "", year: "" }])}
+                                    className="px-2.5 py-1 bg-blue-650 hover:bg-blue-700 text-white rounded text-[10px] font-bold flex items-center gap-0.5 cursor-pointer whitespace-nowrap"
+                                  >
+                                    <span>➕ Добавить оборудование</span>
+                                  </button>
+                                </div>
+                                {editEquipmentRows.length === 0 ? (
+                                  <div className="text-center py-4 text-xs italic opacity-60">Реестр пуст. Нажмите кнопку выше, чтобы добавить оборудование.</div>
+                                ) : (
+                                  <div className="overflow-x-auto rounded border border-neutral-200 dark:border-neutral-800">
+                                    <table className="w-full text-xs text-left border-collapse">
+                                      <thead>
+                                        <tr className="bg-neutral-100 dark:bg-zinc-900 border-b border-neutral-200 dark:border-neutral-800 text-[10px] uppercase font-black text-neutral-500">
+                                          <th className="p-2 min-w-[150px]">Оборудование</th>
+                                          <th className="p-2 min-w-[120px]">Марка</th>
+                                          <th className="p-2 min-w-[120px]">Модель</th>
+                                          <th className="p-2 min-w-[120px]">Серийный номер</th>
+                                          <th className="p-2 min-w-[80px]">Год ввода в экспл.</th>
+                                          <th className="p-2 w-10 text-center"></th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {editEquipmentRows.map((row, idx) => (
+                                          <tr key={idx} className="border-b last:border-b-0 border-neutral-150 dark:border-neutral-800">
+                                            <td className="p-1">
+                                              <input
+                                                type="text"
+                                                required
+                                                value={row.equipment}
+                                                onChange={(e) => {
+                                                  const newRows = [...editEquipmentRows];
+                                                  newRows[idx].equipment = e.target.value;
+                                                  setEditEquipmentRows(newRows);
+                                                }}
+                                                placeholder="напр., Котел"
+                                                className={`${getInputStyle()} py-1 text-xs`}
+                                              />
+                                            </td>
+                                            <td className="p-1">
+                                              <input
+                                                type="text"
+                                                required
+                                                value={row.brand || ""}
+                                                onChange={(e) => {
+                                                  const newRows = [...editEquipmentRows];
+                                                  newRows[idx].brand = e.target.value;
+                                                  setEditEquipmentRows(newRows);
+                                                }}
+                                                placeholder="напр., Buderus"
+                                                className={`${getInputStyle()} py-1 text-xs`}
+                                              />
+                                            </td>
+                                            <td className="p-1">
+                                              <input
+                                                type="text"
+                                                required
+                                                value={row.model}
+                                                onChange={(e) => {
+                                                  const newRows = [...editEquipmentRows];
+                                                  newRows[idx].model = e.target.value;
+                                                  setEditEquipmentRows(newRows);
+                                                }}
+                                                placeholder="напр., Logamax plus"
+                                                className={`${getInputStyle()} py-1 text-xs`}
+                                              />
+                                            </td>
+                                            <td className="p-1">
+                                              <input
+                                                type="text"
+                                                required
+                                                value={row.serial}
+                                                onChange={(e) => {
+                                                  const newRows = [...editEquipmentRows];
+                                                  newRows[idx].serial = e.target.value;
+                                                  setEditEquipmentRows(newRows);
+                                                }}
+                                                placeholder="напр., SN-928374-X"
+                                                className={`${getInputStyle()} py-1 text-xs`}
+                                              />
+                                            </td>
+                                            <td className="p-1">
+                                              <input
+                                                type="text"
+                                                required
+                                                maxLength={4}
+                                                value={row.year}
+                                                onChange={(e) => {
+                                                  const newRows = [...editEquipmentRows];
+                                                  newRows[idx].year = e.target.value;
+                                                  setEditEquipmentRows(newRows);
+                                                }}
+                                                placeholder="напр., 2021"
+                                                className={`${getInputStyle()} py-1 text-xs`}
+                                              />
+                                            </td>
+                                            <td className="p-1 text-center">
+                                              <button
+                                                type="button"
+                                                onClick={() => setEditEquipmentRows(editEquipmentRows.filter((_, i) => i !== idx))}
+                                                className="p-1.5 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+                                              >
+                                                <Trash2 className="w-4 h-4" />
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* 3. Building Commissioning editor */}
+                              <div className="space-y-4 border border-neutral-350/15 p-4 rounded-xl bg-neutral-100/5 hover:border-neutral-300 dark:bg-black/10 transition-all">
+                                <div className="flex justify-between items-center pb-2 border-b border-neutral-250 dark:border-neutral-800">
+                                  <label className="text-[11px] font-black uppercase text-blue-600 dark:text-blue-450 block">🏗️ Ввод в эксплуатацию / конструктив</label>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditStructuralRows([...editStructuralRows, { foundation: "", walls: "", glassFormula: "", windowType: "" }])}
+                                    className="px-2.5 py-1 bg-blue-650 hover:bg-blue-700 text-white rounded text-[10px] font-bold flex items-center gap-0.5 cursor-pointer whitespace-nowrap"
+                                  >
+                                    <span>➕ Добавить конструктив</span>
+                                  </button>
+                                </div>
+
+                                <div className="max-w-[240px] space-y-1">
+                                  <label className="text-[10px] font-bold uppercase text-zinc-500 block">Год постройки здания:</label>
+                                  <input 
+                                    type="text"
+                                    className={`${getInputStyle()} py-1 text-xs`}
+                                    value={editYearBuilt}
+                                    onChange={(e) => setEditYearBuilt(e.target.value)}
+                                    placeholder="напр., 2015"
+                                  />
+                                </div>
+
+                                {editStructuralRows.length === 0 ? (
+                                  <div className="text-center py-4 text-xs italic opacity-60">Строки конструктива отсутствуют. Вы можете добавить строку выше.</div>
+                                ) : (
+                                  <div className="overflow-x-auto rounded border border-neutral-200 dark:border-neutral-800">
+                                    <table className="w-full text-xs text-left border-collapse">
+                                      <thead>
+                                        <tr className="bg-neutral-100 dark:bg-zinc-900 border-b border-neutral-200 dark:border-neutral-800 text-[10px] uppercase font-black text-neutral-500">
+                                          <th className="p-2 min-w-[130px]">Тип фундамента</th>
+                                          <th className="p-2 min-w-[130px]">Материал стен</th>
+                                          <th className="p-2 min-w-[150px]">Формула стеклопакетов</th>
+                                          <th className="p-2 min-w-[150px]">Тип оконных конструкций</th>
+                                          <th className="p-2 w-10 text-center"></th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {editStructuralRows.map((row, idx) => (
+                                          <tr key={idx} className="border-b last:border-b-0 border-neutral-150 dark:border-neutral-800">
+                                            <td className="p-1">
+                                              <input
+                                                type="text"
+                                                required
+                                                value={row.foundation}
+                                                onChange={(e) => {
+                                                  const newRows = [...editStructuralRows];
+                                                  newRows[idx].foundation = e.target.value;
+                                                  setEditStructuralRows(newRows);
+                                                }}
+                                                placeholder="напр., Ленточный монолит"
+                                                className={`${getInputStyle()} py-1 text-xs`}
+                                              />
+                                            </td>
+                                            <td className="p-1">
+                                              <input
+                                                type="text"
+                                                required
+                                                value={row.walls}
+                                                onChange={(e) => {
+                                                  const newRows = [...editStructuralRows];
+                                                  newRows[idx].walls = e.target.value;
+                                                  setEditStructuralRows(newRows);
+                                                }}
+                                                placeholder="напр., Газобетон + Облицовка"
+                                                className={`${getInputStyle()} py-1 text-xs`}
+                                              />
+                                            </td>
+                                            <td className="p-1">
+                                              <input
+                                                type="text"
+                                                required
+                                                value={row.glassFormula}
+                                                onChange={(e) => {
+                                                  const newRows = [...editStructuralRows];
+                                                  newRows[idx].glassFormula = e.target.value;
+                                                  setEditStructuralRows(newRows);
+                                                }}
+                                                placeholder="напр., 4M1-16Ar-4M1-12Ar-I4"
+                                                className={`${getInputStyle()} py-1 text-xs`}
+                                              />
+                                            </td>
+                                            <td className="p-1">
+                                              <input
+                                                type="text"
+                                                required
+                                                value={row.windowType}
+                                                onChange={(e) => {
+                                                  const newRows = [...editStructuralRows];
+                                                  newRows[idx].windowType = e.target.value;
+                                                  setEditStructuralRows(newRows);
+                                                }}
+                                                placeholder="напр., Профиль ПВХ Veka 82мм"
+                                                className={`${getInputStyle()} py-1 text-xs`}
+                                              />
+                                            </td>
+                                            <td className="p-1 text-center">
+                                              <button
+                                                type="button"
+                                                onClick={() => setEditStructuralRows(editStructuralRows.filter((_, i) => i !== idx))}
+                                                className="p-1.5 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+                                              >
+                                                <Trash2 className="w-4 h-4" />
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="flex gap-2.5 justify-end">
+                                <button 
+                                  type="button" 
+                                  onClick={() => setEditingObjSpecsId(null)}
+                                  className="px-4 py-2 rounded-lg text-xs font-bold bg-neutral-200 hover:bg-neutral-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-neutral-800 dark:text-neutral-100 transition-all cursor-pointer"
+                                >
+                                  Отмена
+                                </button>
+                                <button 
+                                  type="submit"
+                                  className="px-5 py-2 rounded-lg text-xs font-bold bg-blue-650 hover:bg-blue-700 text-white shadow-md transition-all cursor-pointer"
+                                >
+                                  Сохранить
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <div className="space-y-4">
+                              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 border-b border-neutral-300/10 pb-4 text-left">
+                                {/* 1. View Specs */}
+                                <div className="p-4 bg-neutral-100/10 group border border-neutral-300/10 rounded-2xl relative space-y-2">
+                                  <span className="text-[10px] uppercase tracking-wider opacity-60 font-black block text-blue-600 dark:text-blue-400">📁 Характеристики объекта & жизнеобеспечение:</span>
+                                  {obj.specs ? (() => {
+                                    const isLegacy = !obj.specs.trim().startsWith('{') && !obj.specs.trim().startsWith('[');
+                                    if (isLegacy) {
+                                      return <p className="font-semibold text-xs text-slate-800 dark:text-zinc-200 whitespace-pre-wrap">{obj.specs}</p>;
+                                    }
+                                    const specsData = parseSpecs(obj.specs);
+                                    const hasGeneral = specsData.general.totalArea || specsData.general.floorsCount || specsData.general.material || specsData.general.foundation;
+                                    return (
+                                      <div className="space-y-3">
+                                        {hasGeneral && (
+                                          <div className="p-2.5 bg-neutral-550/5 rounded border border-neutral-200/5 dark:border-neutral-800/10 space-y-1 text-[11px] leading-relaxed">
+                                            <span className="text-[9px] uppercase font-bold text-zinc-400 block mb-1">📁 Общая характеристика:</span>
+                                            <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-neutral-800 dark:text-zinc-200">
+                                              {specsData.general.totalArea && (
+                                                <div>
+                                                  <span className="opacity-60 block text-[9px] uppercase">Площадь:</span>
+                                                  <span className="font-bold">{specsData.general.totalArea}</span>
+                                                </div>
+                                              )}
+                                              {specsData.general.floorsCount && (
+                                                <div>
+                                                  <span className="opacity-60 block text-[9px] uppercase">Этажность:</span>
+                                                  <span className="font-bold">{specsData.general.floorsCount}</span>
+                                                </div>
+                                              )}
+                                              {specsData.general.material && (
+                                                <div>
+                                                  <span className="opacity-60 block text-[9px] uppercase">Стены:</span>
+                                                  <span className="font-bold">{specsData.general.material}</span>
+                                                </div>
+                                              )}
+                                              {specsData.general.foundation && (
+                                                <div>
+                                                  <span className="opacity-60 block text-[9px] uppercase">Фундамент:</span>
+                                                  <span className="font-bold">{specsData.general.foundation}</span>
+                                                </div>
+                                              )}
+                                            </div>
+                                          </div>
+                                        )}
+                                        {specsData.lifeSupport && specsData.lifeSupport.length > 0 && (
+                                          <div className="overflow-x-auto">
+                                            <span className="text-[9px] uppercase font-bold text-zinc-400 block mb-1">🔧 Системы жизнеобеспечения:</span>
+                                            <table className="w-full text-[10px] text-left border-collapse">
+                                              <thead>
+                                                <tr className="border-b border-neutral-200 dark:border-neutral-800 text-zinc-500 font-bold">
+                                                  <th className="py-1 pr-2">Система</th>
+                                                  <th className="py-1 px-2">Установка</th>
+                                                  <th className="py-1 pl-2">Блок управления</th>
+                                                </tr>
+                                              </thead>
+                                              <tbody>
+                                                {specsData.lifeSupport.map((row, idx) => (
+                                                  <tr key={idx} className="border-b last:border-b-0 border-neutral-200/50 dark:border-neutral-800/50 text-neutral-700 dark:text-zinc-300">
+                                                    <td className="py-1 pr-2 font-bold">{row.system || "—"}</td>
+                                                    <td className="py-1 px-2">{row.location || "—"}</td>
+                                                    <td className="py-1 pl-2 font-mono text-blue-600 dark:text-blue-400">{row.controlLocation || "—"}</td>
+                                                  </tr>
+                                                ))}
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })() : (
+                                    <p className="font-semibold text-xs text-neutral-450 italic">Спецификации систем не заданы</p>
+                                  )}
+                                </div>
+
+                                {/* 2. View Equipment */}
+                                <div className="p-4 bg-neutral-100/10 group border border-neutral-300/10 rounded-2xl relative space-y-2">
+                                  <span className="text-[10px] uppercase tracking-wider opacity-60 font-black block text-blue-600 dark:text-blue-400">⚙️ Реестр оборудования:</span>
+                                  {obj.equipmentSpecs ? (() => {
+                                    const isLegacy = !obj.equipmentSpecs.trim().startsWith('[');
+                                    if (isLegacy) {
+                                      return <p className="font-semibold text-xs text-slate-800 dark:text-zinc-200 whitespace-pre-wrap">{obj.equipmentSpecs}</p>;
+                                    }
+                                    const list = parseEquipment(obj.equipmentSpecs);
+                                    return (
+                                      <div className="overflow-x-auto">
+                                        <table className="w-full text-[10px] text-left border-collapse">
+                                          <thead>
+                                            <tr className="border-b border-neutral-200 dark:border-neutral-800 text-zinc-500 font-bold">
+                                              <th className="py-1 pr-2">Оборудование / Марка</th>
+                                              <th className="py-1 px-2">Модель</th>
+                                              <th className="py-1 px-2">S/N</th>
+                                              <th className="py-1 pl-2">Год</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {list.map((row, idx) => (
+                                              <tr key={idx} className="border-b last:border-b-0 border-neutral-200/50 dark:border-neutral-800/50 text-neutral-700 dark:text-zinc-300">
+                                                <td className="py-1 pr-2">
+                                                  <span className="font-bold block">{row.equipment || "—"}</span>
+                                                  <span className="text-[9px] text-zinc-500 dark:text-zinc-400 font-medium block">{row.brand || "—"}</span>
+                                                </td>
+                                                <td className="py-1 px-2 font-mono">{row.model || "—"}</td>
+                                                <td className="py-1 px-2 font-mono text-zinc-650 dark:text-zinc-300">{row.serial || "—"}</td>
+                                                <td className="py-1 pl-2 font-mono">{row.year || "—"}</td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    );
+                                  })() : (
+                                    <p className="font-semibold text-xs text-neutral-450 italic">Оборудование не внесено в реестр</p>
+                                  )}
+                                </div>
+
+                                {/* 3. View Commissioning */}
+                                <div className="p-4 bg-neutral-100/10 group border border-neutral-300/10 rounded-2xl relative space-y-2">
+                                  <span className="text-[10px] uppercase tracking-wider opacity-60 font-black block text-blue-600 dark:text-blue-400">🏗️ Ввод в эксплуатацию / конструктив:</span>
+                                  {obj.info ? (() => {
+                                    const isLegacy = !obj.info.trim().startsWith('{');
+                                    if (isLegacy) {
+                                      return <p className="font-semibold text-xs text-slate-800 dark:text-zinc-200 whitespace-pre-wrap">{obj.info}</p>;
+                                    }
+                                    const bInfo = parseBuildingInfo(obj.info);
+                                    return (
+                                      <div className="space-y-2 text-[10px]">
+                                        {bInfo.yearBuilt && (
+                                          <div className="font-bold text-neutral-850 dark:text-zinc-150">
+                                            Год постройки: <span className="font-mono bg-neutral-200 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-blue-650 dark:text-blue-400">{bInfo.yearBuilt}</span>
+                                          </div>
+                                        )}
+                                        {bInfo.structures && bInfo.structures.length > 0 ? (
+                                          <div className="overflow-x-auto">
+                                            <table className="w-full text-left border-collapse">
+                                              <thead>
+                                                <tr className="border-b border-neutral-200 dark:border-neutral-800 text-zinc-500 font-bold">
+                                                  <th className="py-1 pr-2">Фундамент & Стены</th>
+                                                  <th className="py-1 pl-2">Стеклопакеты & Окна</th>
+                                                </tr>
+                                              </thead>
+                                              <tbody>
+                                                {bInfo.structures.map((row, idx) => (
+                                                  <tr key={idx} className="border-b last:border-b-0 border-neutral-200/50 dark:border-neutral-800/50 text-neutral-700 dark:text-zinc-300">
+                                                    <td className="py-1 pr-2">
+                                                      <span className="font-bold block">{row.foundation || "—"}</span>
+                                                      <span className="block text-[9px] opacity-75">{row.walls || "—"}</span>
+                                                    </td>
+                                                    <td className="py-1 pl-2">
+                                                      <span className="font-bold block">{row.windowType || "—"}</span>
+                                                      <span className="block text-[9px] opacity-75 font-mono">{row.glassFormula || "—"}</span>
+                                                    </td>
+                                                  </tr>
+                                                ))}
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                        ) : (
+                                          <p className="text-neutral-450 italic">Параметры конструктива не занесены</p>
+                                        )}
+                                      </div>
+                                    );
+                                  })() : (
+                                    <p className="font-semibold text-xs text-neutral-450 italic">Сведения отсутствуют</p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex justify-end pr-1">
+                                <button 
+                                  onClick={() => {
+                                    setEditingObjSpecsId(obj.id);
+                                    setEditSpecsSpecs(obj.specs || "");
+                                    setEditSpecsEquip(obj.equipmentSpecs || "");
+                                    setEditSpecsInfo(obj.info || "");
+
+                                    // Parse structured rows for editing:
+                                    const specsData = parseSpecs(obj.specs);
+                                    setEditTotalArea(specsData.general.totalArea || "");
+                                    setEditFloorsCount(specsData.general.floorsCount || "");
+                                    setEditMaterial(specsData.general.material || "");
+                                    setEditFoundation(specsData.general.foundation || "");
+                                    setEditLifeSupportRows(specsData.lifeSupport);
+                                    setEditEquipmentRows(parseEquipment(obj.equipmentSpecs));
+                                    const bInfo = parseBuildingInfo(obj.info);
+                                    setEditYearBuilt(bInfo.yearBuilt);
+                                    setEditStructuralRows(bInfo.structures || []);
+                                  }}
+                                  className="px-3.5 py-1.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-600 dark:text-blue-400 rounded-lg text-xs font-extrabold flex items-center gap-1 cursor-pointer transition-all border border-blue-500/20"
+                                >
+                                  <span>✏️ Редактировать цифровой паспорт здания</span>
+                                </button>
+                              </div>
                             </div>
-                            <div className="p-3 bg-neutral-100/5 border border-neutral-300/10 rounded-xl">
-                              <span className="text-[9px] uppercase tracking-wider opacity-60 font-black block">⚙️ Ключевое оборудование:</span>
-                              <p className="font-bold text-xs mt-1 text-slate-800 dark:text-zinc-200">{obj.equipmentSpecs || "Перечень оборудования отсутствует"}</p>
-                            </div>
-                            <div className="p-3 bg-neutral-100/5 border border-neutral-300/10 rounded-xl">
-                              <span className="text-[9px] uppercase tracking-wider opacity-60 font-black block">🏗️ Ввод в эксплуатацию:</span>
-                              <p className="font-bold text-xs mt-1 text-slate-800 dark:text-zinc-200">{obj.info || "Параметры года постройки не указаны"}</p>
-                            </div>
-                          </div>
+                          )}
 
                           {/* Linked Garden / Landscape Section */}
                           {(() => {
@@ -5737,12 +6543,23 @@ export default function App() {
                             );
                           })()}
 
-                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             {/* Schedule item readings */}
                             <div className="space-y-2">
-                              <span className="text-[10px] font-black uppercase text-zinc-400">График обслуживания оборудования:</span>
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-black uppercase text-zinc-400">График обслуживания оборудования:</span>
+                                <button 
+                                  onClick={() => {
+                                    handleAddNewScheduleForObject(obj.id);
+                                    setIsOwnerSchModalOpen(true);
+                                  }}
+                                  className="text-[11px] font-extrabold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-0.5 cursor-pointer"
+                                >
+                                  <span>➕ Добавить регламент</span>
+                                </button>
+                              </div>
                               {matchingSchedules.length === 0 ? (
-                                <p className="text-xs italic text-[11px] opacity-50">График не назначен службой эксплуатации</p>
+                                <p className="text-xs italic text-[11px] opacity-50">График не назначен. Нажмите кнопку выше, чтобы составить первый регламент.</p>
                               ) : (
                                 <div className="space-y-1.5">
                                   {matchingSchedules.map(sch => {
@@ -5752,20 +6569,42 @@ export default function App() {
                                         <div className="min-w-0 space-y-1">
                                           <div className="font-bold text-slate-800 dark:text-slate-100 break-words">{sch.title}</div>
                                           <div className="text-[10px] opacity-65 flex flex-wrap gap-x-2 gap-y-1 items-center mt-0.5">
+                                            <span>Категория: <strong>{sch.category}</strong></span>
+                                            <span className="opacity-40">•</span>
                                             <span>Интервал: {sch.intervalDays} дн.</span>
                                             <span className="opacity-40">•</span>
                                             <span>Чек-лист: {getTemplateName(sch.checklistTemplateId)}</span>
                                           </div>
-                                          <div className="pt-1 flex items-center justify-between gap-2">
+                                          <div className="pt-1.5 flex items-center justify-between gap-2">
                                             <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold border uppercase tracking-wider ${status.class}`}>
                                               {status.label}
                                             </span>
-                                            <button 
-                                              onClick={() => setQrModalSchedule(sch)}
-                                              className="flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 border border-rose-300/20 rounded-md font-bold text-[9px] cursor-pointer transition-all uppercase tracking-wider"
-                                            >
-                                              <span>📲 QR-код</span>
-                                            </button>
+                                            <div className="flex items-center gap-1.5">
+                                              <button 
+                                                onClick={() => setQrModalSchedule(sch)}
+                                                className="flex items-center gap-1 px-2 py-1 bg-sky-500/10 hover:bg-sky-500/20 text-sky-600 dark:text-sky-400 border border-sky-300/20 rounded-md font-bold text-[9px] cursor-pointer transition-all uppercase"
+                                                title="Показать QR-код обслуживания"
+                                              >
+                                                <span>📲 QR-код</span>
+                                              </button>
+                                              <button 
+                                                onClick={() => {
+                                                  startEditSchedule(sch);
+                                                  setIsOwnerSchModalOpen(true);
+                                                }}
+                                                className="flex items-center gap-1 px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-300/20 rounded-md font-bold text-[9px] cursor-pointer transition-all uppercase"
+                                                title="Редактировать регламент"
+                                              >
+                                                <span>✏️</span>
+                                              </button>
+                                              <button 
+                                                onClick={() => deleteSchedule(sch.id)}
+                                                className="flex items-center gap-1 px-2 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 border border-red-300/20 rounded-md font-bold text-[9px] cursor-pointer transition-all uppercase"
+                                                title="Удалить регламент"
+                                              >
+                                                <span>❌</span>
+                                              </button>
+                                            </div>
                                           </div>
                                         </div>
                                       </div>
@@ -5840,26 +6679,6 @@ export default function App() {
               </div>
             )}
 
-            {/* ─── ДОБАВИТЬ: Семейный доступ и паспорт объекта ─── */}
-            {ownerActiveTab === 'characteristics' && currentUser && selectedObjectForOwner && (
-              <div className="mt-6 max-w-4xl mx-auto w-full">
-                <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200 mb-3">
-                  Управление доступом и паспортом объекта
-                </h3>
-                <FamilyAccessPanel
-                  object={selectedObjectForOwner}
-                  currentUserId={currentUser.id}
-                  currentUserRole={currentUser.role}
-                  canEdit={
-                    currentUser.role === 'admin' ||
-                    selectedObjectForOwner.ownerId === currentUser.id
-                  }
-                  onRefresh={() => setRefreshTrigger(prev => prev + 1)}
-                  showToast={showToast}
-                />
-              </div>
-            )}
-            
             {/* Registered Service Specialists Contact Info for Owners */}
             {ownerActiveTab === 'specialists' && (
               <div className="space-y-4 animate-fadeIn max-w-4xl mx-auto w-full">
@@ -7938,6 +8757,172 @@ export default function App() {
           </div>
         );
       })()}
+
+       {/* MODAL: CREATE/EDIT SCHEDULE FOR OWNER */}
+      {isOwnerSchModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className={`${getCardStyle()} max-w-lg w-full max-h-[90vh] overflow-y-auto relative animate-fadeIn space-y-4 bg-white dark:bg-zinc-950 text-neutral-800 dark:text-zinc-100 p-6`}>
+            
+            {/* Header of Modal */}
+            <div className="flex justify-between items-start border-b pb-3 border-neutral-100 dark:border-neutral-800">
+              <div>
+                <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase block tracking-wider">Панель управления регламентом</span>
+                <h4 className="font-semibold text-base text-slate-900 dark:text-white leading-snug">
+                  {editingSchId ? "✏️ Изменить регламент ТО" : "➕ Назначить новый пункт обслуживания"}
+                </h4>
+              </div>
+              <button 
+                onClick={() => {
+                  setIsOwnerSchModalOpen(false);
+                  resetScheduleForm();
+                }} 
+                className="p-1 hover:bg-neutral-100 dark:hover:bg-zinc-900 rounded-full text-neutral-400 hover:text-neutral-600 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Form */}
+            <form 
+              onSubmit={async (e) => {
+                e.preventDefault();
+                await saveScheduleSubmit(e);
+                setIsOwnerSchModalOpen(false);
+                showToast(editingSchId ? "Успешно обновлено!" : "Новый регламент успешно добавлен!", "success");
+              }} 
+              className="space-y-4 text-left"
+            >
+              <div className="flex flex-col gap-1 text-xs">
+                <label className="text-[11px] font-bold uppercase opacity-75">Объект ТО *</label>
+                <select 
+                  required
+                  value={schObjId} 
+                  onChange={(e) => setSchObjId(e.target.value)}
+                  className={getInputStyle()}
+                >
+                  <option value="">Выберите объект...</option>
+                  {objects.map(o => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] font-bold uppercase opacity-75">Категория регламента *</label>
+                  <select 
+                    required
+                    value={schCategory} 
+                    onChange={(e) => setSchCategory(e.target.value)}
+                    className={getInputStyle()}
+                  >
+                    <option value="Отопление">Отопление</option>
+                    <option value="Вентиляция">Вентиляция</option>
+                    <option value="Пожарная безопасность">Пожарная безопасность</option>
+                    <option value="Водоснабжение">Водоснабжение</option>
+                    <option value="Электрика">Электрика</option>
+                    <option value="Конструктив здания">Конструктив здания</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] font-bold uppercase opacity-75">Ввод в эксплуатацию</label>
+                  <input 
+                    type="date" 
+                    value={schCommissioningDate}
+                    onChange={(e) => setSchCommissioningDate(e.target.value)}
+                    className={getInputStyle()} 
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1 text-xs">
+                <label className="text-[11px] font-bold uppercase opacity-75">Название задачи ТО *</label>
+                <input 
+                  type="text" 
+                  required
+                  value={schTitle}
+                  onChange={(e) => setSchTitle(e.target.value)}
+                  placeholder="Замер параметров ввода ИТП, Опрессовка систем..."
+                  className={getInputStyle()} 
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] font-bold uppercase opacity-75">Интервал обслуживания (дн.) *</label>
+                  <input 
+                    type="number" 
+                    required
+                    min={1}
+                    value={schInterval}
+                    onChange={(e) => setSchInterval(Number(e.target.value))}
+                    className={getInputStyle()} 
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] font-bold uppercase opacity-75">Привязать опросный Чек-лист *</label>
+                  <select 
+                    required
+                    value={schTemplateId} 
+                    onChange={(e) => setSchTemplateId(e.target.value)}
+                    className={getInputStyle()}
+                  >
+                    <option value="">Выберите макет чек-листа...</option>
+                    {templates.map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1 text-xs">
+                <label className="text-[11px] font-bold uppercase opacity-75">Ответственный специалист (выборочно)</label>
+                <select 
+                  value={schResponsible} 
+                  onChange={(e) => setSchResponsible(e.target.value)}
+                  className={getInputStyle()}
+                >
+                  <option value="">Свободный выбор дежурным инженером</option>
+                  {users.filter(u => u.role === 'specialist').map(u => (
+                    <option key={u.id} value={u.id}>{u.fullname}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1 text-xs">
+                <label className="text-[11px] font-bold uppercase opacity-75">Технические примечания</label>
+                <textarea 
+                  value={schNotes}
+                  onChange={(e) => setSchNotes(e.target.value)}
+                  placeholder="Опишите технический регламент, замеры, инструкции..."
+                  className={`${getInputStyle()} h-20 resize-none`} 
+                />
+              </div>
+
+              <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800 flex gap-2 justify-end text-xs">
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    setIsOwnerSchModalOpen(false);
+                    resetScheduleForm();
+                  }} 
+                  className="px-4 py-2 hover:bg-neutral-100 dark:hover:bg-zinc-850 rounded-lg font-bold text-neutral-600 dark:text-neutral-350 cursor-pointer"
+                >
+                  Отмена
+                </button>
+                <button 
+                  type="submit" 
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold shadow cursor-pointer transition-all"
+                >
+                  {editingSchId ? "Сохранить регламент" : "Создать регламент"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* MODAL: EDIT USER PROFILE */}
       {isProfileOpen && (

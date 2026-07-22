@@ -30,6 +30,88 @@ import {
   Sparkles
 } from "lucide-react";
 import { User as UserType, BuildingObject, ScheduleItem, CompletedChecklist } from "../types";
+import { parseEquipment, parseLifeSupport, parseBuildingInfo, parseSpecs } from "../utils/specParsers";
+import { Property3DViewer } from "./Property3DViewer";
+
+function mapPlanSubtypeToSecondaryType(subType?: string): "banya" | "shed" | "gazebo" | "bonfire" | "bbq" | "playground" | "garage" | "security_house" | "guest_house" | "observatory" | "admin_building" | "boiler_room" | "other" {
+  switch (subType) {
+    case "banya": return "banya";
+    case "shed": return "shed";
+    case "toilet": return "shed";
+    case "shower": return "shed";
+    case "gazebo": return "gazebo";
+    case "firepit": return "bonfire";
+    case "bbq": return "bbq";
+    case "playground": return "playground";
+    case "sports_ground": return "playground";
+    case "garage": return "garage";
+    case "security_house": return "security_house";
+    case "guesthouse": return "guest_house";
+    case "observatory": return "observatory";
+    case "admin_building": return "admin_building";
+    case "boiler_room": return "boiler_room";
+    default: return "other";
+  }
+}
+
+function getEmojiForSecondaryType(type: string): string {
+  switch (type) {
+    case "banya": return "🛁";
+    case "shed": return "🛖";
+    case "gazebo": return "⛺";
+    case "bonfire": return "🔥";
+    case "bbq": return "🍢";
+    case "playground": return "🛝";
+    case "garage": return "🚗";
+    case "security_house": return "👮";
+    case "guest_house": return "🏡";
+    case "observatory": return "🔭";
+    case "admin_building": return "🏢";
+    case "boiler_room": return "🔥";
+    default: return "🛖";
+  }
+}
+
+const compressImage = (file: File, maxWidth = 1000, maxHeight = 1000, quality = 0.75): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressedDataUrl = canvas.toDataURL("image/jpeg", quality);
+          resolve(compressedDataUrl);
+        } else {
+          resolve(event.target?.result as string);
+        }
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+};
 
 interface EcosystemPortalProps {
   currentUser: UserType;
@@ -37,8 +119,9 @@ interface EcosystemPortalProps {
   schedules: ScheduleItem[];
   reports: CompletedChecklist[];
   onNavigateToObjects: () => void;
-  onNavigateToSchedules: () => void;
+  onNavigateToSchedules: (objectId?: string) => void;
   currentTheme?: string;
+  onRefreshData?: () => void;
 }
 
 // Sub-interfaces for extended features
@@ -182,7 +265,8 @@ export default function EcosystemPortal({
   reports,
   onNavigateToObjects,
   onNavigateToSchedules,
-  currentTheme
+  currentTheme,
+  onRefreshData
 }: EcosystemPortalProps) {
   // Ordered by user request: "История & Хроники" is now FIRST
   const [activeSubApp, setActiveSubApp] = useState<"chronicles" | "passport" | "garden" | "buildings">("chronicles");
@@ -598,27 +682,12 @@ export default function EcosystemPortal({
       setActiveGhResizeDir(null);
     };
 
-    const handleTouchMove = (e: TouchEvent) => {
-      e.preventDefault();
-      if (e.touches.length > 0) {
-        handleMouseMove(e.touches[0] as unknown as MouseEvent);
-      }
-    };
-
-    const handleTouchEnd = () => {
-      handleMouseUp();
-    };
-
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
-    window.addEventListener("touchmove", handleTouchMove, { passive: false });
-    window.addEventListener("touchend", handleTouchEnd);
 
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
-      window.removeEventListener("touchmove", handleTouchMove);
-      window.removeEventListener("touchend", handleTouchEnd);
     };
   }, [activeGhDragId, activeGhResizeId, activeGhResizeDir, selectedGreenhouseIdForEditor, planBuildings]);
 
@@ -672,6 +741,13 @@ export default function EcosystemPortal({
     if (cached && objects.some(o => o.id === cached)) return cached;
     return "";
   });
+
+  // Photo uploading states for secondary buildings page
+  const [photoFormBuildingId, setPhotoFormBuildingId] = useState<string | null>(null);
+  const [photoFormTitle, setPhotoFormTitle] = useState<string>("");
+  const [photoFormUrl, setPhotoFormUrl] = useState<string>("");
+  const [photoFormError, setPhotoFormError] = useState<string>("");
+  const [photoFormIsCompressing, setPhotoFormIsCompressing] = useState<boolean>(false);
 
   useEffect(() => {
     if (selectedObjectId) {
@@ -728,21 +804,55 @@ export default function EcosystemPortal({
       if (updated.xMeters === undefined) {
         updated.xMeters = Math.max(0, Math.min(W, Math.round(((b.x || 0) / 100) * W)));
         bChanged = true;
+      } else {
+        const itemW = updated.wMeters || 4;
+        const clampedX = Math.max(0, Math.min(W - itemW, updated.xMeters));
+        if (clampedX !== updated.xMeters) {
+          updated.xMeters = clampedX;
+          updated.x = Math.round((clampedX / W) * 100);
+          bChanged = true;
+        }
       }
+
       if (updated.yMeters === undefined) {
         const yTop = b.y || 20;
         const hPct = b.height || 15;
         updated.yMeters = Math.max(0, Math.min(H, Math.round(H * (1 - (yTop + hPct) / 100))));
         bChanged = true;
+      } else {
+        const itemH = updated.hMeters || 4;
+        const clampedY = Math.max(0, Math.min(H - itemH, updated.yMeters));
+        if (clampedY !== updated.yMeters) {
+          updated.yMeters = clampedY;
+          updated.y = Math.round((clampedY / H) * 100);
+          bChanged = true;
+        }
       }
+
       if (updated.wMeters === undefined) {
         updated.wMeters = Math.max(1, Math.round(((b.width || 20) / 100) * W));
         bChanged = true;
+      } else {
+        const clampedW = Math.max(1, Math.min(W, updated.wMeters));
+        if (clampedW !== updated.wMeters) {
+          updated.wMeters = clampedW;
+          updated.width = Math.round((clampedW / W) * 100);
+          bChanged = true;
+        }
       }
+
       if (updated.hMeters === undefined) {
         updated.hMeters = Math.max(1, Math.round(((b.height || 16) / 100) * H));
         bChanged = true;
+      } else {
+        const clampedH = Math.max(1, Math.min(H, updated.hMeters));
+        if (clampedH !== updated.hMeters) {
+          updated.hMeters = clampedH;
+          updated.height = Math.round((clampedH / H) * 100);
+          bChanged = true;
+        }
       }
+
       if (!updated.itemType) {
         updated.itemType = b.label?.toLowerCase().includes("дорожка") || b.label?.toLowerCase().includes("тропа") ? "path" : "building";
         updated.subType = b.label?.toLowerCase().includes("баня") ? "banya" : "house";
@@ -778,15 +888,38 @@ export default function EcosystemPortal({
       if (updated.xMeters === undefined) {
         updated.xMeters = Math.max(0, Math.min(W, Math.round(((p.x || 0) / 100) * W)));
         pChanged = true;
+      } else {
+        const clampedX = Math.max(0, Math.min(W, updated.xMeters));
+        if (clampedX !== updated.xMeters) {
+          updated.xMeters = clampedX;
+          updated.x = Math.round((clampedX / W) * 100);
+          pChanged = true;
+        }
       }
+
       if (updated.yMeters === undefined) {
         updated.yMeters = Math.max(0, Math.min(H, Math.round(H * (1 - (p.y || 0) / 100))));
         pChanged = true;
+      } else {
+        const clampedY = Math.max(0, Math.min(H, updated.yMeters));
+        if (clampedY !== updated.yMeters) {
+          updated.yMeters = clampedY;
+          updated.y = Math.round((clampedY / H) * 100);
+          pChanged = true;
+        }
       }
+
       if (updated.diameterMeters === undefined) {
         updated.diameterMeters = p.category === "conifer" ? 3 : p.category === "deciduous" ? 4 : p.category === "bush" ? 2 : 1.5;
         pChanged = true;
+      } else {
+        const clampedDiam = Math.max(1, Math.min(Math.min(W, H), updated.diameterMeters));
+        if (clampedDiam !== updated.diameterMeters) {
+          updated.diameterMeters = clampedDiam;
+          pChanged = true;
+        }
       }
+
       if (!p.linkedObjectId) {
         updated.linkedObjectId = objId;
         pChanged = true;
@@ -806,7 +939,7 @@ export default function EcosystemPortal({
     if (selectedObjectId) {
       normalizeItems(selectedObjectId);
     }
-  }, [selectedObjectId]);
+  }, [selectedObjectId, JSON.stringify(plotDimensions)]);
 
   // Selection states
   const [selectedPlant, setSelectedPlant] = useState<PlantNode | null>(null);
@@ -937,7 +1070,7 @@ export default function EcosystemPortal({
   const [transferSuccess, setTransferSuccess] = useState<boolean>(false);
 
   // Sub-tabs for the garden app section
-  const [gardenSubTab, setGardenSubTab] = useState<"planogram" | "gardens" | "services" | "branding" | "support">("planogram");
+  const [gardenSubTab, setGardenSubTab] = useState<"planogram" | "gardens" | "services" | "branding" | "support" | "seeds" | "3d_plot">("gardens");
 
   // Drawing Canvas Tools
   const [canvasTool, setCanvasTool] = useState<"select" | "boundary" | "building" | "plant">("select");
@@ -948,6 +1081,7 @@ export default function EcosystemPortal({
 
   // Ref to planogram bounding rectangle
   const canvasRef = useRef<HTMLDivElement>(null);
+  const buildingFormRef = useRef<HTMLDivElement>(null);
 
   // Global mouse coordination engine for dragging & resizing planogram elements
   useEffect(() => {
@@ -1155,27 +1289,12 @@ export default function EcosystemPortal({
       setActiveCornerIndex(null);
     };
 
-    const handleTouchMove = (e: TouchEvent) => {
-      e.preventDefault();
-      if (e.touches.length > 0) {
-        handleMouseMove(e.touches[0] as unknown as MouseEvent);
-      }
-    };
-
-    const handleTouchEnd = () => {
-      handleMouseUp();
-    };
-
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
-    window.addEventListener("touchmove", handleTouchMove, { passive: false });
-    window.addEventListener("touchend", handleTouchEnd);
 
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
-      window.removeEventListener("touchmove", handleTouchMove);
-      window.removeEventListener("touchend", handleTouchEnd);
     };
   }, [activeDragId, activeDragType, activeResizeId, activeResizeDirection, activeCornerIndex, selectedObjectId, plantNodes, plotCorners]);
 
@@ -1434,16 +1553,62 @@ export default function EcosystemPortal({
       }
     } 
     else if (canvasTool === "building") {
+      const currentPlotDim = getPlotDimForObject(selectedObjectId || "1");
+      const W = currentPlotDim.width;
+      const H = currentPlotDim.height;
+
+      const newId = "PB_" + Date.now();
+      
+      const widthPct = 20;
+      const heightPct = 16;
+      const startXPct = clickX - 10 < 0 ? 0 : clickX - 10;
+      const startYPct = clickY - 8 < 0 ? 0 : clickY - 8;
+
+      const xM = Math.max(0, Math.round((startXPct / 100) * W));
+      const wM = Math.max(1, Math.round((widthPct / 100) * W));
+      
+      const yBottomPct = 100 - startYPct - heightPct;
+      const yM = Math.max(0, Math.round((yBottomPct / 100) * H));
+      const hM = Math.max(1, Math.round((heightPct / 100) * H));
+
       const newB: PlanogramBuilding = {
-        id: "PB_" + Date.now(),
-        x: clickX - 10 < 0 ? 0 : clickX - 10,
-        y: clickY - 8 < 0 ? 0 : clickY - 8,
-        width: 20,
-        height: 16,
+        id: newId,
+        x: startXPct,
+        y: startYPct,
+        width: widthPct,
+        height: heightPct,
+        xMeters: xM,
+        yMeters: yM,
+        wMeters: wM,
+        hMeters: hM,
+        itemType: "building",
+        subType: "other",
         label: newBuildingLabel,
-        color: "rgba(16, 185, 129, 0.2)"
+        color: "rgba(16, 185, 129, 0.2)",
+        linkedObjectId: selectedObjectId || "1"
       };
       setPlanBuildings(prev => [...prev, newB]);
+
+      // Sync to secondaryBuildings
+      const newSB: SecondaryBuilding = {
+        id: newId,
+        parentId: selectedObjectId || "1",
+        type: "other",
+        name: newBuildingLabel,
+        builderType: "self",
+        materials: "Выбрано по клику на планограмме",
+        completionYear: new Date().getFullYear().toString(),
+        operationNotes: "Характеристики конструкции добавлены из режима быстрого клика чертежа.",
+        wishes: "Редактировать детальную карточку постройки.",
+        growthTimeline: [
+          { title: "Посадка строения по клику", date: new Date().toLocaleDateString("ru-RU", { month: "long", year: "numeric" }), photoUrl: "https://images.unsplash.com/photo-1590069261209-f8e9b8642343?w=400&auto=format&fit=crop&q=60" }
+        ]
+      };
+      setSecondaryBuildings(prev => [...prev, newSB]);
+
+      // Не перенаправляем пользователя при рисовании на планограмме
+      // setActiveSubApp("buildings");
+      // startEditingBuilding(newSB);
     } 
     else if (canvasTool === "plant") {
       const newP: PlantNode = {
@@ -1472,6 +1637,7 @@ export default function EcosystemPortal({
 
   const handleRemovePlanBuilding = (id: string) => {
     setPlanBuildings(prev => prev.filter(b => b.id !== id));
+    setSecondaryBuildings(prev => prev.filter(sb => sb.id !== id));
   };
 
   const handleAddPhotosToPlant = (plantId: string) => {
@@ -1510,12 +1676,30 @@ export default function EcosystemPortal({
   const startEditingBuilding = (b: SecondaryBuilding) => {
     setBuildingEditForm({ ...b });
     setEditingBuildingId(b.id);
+    setTimeout(() => {
+      buildingFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 100);
   };
 
   const handleSaveBuildingEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!buildingEditForm) return;
     setSecondaryBuildings(prev => prev.map(b => b.id === buildingEditForm.id ? buildingEditForm : b));
+
+    // Sync back to planogram building if exists
+    setPlanBuildings(prev => prev.map(pb => {
+      if (pb.id === buildingEditForm.id) {
+        return {
+          ...pb,
+          label: buildingEditForm.name,
+          subType: buildingEditForm.type === "guest_house" ? "guesthouse" : (buildingEditForm.type === "bonfire" ? "firepit" : buildingEditForm.type),
+          emoji: getEmojiForSecondaryType(buildingEditForm.type),
+          linkedObjectId: buildingEditForm.parentId
+        };
+      }
+      return pb;
+    }));
+
     setEditingBuildingId(null);
     setBuildingEditForm(null);
   };
@@ -1531,6 +1715,38 @@ export default function EcosystemPortal({
     };
 
     setSecondaryBuildings(prev => [...prev, completeNewBuilding]);
+
+    // Add to planogram
+    const currentPlotDim = getPlotDimForObject(selectedObjectId || "1");
+    const W = currentPlotDim.width;
+    const H = currentPlotDim.height;
+
+    const itemW = 6;
+    const itemH = 5;
+    const itemX = Math.max(0, Math.round(W / 2 - itemW / 2));
+    const itemY = Math.max(0, Math.round(H / 2 - itemH / 2));
+
+    const newPlanB: PlanogramBuilding = {
+      id: completeNewBuilding.id,
+      label: completeNewBuilding.name,
+      color: "rgba(16, 185, 129, 0.25)",
+      x: Math.round((itemX / W) * 100),
+      y: Math.round(((H - itemY - itemH) / H) * 100),
+      width: Math.round((itemW / W) * 100),
+      height: Math.round((itemH / H) * 100),
+      xMeters: itemX,
+      yMeters: itemY,
+      wMeters: itemW,
+      hMeters: itemH,
+      rotation: 0,
+      itemType: "building",
+      subType: completeNewBuilding.type === "guest_house" ? "guesthouse" : (completeNewBuilding.type === "bonfire" ? "firepit" : completeNewBuilding.type),
+      emoji: getEmojiForSecondaryType(completeNewBuilding.type),
+      linkedObjectId: selectedObjectId || "1"
+    };
+
+    setPlanBuildings(prev => [...prev, newPlanB]);
+
     setIsAddingSecondaryBuilding(false);
     setBuildingEditForm(null);
   };
@@ -1552,35 +1768,83 @@ export default function EcosystemPortal({
       ]
     });
     setIsAddingSecondaryBuilding(true);
+    setTimeout(() => {
+      buildingFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 100);
   };
 
   const handleDeleteSecondaryBuilding = (id: string) => {
     setSecondaryBuildings(prev => prev.filter(b => b.id !== id));
+    setPlanBuildings(prev => prev.filter(pb => pb.id !== id));
   };
 
   const appendPhotoToBuilding = (buildingId: string) => {
-    const urls = [
-      "https://images.unsplash.com/photo-1590069261209-f8e9b8642343?w=400&auto=format&fit=crop&q=60",
-      "https://images.unsplash.com/photo-1507089947368-19c1da9775ae?w=400&auto=format&fit=crop&q=60",
-      "https://images.unsplash.com/photo-1513694203232-719a280e022f?w=400&auto=format&fit=crop&q=60"
-    ];
-    const pickUrl = urls[Math.floor(Math.random() * urls.length)];
-    const titleUser = prompt("Как назвать фотографию процесса или результата?", "Этап отделочных работ");
-    if (!titleUser) return;
+    setPhotoFormBuildingId(buildingId);
+    setPhotoFormTitle("Новый этап обустройства");
+    setPhotoFormUrl("");
+    setPhotoFormError("");
+    setPhotoFormIsCompressing(false);
+  };
+
+  const deletePhotoFromBuilding = (buildingId: string, itemIndex: number) => {
+    if (window.confirm("Вы уверены, что хотите удалить эту фотографию из хронологии?")) {
+      setSecondaryBuildings(prev => prev.map(b => {
+        if (b.id === buildingId) {
+          return {
+            ...b,
+            growthTimeline: b.growthTimeline.filter((_, idx) => idx !== itemIndex)
+          };
+        }
+        return b;
+      }));
+    }
+  };
+
+  const handlePhotoFileChange = async (file: File) => {
+    if (file.size > 20 * 1024 * 1024) {
+      setPhotoFormError("Файл слишком большой. Максимальный размер - 20 МБ.");
+      return;
+    }
+    setPhotoFormError("");
+    setPhotoFormIsCompressing(true);
+    try {
+      const compressedBase64 = await compressImage(file);
+      setPhotoFormUrl(compressedBase64);
+    } catch (err) {
+      setPhotoFormError("Произошла ошибка при сжатии изображения.");
+    } finally {
+      setPhotoFormIsCompressing(false);
+    }
+  };
+
+  const handleSaveBuildingPhoto = (buildingId: string) => {
+    if (!photoFormTitle.trim()) {
+      setPhotoFormError("Введите описание фото-этапа");
+      return;
+    }
+    if (!photoFormUrl) {
+      setPhotoFormError("Пожалуйста, выберите файл фотографии или укажите ссылку");
+      return;
+    }
 
     setSecondaryBuildings(prev => prev.map(b => {
       if (b.id === buildingId) {
         return {
           ...b,
           growthTimeline: [...b.growthTimeline, {
-            title: titleUser,
+            title: photoFormTitle.trim(),
             date: new Date().toLocaleDateString("ru-RU", { month: "long", year: "numeric" }),
-            photoUrl: pickUrl
+            photoUrl: photoFormUrl
           }]
         };
       }
       return b;
     }));
+
+    setPhotoFormBuildingId(null);
+    setPhotoFormTitle("");
+    setPhotoFormUrl("");
+    setPhotoFormError("");
   };
 
   // Handler for direct property passport transmission (sale handover)
@@ -2249,20 +2513,161 @@ export default function EcosystemPortal({
                     </span>
                   </div>
 
-                  {activeObject.info && (
+                  {activeObject.info ? (() => {
+                    const infoData = parseBuildingInfo(activeObject.info);
+                    const isLegacy = !activeObject.info.trim().startsWith('{');
+                    if (isLegacy) {
+                      return (
+                        <div>
+                          <span className="font-bold text-[10px] text-zinc-400 uppercase block mb-0.5">Ввод в эксплуатацию и конструктив</span>
+                          <p className="bg-neutral-50 dark:bg-zinc-950 p-2.5 rounded-lg border border-neutral-300/10 italic text-zinc-650 dark:text-zinc-400">
+                            {activeObject.info}
+                          </p>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="space-y-2">
+                        <span className="font-bold text-[10px] text-zinc-400 uppercase block mb-0.5">Ввод в эксплуатацию и конструктив</span>
+                        <div className="bg-neutral-50 dark:bg-zinc-950 p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 space-y-2 text-xs">
+                          {infoData.yearBuilt && (
+                            <div className="text-[11px] font-bold text-neutral-800 dark:text-zinc-200 mb-1">
+                              Год постройки: <span className="font-mono bg-neutral-100 dark:bg-zinc-900 px-1.5 py-0.5 rounded text-blue-650 dark:text-blue-400">{infoData.yearBuilt}</span>
+                            </div>
+                          )}
+                          {infoData.structures && infoData.structures.length > 0 ? (
+                            <div className="overflow-x-auto rounded border border-neutral-200 dark:border-neutral-800">
+                              <table className="w-full text-[10px] text-left border-collapse">
+                                <thead>
+                                  <tr className="bg-neutral-100/75 dark:bg-zinc-900/75 text-zinc-500 font-extrabold uppercase text-[9px] border-b border-neutral-250 dark:border-neutral-800">
+                                    <th className="p-1 px-2 border-r border-neutral-250 dark:border-neutral-800">Тип фундамента</th>
+                                    <th className="p-1 px-2 border-r border-neutral-250 dark:border-neutral-800">Материал стен</th>
+                                    <th className="p-1 px-2 border-r border-neutral-250 dark:border-neutral-800">Формула стеклопакетов</th>
+                                    <th className="p-1 px-2">Тип оконных конструкций</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {infoData.structures.map((row, idx) => (
+                                    <tr key={idx} className="border-b last:border-b-0 border-neutral-250 dark:border-neutral-800 font-medium text-neutral-800 dark:text-zinc-200">
+                                      <td className="p-1.5 px-2 border-r border-neutral-250 dark:border-neutral-800">{row.foundation || "—"}</td>
+                                      <td className="p-1.5 px-2 border-r border-neutral-250 dark:border-neutral-800">{row.walls || "—"}</td>
+                                      <td className="p-1.5 px-2 border-r border-neutral-250 dark:border-neutral-800">{row.glassFormula || "—"}</td>
+                                      <td className="p-1.5 px-2">{row.windowType || "—"}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-zinc-400 italic">Сведения о конструктиве фундамента, стен и окон отсутствуют.</p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })() : (
                     <div>
-                      <span className="font-bold text-[10px] text-zinc-400 uppercase block mb-0.5">Описание и конструктив</span>
-                      <p className="bg-neutral-50 dark:bg-zinc-950 p-2.5 rounded-lg border border-neutral-300/10 italic text-zinc-650 dark:text-zinc-400">
-                        {activeObject.info}
+                      <span className="font-bold text-[10px] text-zinc-400 uppercase block mb-0.5">Ввод в эксплуатацию и конструктив</span>
+                      <p className="p-2.5 rounded-lg border border-neutral-300/10 italic text-zinc-400 text-[11px]">
+                        Сведения о годе постройки и конструктивных элементах не заданы.
                       </p>
                     </div>
                   )}
 
                   <div>
-                    <span className="font-bold text-[10px] text-zinc-400 uppercase block mb-0.5">Характеристики систем жизнеобеспечения</span>
-                    <div className="bg-neutral-50 dark:bg-zinc-950 p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 space-y-2 whitespace-pre-wrap leading-relaxed shadow-inner">
-                      {activeObject.specs ? activeObject.specs : (
-                        <span className="text-zinc-400 italic font-medium">Технические спецификации отопления и вентиляции не заданы. Вы можете внести их в карточке объекта.</span>
+                    <span className="font-bold text-[10px] text-zinc-400 uppercase block mb-0.5 flex justify-between items-center">
+                      <span>Характеристики систем жизнеобеспечения & общие сведения</span>
+                      {currentUser?.role === 'owner' && (
+                        <button 
+                          onClick={onNavigateToObjects}
+                          className="text-[10px] font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                        >
+                          ✏️ Изменить
+                        </button>
+                      )}
+                    </span>
+                    <div className="space-y-3">
+                      {activeObject.specs ? (() => {
+                        const isLegacy = !activeObject.specs.trim().startsWith('{') && !activeObject.specs.trim().startsWith('[');
+                        if (isLegacy) {
+                          return (
+                            <div className="bg-neutral-50 dark:bg-zinc-950 p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 leading-relaxed shadow-inner">
+                              <div className="text-xs font-semibold whitespace-pre-wrap text-neutral-800 dark:text-zinc-200">{activeObject.specs}</div>
+                            </div>
+                          );
+                        }
+                        const specsData = parseSpecs(activeObject.specs);
+                        const hasGeneral = specsData.general.totalArea || specsData.general.floorsCount || specsData.general.material || specsData.general.foundation;
+                        return (
+                          <>
+                            {hasGeneral && (
+                              <div className="bg-neutral-50 dark:bg-zinc-950 p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 leading-relaxed shadow-inner space-y-2 text-xs">
+                                <span className="font-bold text-[10px] text-blue-600 dark:text-blue-400 uppercase block border-b border-neutral-250 dark:border-neutral-800 pb-1">📁 Общая характеристика</span>
+                                <div className="grid grid-cols-2 gap-2 text-neutral-800 dark:text-zinc-300">
+                                  {specsData.general.totalArea && (
+                                    <div>
+                                      <span className="text-[9px] uppercase font-bold text-zinc-400 block">Общая площадь</span>
+                                      <span className="font-extrabold text-neutral-900 dark:text-white">{specsData.general.totalArea}</span>
+                                    </div>
+                                  )}
+                                  {specsData.general.floorsCount && (
+                                    <div>
+                                      <span className="text-[9px] uppercase font-bold text-zinc-400 block">Этажность</span>
+                                      <span className="font-extrabold text-neutral-900 dark:text-white">{specsData.general.floorsCount}</span>
+                                    </div>
+                                  )}
+                                  {specsData.general.material && (
+                                    <div>
+                                      <span className="text-[9px] uppercase font-bold text-zinc-400 block">Материал стен</span>
+                                      <span className="font-extrabold text-neutral-900 dark:text-white">{specsData.general.material}</span>
+                                    </div>
+                                  )}
+                                  {specsData.general.foundation && (
+                                    <div>
+                                      <span className="text-[9px] uppercase font-bold text-zinc-400 block">Фундамент</span>
+                                      <span className="font-extrabold text-neutral-900 dark:text-white">{specsData.general.foundation}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                            
+                            {specsData.lifeSupport && specsData.lifeSupport.length > 0 ? (
+                              <div className="bg-neutral-50 dark:bg-zinc-950 p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 leading-relaxed shadow-inner space-y-2">
+                                <span className="font-bold text-[10px] text-blue-600 dark:text-blue-400 uppercase block border-b border-neutral-250 dark:border-neutral-800 pb-1">🔧 Системы жизнеобеспечения</span>
+                                <div className="overflow-x-auto rounded border border-neutral-250 dark:border-neutral-800">
+                                  <table className="w-full text-[10px] text-left border-collapse">
+                                    <thead>
+                                      <tr className="bg-neutral-100/75 dark:bg-zinc-900/75 text-zinc-500 font-extrabold uppercase text-[9px] border-b border-neutral-250 dark:border-neutral-800">
+                                        <th className="p-1.5 px-2 border-r border-neutral-250 dark:border-neutral-800">Система</th>
+                                        <th className="p-1.5 px-2 border-r border-neutral-250 dark:border-neutral-800">Размещение установки</th>
+                                        <th className="p-1.5 px-2">Блок управления</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {specsData.lifeSupport.map((row, idx) => (
+                                        <tr key={idx} className="border-b last:border-b-0 border-neutral-250 dark:border-neutral-800 font-medium text-neutral-800 dark:text-zinc-200">
+                                          <td className="p-1.5 px-2 border-r border-neutral-250 dark:border-neutral-800 font-bold">{row.system || "—"}</td>
+                                          <td className="p-1.5 px-2 border-r border-neutral-250 dark:border-neutral-800">{row.location || "—"}</td>
+                                          <td className="p-1.5 px-2 text-blue-600 dark:text-blue-450">{row.controlLocation || "—"}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            ) : (
+                              !hasGeneral && (
+                                <div className="bg-neutral-50 dark:bg-zinc-950 p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 leading-relaxed shadow-inner">
+                                  <span className="text-zinc-400 italic font-medium text-xs">Технические спецификации не заданы. Вы можете внести их в карточке объекта.</span>
+                                </div>
+                              )
+                            )}
+                          </>
+                        );
+                      })() : (
+                        <div className="bg-neutral-50 dark:bg-zinc-950 p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 leading-relaxed shadow-inner">
+                          <span className="text-zinc-400 italic font-medium text-xs">Технические спецификации не заданы. Вы можете внести их в карточке объекта.</span>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -2291,20 +2696,70 @@ export default function EcosystemPortal({
 
               {/* Equipment Spec Cards */}
               <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-neutral-300/15 shadow-sm space-y-4">
-                <div className="flex items-center gap-2 pb-3 border-b border-neutral-100 dark:border-neutral-805">
-                  <span className="text-lg">⚙️</span>
-                  <h4 className="font-extrabold text-sm text-neutral-850 dark:text-neutral-100 uppercase tracking-tight">Реестр оборудования</h4>
+                <div className="flex items-center justify-between pb-3 border-b border-neutral-100 dark:border-neutral-805">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">⚙️</span>
+                    <h4 className="font-extrabold text-sm text-neutral-850 dark:text-neutral-100 uppercase tracking-tight">Реестр оборудования</h4>
+                  </div>
+                  {currentUser?.role === 'owner' && (
+                    <button 
+                      onClick={onNavigateToObjects}
+                      className="text-[10px] font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                    >
+                      ✏️ Изменить
+                    </button>
+                  )}
                 </div>
 
                 <div className="text-xs space-y-3">
-                  <div className="p-3.5 bg-neutral-50 dark:bg-zinc-950 rounded-xl border border-neutral-300/10 space-y-2">
-                    <div className="flex justify-between items-center bg-blue-500/10 p-1 px-2 rounded col-span-2 text-blue-600 font-extrabold text-[10px] uppercase">
-                      <span>КОТЕЛ & ОТОПЛЕНИЕ</span>
+                  {activeObject.equipmentSpecs ? (() => {
+                    const isLegacy = !activeObject.equipmentSpecs.trim().startsWith('[');
+                    if (isLegacy) {
+                      return (
+                        <div className="p-3.5 bg-neutral-50 dark:bg-zinc-950 rounded-xl border border-neutral-300/10 space-y-2">
+                          <div className="flex justify-between items-center bg-blue-500/10 p-1 px-2 rounded col-span-2 text-blue-600 font-extrabold text-[10px] uppercase">
+                            <span>КОТЕЛ & ОТОПЛЕНИЕ</span>
+                          </div>
+                          <p className="font-mono text-[11px] text-neutral-800 dark:text-neutral-100 leading-relaxed font-semibold whitespace-pre-wrap">
+                            {activeObject.equipmentSpecs}
+                          </p>
+                        </div>
+                      );
+                    }
+                    const eqList = parseEquipment(activeObject.equipmentSpecs);
+                    return (
+                      <div className="overflow-x-auto rounded-xl border border-neutral-250 dark:border-neutral-800">
+                        <table className="w-full text-[10px] text-left border-collapse">
+                          <thead>
+                            <tr className="bg-neutral-100/75 dark:bg-zinc-900/75 text-zinc-500 font-extrabold uppercase text-[9px] border-b border-neutral-250 dark:border-neutral-800">
+                              <th className="p-2 border-r border-neutral-250 dark:border-neutral-800">Оборудование</th>
+                              <th className="p-2 border-r border-neutral-250 dark:border-neutral-800">Марка</th>
+                              <th className="p-2 border-r border-neutral-250 dark:border-neutral-800">Модель</th>
+                              <th className="p-2 border-r border-neutral-250 dark:border-neutral-800">Серийный номер</th>
+                              <th className="p-2">Ввод в экспл.</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {eqList.map((row, idx) => (
+                              <tr key={idx} className="border-b last:border-b-0 border-neutral-250 dark:border-neutral-800 font-medium text-neutral-800 dark:text-zinc-200">
+                                <td className="p-2 border-r border-neutral-250 dark:border-neutral-800 font-bold text-slate-800 dark:text-white">{row.equipment || "—"}</td>
+                                <td className="p-2 border-r border-neutral-250 dark:border-neutral-800 text-neutral-750 dark:text-zinc-300 font-semibold">{row.brand || "—"}</td>
+                                <td className="p-2 border-r border-neutral-250 dark:border-neutral-800 font-mono">{row.model || "—"}</td>
+                                <td className="p-2 border-r border-neutral-250 dark:border-neutral-800 font-mono font-semibold text-blue-600 dark:text-blue-400">{row.serial || "—"}</td>
+                                <td className="p-2 font-mono text-zinc-500 dark:text-zinc-400">{row.year || "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })() : (
+                    <div className="p-3.5 bg-neutral-50 dark:bg-zinc-950 rounded-xl border border-neutral-300/10">
+                      <p className="font-medium text-zinc-400 italic text-[11px]">
+                        Реестр оборудования (оборудование, модель, серийный номер, год ввода в эксплуатацию) не заполнен.
+                      </p>
                     </div>
-                    <p className="font-mono text-[11px] text-neutral-800 dark:text-neutral-100 leading-relaxed font-semibold">
-                      {activeObject.equipmentSpecs ? activeObject.equipmentSpecs : "Спецификации оборудования (серийный номер котла, фильтры водоснабжения, автоматика) не заполнены."}
-                    </p>
-                  </div>
+                  )}
 
                   <div className="p-3.5 bg-neutral-50 dark:bg-zinc-950 rounded-xl border border-neutral-300/10 text-[11px] text-zinc-500 leading-normal">
                     💡 <strong>Памятка собственника:</strong> Сохранение серийных номеров оборудования в цифровом паспорте позволяет инженерам удаленно комплектовать материалы, а также мгновенно подбирать детали для проведения технического обслуживания без повторных замеров.
@@ -2325,7 +2780,7 @@ export default function EcosystemPortal({
                     <h4 className="font-extrabold text-sm text-neutral-850 dark:text-neutral-100 uppercase tracking-tight">Техническое обслуживание (ТО) оборудования</h4>
                   </div>
                   <button
-                    onClick={onNavigateToSchedules}
+                    onClick={() => onNavigateToSchedules(selectedObjectId)}
                     className="text-xs font-extrabold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-0.5 cursor-pointer"
                   >
                     <span>Создать регламент</span>
@@ -2339,7 +2794,7 @@ export default function EcosystemPortal({
                       <div className="text-2xl">⏳</div>
                       <p className="text-xs text-zinc-500 font-bold">Для этого объекта не запланировано плановых задач ТО.</p>
                       <button 
-                        onClick={onNavigateToSchedules}
+                        onClick={() => onNavigateToSchedules(selectedObjectId)}
                         className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-lg shadow transition cursor-pointer"
                       >
                         Перейти в Календарь регламентов
@@ -2489,28 +2944,34 @@ export default function EcosystemPortal({
           {/* Garden Subapp tabs */}
           <div className="p-1.5 bg-neutral-100 dark:bg-black/35 rounded-xl border border-neutral-300/10 max-w-sm sm:max-w-max flex flex-wrap gap-1">
             <button
-              onClick={() => { setGardenSubTab("planogram"); setSelectedPlant(null); }}
-              className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "planogram" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
-            >
-              🗺️ Электронная планограмма
-            </button>
-            <button
               onClick={() => setGardenSubTab("gardens")}
               className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "gardens" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
             >
               🌿 Мои Сады ({gardens.length})
             </button>
             <button
-              onClick={() => setGardenSubTab("services")}
-              className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "services" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
+              onClick={() => { setGardenSubTab("planogram"); setSelectedPlant(null); }}
+              className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "planogram" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
             >
-              🚜 Сервисы & Садовники
+              🗺️ Электронная планограмма
+            </button>
+            <button
+              onClick={() => setGardenSubTab("3d_plot")}
+              className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "3d_plot" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
+            >
+              👁️ 3D-модель участка
             </button>
             <button
               onClick={() => setGardenSubTab("seeds")}
               className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "seeds" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
             >
               🎒 Каталог семян & сортов
+            </button>
+            <button
+              onClick={() => setGardenSubTab("services")}
+              className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "services" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
+            >
+              🚜 Сервисы & Садовники
             </button>
           </div>
 
@@ -2542,6 +3003,20 @@ export default function EcosystemPortal({
               { type: "building", subType: "security_house", label: "Дом охраны", wMeters: 3, hMeters: 3, color: "rgba(239, 68, 68, 0.25)", emoji: "👮" },
               { type: "building", subType: "guesthouse", label: "Гостевой дом", wMeters: 8, hMeters: 6, color: "rgba(34, 197, 94, 0.25)", emoji: "🏡" },
               { type: "building", subType: "admin_building", label: "Админ. здание", wMeters: 12, hMeters: 8, color: "rgba(79, 70, 229, 0.25)", emoji: "🏢" },
+              { type: "building", subType: "sewer_well", label: "Септик / Колод.", wMeters: 1.2, hMeters: 1.2, color: "rgba(75, 85, 99, 0.4)", emoji: "🕳️" },
+              { type: "building", subType: "water_well", label: "Водяной колодец", wMeters: 1.5, hMeters: 1.5, color: "rgba(120, 113, 108, 0.4)", emoji: "⛲" },
+              { type: "building", subType: "electric_panel", label: "Электрощитовая", wMeters: 1.2, hMeters: 0.8, color: "rgba(234, 179, 8, 0.3)", emoji: "⚡" },
+              { type: "building", subType: "lawn", label: "Газон", wMeters: 8, hMeters: 6, color: "rgba(34, 197, 94, 0.15)", emoji: "🟩" },
+              { type: "building", subType: "flower_bed", label: "Клумба", wMeters: 4, hMeters: 2, color: "rgba(236, 72, 153, 0.2)", emoji: "🌸" },
+              { type: "building", subType: "pergola", label: "Пергола", wMeters: 4, hMeters: 3, color: "rgba(180, 83, 9, 0.25)", emoji: "⛩️" },
+              { type: "building", subType: "swings", label: "Качели", wMeters: 3, hMeters: 2, color: "rgba(244, 63, 94, 0.25)", emoji: "🎠" },
+              { type: "building", subType: "health_trail", label: "Тропа здоровья", wMeters: 6, hMeters: 1.5, color: "rgba(139, 92, 246, 0.25)", emoji: "👣" },
+              { type: "building", subType: "garden_fence", label: "Садовый забор", wMeters: 5, hMeters: 0.4, color: "rgba(120, 113, 108, 0.35)", emoji: "🪵" },
+              { type: "building", subType: "parking", label: "Парковка", wMeters: 6, hMeters: 4, color: "rgba(148, 163, 184, 0.3)", emoji: "🅿️" },
+              { type: "building", subType: "carport", label: "Навес для авто", wMeters: 6, hMeters: 4, color: "rgba(56, 189, 248, 0.25)", emoji: "🎪" },
+              { type: "building", subType: "water_tap", label: "Водяной кран", wMeters: 0.8, hMeters: 0.8, color: "rgba(59, 130, 246, 0.35)", emoji: "🚰" },
+              { type: "building", subType: "electric_outlet", label: "Электророзетка", wMeters: 0.8, hMeters: 0.8, color: "rgba(251, 146, 60, 0.35)", emoji: "🔌" },
+              { type: "building", subType: "irrigation", label: "Система полива", wMeters: 1.2, hMeters: 1.2, color: "rgba(6, 182, 212, 0.3)", emoji: "💦" },
               { type: "path", subType: "straight_x", label: "Тропа X", wMeters: 5, hMeters: 1.2, color: "rgba(120, 113, 108, 0.35)", emoji: "🛣️" },
               { type: "path", subType: "straight_y", label: "Тропа Y", wMeters: 1.2, hMeters: 5, color: "rgba(120, 113, 108, 0.35)", emoji: "↕️" },
               { type: "path", subType: "round", label: "Площадка", wMeters: 4, hMeters: 4, color: "rgba(120, 113, 108, 0.35)", emoji: "💮" },
@@ -2552,11 +3027,11 @@ export default function EcosystemPortal({
               { type: "plant", subType: "bed", label: "Грядка", wMeters: 3, hMeters: 1, color: "rgba(120, 53, 4, 0.3)", emoji: "🥬" }
             ];
 
-            const handleInsertTemplate = (tpl: any) => {
+            const handleInsertTemplate = (tpl: any, customX?: number, customY?: number) => {
               const itemW = tpl.wMeters;
               const itemH = tpl.hMeters;
-              const itemX = Math.max(0, Math.round(W / 2 - itemW / 2));
-              const itemY = Math.max(0, Math.round(H / 2 - itemH / 2));
+              const itemX = customX !== undefined ? customX : Math.max(0, Math.round(W / 2 - itemW / 2));
+              const itemY = customY !== undefined ? customY : Math.max(0, Math.round(H / 2 - itemH / 2));
 
               if (tpl.type === "plant") {
                 const newId = "Pl_" + Date.now();
@@ -2603,6 +3078,31 @@ export default function EcosystemPortal({
                   linkedObjectId: selectedObjectId || "1"
                 };
                 setPlanBuildings(prev => [...prev, newB]);
+
+                if (tpl.type === "building") {
+                  const secondaryType = mapPlanSubtypeToSecondaryType(tpl.subType);
+                  const newSB: SecondaryBuilding = {
+                    id: newId,
+                    parentId: selectedObjectId || "1",
+                    type: secondaryType,
+                    name: tpl.label,
+                    builderType: "contractor",
+                    contractorName: "Застройщик по проекту",
+                    materials: "Определено концептом на планировке",
+                    completionYear: new Date().getFullYear().toString(),
+                    operationNotes: "Характеристики конструкции импортированы из интерактивной планограммы.",
+                    wishes: "Добавить детальное описание строения на схеме.",
+                    growthTimeline: [
+                      { title: "Посадка строения на планограмме", date: new Date().toLocaleDateString("ru-RU", { month: "long", year: "numeric" }), photoUrl: "https://images.unsplash.com/photo-1590069261209-f8e9b8642343?w=400&auto=format&fit=crop&q=60" }
+                    ]
+                  };
+                  setSecondaryBuildings(prev => [...prev, newSB]);
+
+                  // Не перенаправляем пользователя при вставке объектов из панели конструктора
+                  // setActiveSubApp("buildings");
+                  // startEditingBuilding(newSB);
+                }
+
                 setSelectedPlanBuildingId(newId);
                 setSelectedPlant(null);
               }
@@ -2621,7 +3121,7 @@ export default function EcosystemPortal({
                 const itemH = activeTemplate.hMeters;
                 const itemX = Math.max(0, Math.min(W - itemW, Math.round(clickXMeters - itemW / 2)));
                 const itemY = Math.max(0, Math.min(H - itemH, Math.round(clickYMeters - itemH / 2)));
-                handleInsertTemplate({ ...activeTemplate, wMeters: itemW, hMeters: itemH });
+                handleInsertTemplate({ ...activeTemplate, wMeters: itemW, hMeters: itemH }, itemX, itemY);
               } else {
                 setSelectedPlanBuildingId(null);
                 setSelectedPlant(null);
@@ -2653,33 +3153,6 @@ export default function EcosystemPortal({
               }
             };
 
-            const handleDragTouchStart = (e: React.TouchEvent, type: "building" | "plant", item: any) => {
-              if (e.touches.length === 0) return;
-              e.stopPropagation();
-              e.preventDefault();
-              const touch = e.touches[0];
-              setActiveDragId(item.id);
-              setActiveDragType(type);
-              dragStartRef.current = {
-                initMouseX: touch.clientX,
-                initMouseY: touch.clientY,
-                initX: item.xMeters || 0,
-                initY: item.yMeters || 0,
-                initW: item.wMeters || item.diameterMeters || 4,
-                initH: item.hMeters || item.diameterMeters || 4,
-              };
-
-              if (type === "building") {
-                setSelectedPlanBuildingId(item.id);
-                setSelectedPlant(null);
-                setActiveTemplate(null);
-              } else {
-                setSelectedPlant(item);
-                setSelectedPlanBuildingId(null);
-                setActiveTemplate(null);
-              }
-            };
-
             const handleResizeMouseDown = (e: React.MouseEvent, dir: string, item: any) => {
               e.stopPropagation();
               e.preventDefault();
@@ -2688,23 +3161,6 @@ export default function EcosystemPortal({
               dragStartRef.current = {
                 initMouseX: e.clientX,
                 initMouseY: e.clientY,
-                initX: item.xMeters || 0,
-                initY: item.yMeters || 0,
-                initW: item.wMeters || item.diameterMeters || 4,
-                initH: item.hMeters || item.diameterMeters || 4,
-              };
-            };
-
-            const handleResizeTouchStart = (e: React.TouchEvent, dir: string, item: any) => {
-              if (e.touches.length === 0) return;
-              e.stopPropagation();
-              e.preventDefault();
-              const touch = e.touches[0];
-              setActiveResizeId(item.id);
-              setActiveResizeDirection(dir);
-              dragStartRef.current = {
-                initMouseX: touch.clientX,
-                initMouseY: touch.clientY,
                 initX: item.xMeters || 0,
                 initY: item.yMeters || 0,
                 initW: item.wMeters || item.diameterMeters || 4,
@@ -2959,8 +3415,7 @@ export default function EcosystemPortal({
                         className="flex-1 relative border border-neutral-305 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-xl shadow-inner overflow-hidden select-none cursor-crosshair transition-all duration-300 min-h-[300px]"
                         style={{
                           aspectRatio: `${W} / ${H}`,
-                          maxHeight: "500px",
-                          touchAction: "none"
+                          maxHeight: "500px"
                         }}
                       >
                         {/* grid background patterns */}
@@ -2997,7 +3452,6 @@ export default function EcosystemPortal({
                             <div
                               key={b.id}
                               onMouseDown={isEditingPlanogram ? (e) => handleDragMouseDown(e, "building", b) : undefined}
-                              onTouchStart={isEditingPlanogram ? (e) => handleDragTouchStart(e, "building", b) : undefined}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setSelectedPlanBuildingId(b.id);
@@ -3043,25 +3497,21 @@ export default function EcosystemPortal({
                                   {/* Corner handles */}
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "nw", b)}
-                                    onTouchStart={(e) => handleResizeTouchStart(e, "nw", b)}
                                     className="absolute -top-1 -left-1 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-nwse-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вверх-Влево"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "ne", b)}
-                                    onTouchStart={(e) => handleResizeTouchStart(e, "ne", b)}
                                     className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-nesw-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вверх-Вправо"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "sw", b)}
-                                    onTouchStart={(e) => handleResizeTouchStart(e, "sw", b)}
                                     className="absolute -bottom-1 -left-1 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-nesw-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вниз-Влево"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "se", b)}
-                                    onTouchStart={(e) => handleResizeTouchStart(e, "se", b)}
                                     className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-nwse-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вниз-Вправо"
                                   />
@@ -3069,25 +3519,21 @@ export default function EcosystemPortal({
                                   {/* Edge handles */}
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "n", b)}
-                                    onTouchStart={(e) => handleResizeTouchStart(e, "n", b)}
                                     className="absolute -top-1 left-1/2 -translate-x-1/2 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-ns-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вверх"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "s", b)}
-                                    onTouchStart={(e) => handleResizeTouchStart(e, "s", b)}
                                     className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-ns-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вниз"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "w", b)}
-                                    onTouchStart={(e) => handleResizeTouchStart(e, "w", b)}
                                     className="absolute top-1/2 -left-1 -translate-y-1/2 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-ew-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Влево"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "e", b)}
-                                    onTouchStart={(e) => handleResizeTouchStart(e, "e", b)}
                                     className="absolute top-1/2 -right-1 -translate-y-1/2 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-ew-resize z-40 hover:scale-125 transition-transform"
                                     title="Изменить размер: Вправо"
                                   />
@@ -3126,7 +3572,6 @@ export default function EcosystemPortal({
                             <div
                               key={p.id}
                               onMouseDown={isEditingPlanogram ? (e) => handleDragMouseDown(e, "plant", p) : undefined}
-                              onTouchStart={isEditingPlanogram ? (e) => handleDragTouchStart(e, "plant", p) : undefined}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setSelectedPlant(p);
@@ -3159,7 +3604,6 @@ export default function EcosystemPortal({
                               {isSel && isEditingPlanogram && (
                                 <div
                                   onMouseDown={(e) => handleResizeMouseDown(e, "plant_diameter", p)}
-                                  onTouchStart={(e) => handleResizeTouchStart(e, "plant_diameter", p)}
                                   className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3.5 h-3.5 bg-white border-2 border-amber-500 rounded-full cursor-ew-resize z-40 flex items-center justify-center shadow-md hover:scale-125 transition-transform"
                                   title="Изменить диаметр кроны (растянуть крону)"
                                 >
@@ -3178,11 +3622,6 @@ export default function EcosystemPortal({
                             <div
                               key={index}
                               onMouseDown={(e) => {
-                                e.stopPropagation();
-                                e.preventDefault();
-                                setActiveCornerIndex(index);
-                              }}
-                              onTouchStart={(e) => {
                                 e.stopPropagation();
                                 e.preventDefault();
                                 setActiveCornerIndex(index);
@@ -3463,10 +3902,61 @@ export default function EcosystemPortal({
                                 <input
                                   type="text"
                                   placeholder="Или вставьте ссылку на ваше фото"
-                                  value={newPlantPhotoPreset}
+                                  value={newPlantPhotoPreset.startsWith("data:") ? "Локально загруженное фото" : newPlantPhotoPreset}
                                   onChange={(e) => setNewPlantPhotoPreset(e.target.value)}
                                   className="w-full text-[9px] p-1 bg-white dark:bg-black/35 rounded border border-neutral-250 dark:border-zinc-850 mt-1 font-mono text-neutral-800 dark:text-zinc-200"
                                 />
+
+                                <div className="mt-2 space-y-1">
+                                  <label className="block text-[8px] uppercase font-bold text-zinc-500 dark:text-zinc-400">Или загрузите файл фотографии (до 20 МБ):</label>
+                                  <div 
+                                    onClick={() => document.getElementById(`plant-file-upload-input-${selectedPlant.id}`)?.click()}
+                                    onDragOver={(e) => { e.preventDefault(); }}
+                                    onDrop={async (e) => {
+                                      e.preventDefault();
+                                      const file = e.dataTransfer.files?.[0];
+                                      if (file) {
+                                        if (file.size > 20 * 1024 * 1024) {
+                                          alert("Файл слишком большой. Максимальный размер - 20 МБ.");
+                                          return;
+                                        }
+                                        try {
+                                          const compressedBase64 = await compressImage(file);
+                                          setNewPlantPhotoPreset(compressedBase64);
+                                        } catch (err) {
+                                          console.error("Error compressing plant photo", err);
+                                        }
+                                      }
+                                    }}
+                                    className="border border-dashed border-neutral-300 dark:border-zinc-800 hover:border-emerald-500 dark:hover:border-emerald-550 rounded p-2 text-center cursor-pointer bg-white/40 dark:bg-black/20 hover:bg-emerald-500/5 transition space-y-1"
+                                  >
+                                    <input 
+                                      id={`plant-file-upload-input-${selectedPlant.id}`}
+                                      type="file"
+                                      accept="image/*"
+                                      onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          if (file.size > 20 * 1024 * 1024) {
+                                            alert("Файл слишком большой. Максимальный размер - 20 МБ.");
+                                            return;
+                                          }
+                                          try {
+                                            const compressedBase64 = await compressImage(file);
+                                            setNewPlantPhotoPreset(compressedBase64);
+                                          } catch (err) {
+                                            console.error("Error compressing plant photo", err);
+                                          }
+                                        }
+                                      }}
+                                      className="hidden"
+                                    />
+                                    <Camera className="w-4 h-4 mx-auto text-zinc-400" />
+                                    <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                                      Нажмите или перетащите файл (до 20 МБ)
+                                    </div>
+                                  </div>
+                                </div>
                               </div>
 
                               <div className="space-y-1">
@@ -3588,6 +4078,18 @@ export default function EcosystemPortal({
                         height: Math.round((hVal / H) * 100)
                       };
                     }));
+
+                    if (fields.label !== undefined || fields.linkedObjectId !== undefined) {
+                      setSecondaryBuildings(prev => prev.map(sb => {
+                        if (sb.id === selectedPlanBuildingId) {
+                          const updated = { ...sb };
+                          if (fields.label !== undefined) updated.name = fields.label;
+                          if (fields.linkedObjectId !== undefined) updated.parentId = fields.linkedObjectId;
+                          return updated;
+                        }
+                        return sb;
+                      }));
+                    }
                   };
 
                   const handleDuplicateItem = () => {
@@ -3605,6 +4107,34 @@ export default function EcosystemPortal({
                     };
                     setPlanBuildings(prev => [...prev, duplicated]);
                     setSelectedPlanBuildingId(newId);
+
+                    if (b.itemType === "building" || !b.itemType) {
+                      const matchedSec = secondaryBuildings.find(x => x.id === b.id);
+                      if (matchedSec) {
+                        const duplicatedSB: SecondaryBuilding = {
+                          ...matchedSec,
+                          id: newId,
+                          name: b.label + " (Копия)"
+                        };
+                        setSecondaryBuildings(prev => [...prev, duplicatedSB]);
+                      } else {
+                        const secondaryType = mapPlanSubtypeToSecondaryType(b.subType);
+                        const duplicatedSB: SecondaryBuilding = {
+                          id: newId,
+                          parentId: b.linkedObjectId || selectedObjectId || "1",
+                          type: secondaryType,
+                          name: b.label + " (Копия)",
+                          builderType: "contractor",
+                          contractorName: "Застройщик по проекту",
+                          materials: "Определено копированием",
+                          completionYear: new Date().getFullYear().toString(),
+                          operationNotes: "Характеристики скопированы на интерактивной планограмме.",
+                          wishes: "",
+                          growthTimeline: []
+                        };
+                        setSecondaryBuildings(prev => [...prev, duplicatedSB]);
+                      }
+                    }
                   };
 
                   return (
@@ -3779,6 +4309,9 @@ export default function EcosystemPortal({
                           <button
                             type="button"
                             onClick={() => {
+                              if (selectedPlanBuildingId) {
+                                setSecondaryBuildings(prev => prev.filter(item => item.id !== selectedPlanBuildingId));
+                              }
                               setPlanBuildings(prev => prev.filter(item => item.id !== selectedPlanBuildingId));
                               setSelectedPlanBuildingId(null);
                             }}
@@ -3788,6 +4321,123 @@ export default function EcosystemPortal({
                             <Trash2 className="w-4.5 h-4.5" />
                           </button>
                         </div>
+
+                        {/* 📸 Фотоархив строения */}
+                        {(() => {
+                          const matchedSB = secondaryBuildings.find(sb => sb.id === b.id);
+                          if (!matchedSB) return null;
+                          return (
+                            <div className="space-y-3.5 border-t pt-3.5 border-neutral-100 dark:border-zinc-800">
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] font-black uppercase tracking-wider text-zinc-400">📸 Фотоархив строения</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPhotoFormBuildingId(photoFormBuildingId === matchedSB.id ? null : matchedSB.id);
+                                    setPhotoFormTitle("Новый этап обустройства");
+                                    setPhotoFormUrl("");
+                                    setPhotoFormError("");
+                                    setPhotoFormIsCompressing(false);
+                                  }}
+                                  className="text-[10px] font-extrabold text-amber-600 hover:underline cursor-pointer"
+                                >
+                                  {photoFormBuildingId === matchedSB.id ? "Скрыть" : "+ Загрузить фото"}
+                                </button>
+                              </div>
+
+                              {photoFormBuildingId === matchedSB.id && (
+                                <div className="bg-amber-500/5 border border-amber-500/25 rounded-xl p-3 space-y-2.5 text-[11px]">
+                                  <div className="space-y-1">
+                                    <label className="block font-bold text-zinc-400 text-[8px] uppercase">Описание этапа</label>
+                                    <input 
+                                      type="text"
+                                      value={photoFormTitle}
+                                      onChange={(e) => {
+                                        setPhotoFormError("");
+                                        setPhotoFormTitle(e.target.value);
+                                      }}
+                                      placeholder="Внутренняя отделка, готовый вид..."
+                                      className="w-full text-xs px-2.5 py-1 rounded border border-neutral-300 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-neutral-800 dark:text-zinc-100 focus:outline-none"
+                                    />
+                                  </div>
+
+                                  <div className="space-y-1">
+                                    <label className="block font-bold text-zinc-400 text-[8px] uppercase">Файл (до 20 МБ)</label>
+                                    <div 
+                                      onClick={() => document.getElementById(`side-file-upload-input-${matchedSB.id}`)?.click()}
+                                      onDragOver={(e) => { e.preventDefault(); }}
+                                      onDrop={(e) => {
+                                        e.preventDefault();
+                                        const file = e.dataTransfer.files?.[0];
+                                        if (file) handlePhotoFileChange(file);
+                                      }}
+                                      className="border-2 border-dashed border-neutral-250 dark:border-zinc-800 hover:border-amber-500 rounded p-3 text-center cursor-pointer bg-white/40 dark:bg-black/10 hover:bg-amber-500/5 transition space-y-1"
+                                    >
+                                      <input 
+                                        id={`side-file-upload-input-${matchedSB.id}`}
+                                        type="file"
+                                        accept="image/*"
+                                        onChange={(e) => {
+                                          const file = e.target.files?.[0];
+                                          if (file) handlePhotoFileChange(file);
+                                        }}
+                                        className="hidden"
+                                      />
+                                      <Camera className="w-5 h-5 mx-auto text-zinc-400" />
+                                      <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                                        Нажмите или перетащите фото (до 20 МБ)
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {photoFormUrl && (
+                                    <div className="p-1 border rounded bg-white dark:bg-zinc-950 flex items-center gap-2">
+                                      <img src={photoFormUrl} alt="Превью" className="w-10 h-8 object-cover rounded border" />
+                                      <span className="text-[9px] text-green-600 font-bold flex-1 truncate">Готово</span>
+                                      <button type="button" onClick={() => setPhotoFormUrl("")} className="text-[9px] text-red-500 underline">Сбросить</button>
+                                    </div>
+                                  )}
+
+                                  {photoFormIsCompressing && (
+                                    <div className="text-[9px] text-amber-600 animate-pulse font-semibold">Сжатие...</div>
+                                  )}
+
+                                  {photoFormError && (
+                                    <div className="p-1 border border-red-500/20 bg-red-500/5 text-red-600 text-[9px] rounded font-bold">⚠ {photoFormError}</div>
+                                  )}
+
+                                  <div className="flex justify-end gap-1.5 pt-1 border-t border-amber-500/10">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSaveBuildingPhoto(matchedSB.id)}
+                                      className="px-2.5 py-1 rounded bg-amber-500 hover:bg-amber-650 text-white font-extrabold text-[9px] uppercase shadow-sm cursor-pointer"
+                                    >
+                                      Сохранить
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+
+                              <div className="grid grid-cols-4 gap-1.5 pt-1">
+                                {matchedSB.growthTimeline?.map((item, idx) => (
+                                  <div key={idx} className="relative group rounded border overflow-hidden bg-neutral-50 dark:bg-zinc-950 p-0.5">
+                                    <img src={item.photoUrl} alt={item.title} className="w-full h-10 object-cover rounded" />
+                                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-1">
+                                      <span className="text-[7px] text-white font-bold text-center truncate w-full">{item.title}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => deletePhotoFromBuilding(matchedSB.id, idx)}
+                                        className="text-[7px] text-red-400 hover:text-red-300 font-black mt-1"
+                                      >
+                                        Удалить
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
@@ -4783,6 +5433,28 @@ export default function EcosystemPortal({
             </div>
           )}
 
+          {gardenSubTab === "3d_plot" && (() => {
+            const currentPlotDim = getPlotDimForObject(selectedObjectId || "1");
+            const W = currentPlotDim.width;
+            const H = currentPlotDim.height;
+            const activeBuildings = planBuildings.filter(b => b.linkedObjectId === (selectedObjectId || "1"));
+            const activePlants = plantNodes.filter(p => p.linkedObjectId === (selectedObjectId || "1"));
+
+            return (
+              <div className="space-y-4 animate-fadeIn">
+                <Property3DViewer
+                  planBuildings={activeBuildings}
+                  secondaryBuildings={secondaryBuildings}
+                  plantNodes={activePlants}
+                  plotWidth={W}
+                  plotHeight={H}
+                  plotCorners={getPlotCorners(selectedObjectId || "1", W, H)}
+                  onClose={() => setGardenSubTab("planogram")}
+                />
+              </div>
+            );
+          })()}
+
         </div>
       )}
 
@@ -4937,12 +5609,162 @@ export default function EcosystemPortal({
                           </button>
                         </div>
 
+                        {photoFormBuildingId === b.id && (
+                          <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3.5 space-y-3 mt-2 text-xs">
+                            <div className="flex justify-between items-center pb-2 border-b border-amber-500/10 mb-1">
+                              <span className="font-bold text-amber-800 dark:text-amber-400">Добавление фотографии: {b.name}</span>
+                              <button 
+                                type="button"
+                                onClick={() => setPhotoFormBuildingId(null)}
+                                className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="block font-bold text-zinc-500 dark:text-zinc-400 text-[10px] uppercase">Название этапа / описание</label>
+                              <input 
+                                type="text"
+                                value={photoFormTitle}
+                                onChange={(e) => {
+                                  setPhotoFormError("");
+                                  setPhotoFormTitle(e.target.value);
+                                }}
+                                placeholder="Например: Внутренняя отделка, Ввод в эксплуатацию..."
+                                className="w-full text-xs px-2.5 py-1.5 rounded border border-neutral-300 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-neutral-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <label className="block font-bold text-zinc-500 dark:text-zinc-400 text-[10px] uppercase">Загрузите файл фотографии (до 20 МБ)</label>
+                              
+                              <div 
+                                onClick={() => document.getElementById(`file-upload-input-${b.id}`)?.click()}
+                                onDragOver={(e) => { e.preventDefault(); }}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  const file = e.dataTransfer.files?.[0];
+                                  if (file) handlePhotoFileChange(file);
+                                }}
+                                className="border-2 border-dashed border-neutral-300 dark:border-zinc-800 hover:border-amber-500 dark:hover:border-amber-500 rounded-lg p-4 text-center cursor-pointer bg-white/40 dark:bg-black/20 hover:bg-amber-500/5 transition space-y-2"
+                              >
+                                <input 
+                                  id={`file-upload-input-${b.id}`}
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) handlePhotoFileChange(file);
+                                  }}
+                                  className="hidden"
+                                />
+                                <Camera className="w-6 h-6 mx-auto text-zinc-400" />
+                                <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                                  Перетащите сюда фото или <span className="text-amber-600 font-bold underline">выберите файл</span>
+                                </div>
+                                <div className="text-[9px] text-zinc-400">
+                                  форматы JPEG, PNG, WEBP, GIF (размер до 20 МБ)
+                                </div>
+                              </div>
+
+                              <div className="pt-1.5 flex items-center gap-2">
+                                <span className="text-[10px] text-zinc-400 uppercase font-mono">Или укажите ссылку URL:</span>
+                                <input 
+                                  type="text"
+                                  value={photoFormUrl.startsWith("data:") ? "" : photoFormUrl}
+                                  onChange={(e) => {
+                                    setPhotoFormError("");
+                                    setPhotoFormUrl(e.target.value);
+                                  }}
+                                  placeholder="https://images.unsplash.com/photo-..."
+                                  className="flex-1 text-xs px-2 py-1 rounded border border-neutral-300 dark:border-zinc-800 bg-white dark:bg-zinc-950 text-neutral-800 dark:text-zinc-100 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                />
+                              </div>
+                            </div>
+
+                            {photoFormUrl && (
+                              <div className="p-2 border rounded bg-white dark:bg-zinc-950 flex items-center gap-3">
+                                <img 
+                                  src={photoFormUrl} 
+                                  alt="Превью" 
+                                  className="w-16 h-12 object-cover rounded border" 
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <span className="text-[10px] text-green-600 block font-bold">✓ Изображение готово</span>
+                                  <span className="text-[9px] text-zinc-400 block truncate font-mono">
+                                    {photoFormUrl.startsWith("data:") ? "Файл локально сжат и сохранен" : photoFormUrl}
+                                  </span>
+                                </div>
+                                <button 
+                                  type="button" 
+                                  onClick={() => setPhotoFormUrl("")} 
+                                  className="text-[10px] text-red-500 underline font-bold"
+                                >
+                                  Сбросить
+                                </button>
+                              </div>
+                            )}
+
+                            {photoFormIsCompressing && (
+                              <div className="text-[11px] text-amber-600 flex items-center gap-2 font-semibold">
+                                <div className="animate-spin rounded-full h-3 border-2 border-amber-600 border-t-transparent w-3"></div>
+                                Обработка и оптимизация фотографии высокого разрешения...
+                              </div>
+                            )}
+
+                            {photoFormError && (
+                              <div className="p-2 border border-red-500/20 bg-red-500/5 text-red-600 text-[11px] rounded font-bold">
+                                ⚠ {photoFormError}
+                              </div>
+                            )}
+
+                            <div className="flex justify-end gap-2 pt-1 border-t border-amber-500/10">
+                              <button
+                                type="button"
+                                onClick={() => setPhotoFormBuildingId(null)}
+                                className="px-3 py-1.5 rounded bg-neutral-200 dark:bg-zinc-800 text-neutral-700 dark:text-zinc-300 font-bold text-[10px] uppercase"
+                              >
+                                Отмена
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveBuildingPhoto(b.id)}
+                                className="px-3 py-1.5 rounded bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-[10px] uppercase shadow-sm"
+                              >
+                                Добавить в таймлайн
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                           {b.growthTimeline.map((img, idx) => (
-                            <div key={idx} className="rounded border overflow-hidden p-1 bg-neutral-50 dark:bg-zinc-950 space-y-1">
+                            <div key={idx} className="relative group rounded border overflow-hidden p-1 bg-neutral-50 dark:bg-zinc-950 space-y-1">
                               <img src={img.photoUrl} alt={img.title} className="w-full h-16 object-cover rounded" />
+                              
+                              <button
+                                type="button"
+                                onClick={() => deletePhotoFromBuilding(b.id, idx)}
+                                className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 hover:bg-red-600 bg-black/60 text-white rounded p-1 transition-opacity duration-200"
+                                title="Удалить фото"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+
                               <div className="text-[9px]">
-                                <span className="font-bold text-neutral-800 dark:text-zinc-200 block truncate">{img.title}</span>
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="font-bold text-neutral-800 dark:text-zinc-200 block truncate flex-1" title={img.title}>
+                                    {img.title}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => deletePhotoFromBuilding(b.id, idx)}
+                                    className="sm:hidden text-red-500 hover:text-red-700 text-[8px] font-bold uppercase shrink-0"
+                                  >
+                                    Удал.
+                                  </button>
+                                </div>
                                 <span className="text-zinc-500 text-[8px] font-mono">{img.date}</span>
                               </div>
                             </div>
@@ -4960,7 +5782,7 @@ export default function EcosystemPortal({
 
 
             {/* Left sidebar forms (Construct building specifications editor) */}
-            <div className="lg:col-span-1 space-y-4 text-xs">
+            <div ref={buildingFormRef} className="lg:col-span-1 space-y-4 text-xs">
               
               {(editingBuildingId || isAddingSecondaryBuilding) && buildingEditForm ? (
                 <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-neutral-300/15 space-y-4">
@@ -5856,22 +6678,6 @@ export default function EcosystemPortal({
                                 initH: bItem.hMeters
                               };
                             }}
-                            onTouchStart={(e) => {
-                              if (e.touches.length === 0) return;
-                              e.stopPropagation();
-                              const touch = e.touches[0];
-                              setSelectedGreenhouseBedId(bItem.id);
-                              setActiveGhDragId(bItem.id);
-                              setActiveGhResizeId(null);
-                              ghDragStartRef.current = {
-                                initMouseX: touch.clientX,
-                                initMouseY: touch.clientY,
-                                initX: bItem.xMeters,
-                                initY: bItem.yMeters,
-                                initW: bItem.wMeters,
-                                initH: bItem.hMeters
-                              };
-                            }}
                             className={`absolute rounded-xl border-2 select-none flex flex-col justify-between p-1.5 transition-all text-neutral-800 dark:text-neutral-100 ${
                               isSelected 
                                 ? "border-emerald-500 bg-emerald-50/95 dark:bg-emerald-950/40 shadow-lg ring-2 ring-emerald-300 dark:ring-emerald-800 scale-[1.01] z-20 cursor-move" 
@@ -5965,23 +6771,6 @@ export default function EcosystemPortal({
                                       initH: bItem.hMeters
                                     };
                                   }}
-                                  onTouchStart={(e) => {
-                                    if (e.touches.length === 0) return;
-                                    e.stopPropagation();
-                                    e.preventDefault();
-                                    const touch = e.touches[0];
-                                    setActiveGhResizeId(bItem.id);
-                                    setActiveGhResizeDir("nw");
-                                    setActiveGhDragId(null);
-                                    ghDragStartRef.current = {
-                                      initMouseX: touch.clientX,
-                                      initMouseY: touch.clientY,
-                                      initX: bItem.xMeters,
-                                      initY: bItem.yMeters,
-                                      initW: bItem.wMeters,
-                                      initH: bItem.hMeters
-                                    };
-                                  }}
                                   className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white hover:bg-emerald-500 border-2 border-emerald-500 rounded-full cursor-nwse-resize z-30 hover:scale-125 transition-transform"
                                   title="Растянуть: Вверх-Влево"
                                 />
@@ -5996,23 +6785,6 @@ export default function EcosystemPortal({
                                     ghDragStartRef.current = {
                                       initMouseX: e.clientX,
                                       initMouseY: e.clientY,
-                                      initX: bItem.xMeters,
-                                      initY: bItem.yMeters,
-                                      initW: bItem.wMeters,
-                                      initH: bItem.hMeters
-                                    };
-                                  }}
-                                  onTouchStart={(e) => {
-                                    if (e.touches.length === 0) return;
-                                    e.stopPropagation();
-                                    e.preventDefault();
-                                    const touch = e.touches[0];
-                                    setActiveGhResizeId(bItem.id);
-                                    setActiveGhResizeDir("ne");
-                                    setActiveGhDragId(null);
-                                    ghDragStartRef.current = {
-                                      initMouseX: touch.clientX,
-                                      initMouseY: touch.clientY,
                                       initX: bItem.xMeters,
                                       initY: bItem.yMeters,
                                       initW: bItem.wMeters,
@@ -6039,23 +6811,6 @@ export default function EcosystemPortal({
                                       initH: bItem.hMeters
                                     };
                                   }}
-                                  onTouchStart={(e) => {
-                                    if (e.touches.length === 0) return;
-                                    e.stopPropagation();
-                                    e.preventDefault();
-                                    const touch = e.touches[0];
-                                    setActiveGhResizeId(bItem.id);
-                                    setActiveGhResizeDir("sw");
-                                    setActiveGhDragId(null);
-                                    ghDragStartRef.current = {
-                                      initMouseX: touch.clientX,
-                                      initMouseY: touch.clientY,
-                                      initX: bItem.xMeters,
-                                      initY: bItem.yMeters,
-                                      initW: bItem.wMeters,
-                                      initH: bItem.hMeters
-                                    };
-                                  }}
                                   className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white hover:bg-emerald-500 border-2 border-emerald-500 rounded-full cursor-nesw-resize z-30 hover:scale-125 transition-transform"
                                   title="Растянуть: Вниз-Влево"
                                 />
@@ -6070,23 +6825,6 @@ export default function EcosystemPortal({
                                     ghDragStartRef.current = {
                                       initMouseX: e.clientX,
                                       initMouseY: e.clientY,
-                                      initX: bItem.xMeters,
-                                      initY: bItem.yMeters,
-                                      initW: bItem.wMeters,
-                                      initH: bItem.hMeters
-                                    };
-                                  }}
-                                  onTouchStart={(e) => {
-                                    if (e.touches.length === 0) return;
-                                    e.stopPropagation();
-                                    e.preventDefault();
-                                    const touch = e.touches[0];
-                                    setActiveGhResizeId(bItem.id);
-                                    setActiveGhResizeDir("se");
-                                    setActiveGhDragId(null);
-                                    ghDragStartRef.current = {
-                                      initMouseX: touch.clientX,
-                                      initMouseY: touch.clientY,
                                       initX: bItem.xMeters,
                                       initY: bItem.yMeters,
                                       initW: bItem.wMeters,
