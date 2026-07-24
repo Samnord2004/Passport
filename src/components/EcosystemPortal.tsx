@@ -27,9 +27,11 @@ import {
   Heart,
   Compass,
   Star,
-  Sparkles
+  Sparkles,
+  Upload,
+  AlertTriangle
 } from "lucide-react";
-import { User as UserType, BuildingObject, ScheduleItem, CompletedChecklist } from "../types";
+import { User as UserType, BuildingObject, ScheduleItem, CompletedChecklist, FamilyMemberAccess } from "../types";
 import { parseEquipment, parseLifeSupport, parseBuildingInfo, parseSpecs } from "../utils/specParsers";
 import { Property3DViewer } from "./Property3DViewer";
 
@@ -122,6 +124,7 @@ interface EcosystemPortalProps {
   onNavigateToSchedules: (objectId?: string) => void;
   currentTheme?: string;
   onRefreshData?: () => void;
+  onOpenSpecialistSearch?: () => void;
 }
 
 // Sub-interfaces for extended features
@@ -266,7 +269,8 @@ export default function EcosystemPortal({
   onNavigateToObjects,
   onNavigateToSchedules,
   currentTheme,
-  onRefreshData
+  onRefreshData,
+  onOpenSpecialistSearch
 }: EcosystemPortalProps) {
   // Ordered by user request: "История & Хроники" is now FIRST
   const [activeSubApp, setActiveSubApp] = useState<"chronicles" | "passport" | "garden" | "buildings">("chronicles");
@@ -950,6 +954,8 @@ export default function EcosystemPortal({
   const [isInEditChronicleMode, setIsInEditChronicleMode] = useState<boolean>(false);
   const [chronicleEditForm, setChronicleEditForm] = useState<ChronicleDiaryEntry | null>(null);
   const [isAddingChronicle, setIsAddingChronicle] = useState<boolean>(false);
+  const [chroniclePhotoError, setChroniclePhotoError] = useState<string>("");
+  const [chroniclePhotoCompressing, setChroniclePhotoCompressing] = useState<boolean>(false);
   
   // Local temporary states for Chronicle furniture sub-form
   const [newChFurnitureItem, setNewChFurnitureItem] = useState<string>("");
@@ -1069,8 +1075,147 @@ export default function EcosystemPortal({
   const [transferDate, setTransferDate] = useState<string>(new Date().toISOString().split("T")[0]);
   const [transferSuccess, setTransferSuccess] = useState<boolean>(false);
 
+  // Family & Manager Access Modal State
+  const [isFamilyModalOpen, setIsFamilyModalOpen] = useState<boolean>(false);
+  const [familyMemberName, setFamilyMemberName] = useState<string>("");
+  const [familyMemberEmail, setFamilyMemberEmail] = useState<string>("");
+  const [familyMemberPhone, setFamilyMemberPhone] = useState<string>("");
+  const [familyMemberRole, setFamilyMemberRole] = useState<"family" | "manager">("family");
+  const [familyShareContacts, setFamilyShareContacts] = useState<boolean>(false);
+
+  const handleAddFamilyMember = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!familyMemberName.trim() || !activeObject) return;
+
+    const newMember: FamilyMemberAccess = {
+      id: "fam_" + Date.now(),
+      fullname: familyMemberName.trim(),
+      name: familyMemberName.trim(),
+      email: familyMemberEmail.trim(),
+      phone: familyMemberPhone.trim(),
+      role: familyMemberRole,
+      addedAt: new Date().toISOString().split("T")[0],
+      shareContactsWithSpecialist: familyMemberRole === 'manager' ? true : familyShareContacts
+    };
+
+    const currentList = activeObject.familyAccessList || [];
+    const updatedList = [...currentList, newMember];
+
+    const storedObjectsStr = localStorage.getItem("eco_building_objects");
+    let allObjects: BuildingObject[] = storedObjectsStr ? JSON.parse(storedObjectsStr) : [...objects];
+    
+    allObjects = allObjects.map(o => {
+      if (o.id === activeObject.id) {
+        return { ...o, familyAccessList: updatedList };
+      }
+      return o;
+    });
+
+    localStorage.setItem("eco_building_objects", JSON.stringify(allObjects));
+    activeObject.familyAccessList = updatedList;
+
+    fetch(`/api/objects/${activeObject.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...activeObject, familyAccessList: updatedList })
+    }).catch(() => {});
+
+    if (onRefreshData) {
+      onRefreshData();
+    }
+
+    setFamilyMemberName("");
+    setFamilyMemberEmail("");
+    setFamilyMemberPhone("");
+    setFamilyShareContacts(false);
+    alert(`Доступ для ${familyMemberRole === 'manager' ? 'управляющего' : 'члена семьи'} "${newMember.name}" успешно предоставлен!`);
+  };
+
+  const handleToggleFamilyShareContacts = (memberId: string) => {
+    if (!activeObject) return;
+    const currentList = activeObject.familyAccessList || [];
+    const updatedList = currentList.map(m => {
+      if (m.id === memberId) {
+        return { ...m, shareContactsWithSpecialist: !m.shareContactsWithSpecialist };
+      }
+      return m;
+    });
+
+    const storedObjectsStr = localStorage.getItem("eco_building_objects");
+    let allObjects: BuildingObject[] = storedObjectsStr ? JSON.parse(storedObjectsStr) : [...objects];
+    allObjects = allObjects.map(o => {
+      if (o.id === activeObject.id) {
+        return { ...o, familyAccessList: updatedList };
+      }
+      return o;
+    });
+
+    localStorage.setItem("eco_building_objects", JSON.stringify(allObjects));
+    activeObject.familyAccessList = updatedList;
+
+    fetch(`/api/objects/${activeObject.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...activeObject, familyAccessList: updatedList })
+    }).catch(() => {});
+
+    if (onRefreshData) {
+      onRefreshData();
+    }
+  };
+
+  const handleToggleHideOwnerContacts = () => {
+    if (!activeObject) return;
+    const newValue = !activeObject.hideOwnerContactsFromSpecialists;
+
+    const storedObjectsStr = localStorage.getItem("eco_building_objects");
+    let allObjects: BuildingObject[] = storedObjectsStr ? JSON.parse(storedObjectsStr) : [...objects];
+    allObjects = allObjects.map(o => {
+      if (o.id === activeObject.id) {
+        return { ...o, hideOwnerContactsFromSpecialists: newValue };
+      }
+      return o;
+    });
+
+    localStorage.setItem("eco_building_objects", JSON.stringify(allObjects));
+    activeObject.hideOwnerContactsFromSpecialists = newValue;
+
+    fetch(`/api/objects/${activeObject.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...activeObject, hideOwnerContactsFromSpecialists: newValue })
+    }).catch(() => {});
+
+    if (onRefreshData) {
+      onRefreshData();
+    }
+  };
+
+  const handleRemoveFamilyMember = (memberId: string) => {
+    if (!activeObject || !confirm("Вы уверены, что хотите отозвать доступ?")) return;
+
+    const updatedList = (activeObject.familyAccessList || []).filter(m => m.id !== memberId);
+
+    const storedObjectsStr = localStorage.getItem("eco_building_objects");
+    let allObjects: BuildingObject[] = storedObjectsStr ? JSON.parse(storedObjectsStr) : [...objects];
+
+    allObjects = allObjects.map(o => {
+      if (o.id === activeObject.id) {
+        return { ...o, familyAccessList: updatedList };
+      }
+      return o;
+    });
+
+    localStorage.setItem("eco_building_objects", JSON.stringify(allObjects));
+    activeObject.familyAccessList = updatedList;
+
+    if (onRefreshData) {
+      onRefreshData();
+    }
+  };
+
   // Sub-tabs for the garden app section
-  const [gardenSubTab, setGardenSubTab] = useState<"planogram" | "gardens" | "services" | "branding" | "support" | "seeds" | "3d_plot">("gardens");
+  const [gardenSubTab, setGardenSubTab] = useState<"planogram" | "gardens" | "services" | "branding" | "support" | "seeds" | "3d_plot">("planogram");
 
   // Drawing Canvas Tools
   const [canvasTool, setCanvasTool] = useState<"select" | "boundary" | "building" | "plant">("select");
@@ -1083,20 +1228,36 @@ export default function EcosystemPortal({
   const canvasRef = useRef<HTMLDivElement>(null);
   const buildingFormRef = useRef<HTMLDivElement>(null);
 
-  // Global mouse coordination engine for dragging & resizing planogram elements
+  // Helper to extract event coordinates from Mouse or Touch events
+  const getEventCoords = (e: MouseEvent | TouchEvent) => {
+    if ('touches' in e && e.touches && e.touches.length > 0) {
+      return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
+    }
+    if ('changedTouches' in e && e.changedTouches && e.changedTouches.length > 0) {
+      return { clientX: e.changedTouches[0].clientX, clientY: e.changedTouches[0].clientY };
+    }
+    const m = e as MouseEvent;
+    return { clientX: m.clientX, clientY: m.clientY };
+  };
+
+  // Global pointer coordination engine for dragging & resizing planogram elements (Mouse & Touch)
   useEffect(() => {
     if (!activeDragId && !activeResizeId && activeCornerIndex === null) return;
 
-    const handleMouseMove = (e: MouseEvent) => {
+    const handlePointerMove = (e: MouseEvent | TouchEvent) => {
       if (!canvasRef.current) return;
+      if ('touches' in e && e.cancelable) {
+        e.preventDefault(); // Prevent touch scrolling while dragging on canvas
+      }
+      const coords = getEventCoords(e);
       const rect = canvasRef.current.getBoundingClientRect();
       const currentDim = getPlotDimForObject(selectedObjectId || "1");
       const W = currentDim.width;
       const H = currentDim.height;
 
       if (activeCornerIndex !== null) {
-        const mouseXCanvas = ((e.clientX - rect.left) / rect.width) * W;
-        const mouseYCanvas = (1 - (e.clientY - rect.top) / rect.height) * H;
+        const mouseXCanvas = ((coords.clientX - rect.left) / rect.width) * W;
+        const mouseYCanvas = (1 - (coords.clientY - rect.top) / rect.height) * H;
         
         const targetX = Math.max(0, Math.min(W, Math.round(mouseXCanvas)));
         const targetY = Math.max(0, Math.min(H, Math.round(mouseYCanvas)));
@@ -1115,8 +1276,8 @@ export default function EcosystemPortal({
         return;
       }
 
-      const currentMouseX = e.clientX;
-      const currentMouseY = e.clientY;
+      const currentMouseX = coords.clientX;
+      const currentMouseY = coords.clientY;
       const startMouseX = dragStartRef.current.initMouseX;
       const startMouseY = dragStartRef.current.initMouseY;
 
@@ -1174,8 +1335,8 @@ export default function EcosystemPortal({
         }
       } else if (activeResizeId) {
         if (activeResizeDirection === "plant_diameter") {
-          const currentMouseXCanvas = ((e.clientX - rect.left) / rect.width) * W;
-          const currentMouseYCanvas = (1 - (e.clientY - rect.top) / rect.height) * H;
+          const currentMouseXCanvas = ((coords.clientX - rect.left) / rect.width) * W;
+          const currentMouseYCanvas = (1 - (coords.clientY - rect.top) / rect.height) * H;
 
           const plant = plantNodes.find(p => p.id === activeResizeId);
           if (plant) {
@@ -1281,7 +1442,7 @@ export default function EcosystemPortal({
       }
     };
 
-    const handleMouseUp = () => {
+    const handlePointerUp = () => {
       setActiveDragId(null);
       setActiveDragType(null);
       setActiveResizeId(null);
@@ -1289,12 +1450,18 @@ export default function EcosystemPortal({
       setActiveCornerIndex(null);
     };
 
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("mousemove", handlePointerMove);
+    window.addEventListener("mouseup", handlePointerUp);
+    window.addEventListener("touchmove", handlePointerMove, { passive: false });
+    window.addEventListener("touchend", handlePointerUp);
+    window.addEventListener("touchcancel", handlePointerUp);
 
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("mousemove", handlePointerMove);
+      window.removeEventListener("mouseup", handlePointerUp);
+      window.removeEventListener("touchmove", handlePointerMove);
+      window.removeEventListener("touchend", handlePointerUp);
+      window.removeEventListener("touchcancel", handlePointerUp);
     };
   }, [activeDragId, activeDragType, activeResizeId, activeResizeDirection, activeCornerIndex, selectedObjectId, plantNodes, plotCorners]);
 
@@ -1309,8 +1476,26 @@ export default function EcosystemPortal({
   });
 
   // Handlers for chronicles
+  const handleChroniclePhotoFileChange = async (file: File) => {
+    if (file.size > 20 * 1024 * 1024) {
+      setChroniclePhotoError("Размер файла превышает 20 МБ. Пожалуйста, выберите изображение меньшего размера.");
+      return;
+    }
+    setChroniclePhotoError("");
+    setChroniclePhotoCompressing(true);
+    try {
+      const compressedBase64 = await compressImage(file, 1200, 1200, 0.8);
+      setChronicleEditForm(prev => prev ? { ...prev, photoUrl: compressedBase64 } : null);
+    } catch (err) {
+      setChroniclePhotoError("Произошла ошибка при обработке файла.");
+    } finally {
+      setChroniclePhotoCompressing(false);
+    }
+  };
+
   const handleStartEditChronicle = (entry: ChronicleDiaryEntry) => {
     setChronicleEditForm({ ...entry });
+    setChroniclePhotoError("");
     setIsInEditChronicleMode(true);
   };
 
@@ -1448,10 +1633,11 @@ export default function EcosystemPortal({
       description: "",
       memories: "",
       ideaProcess: "",
-      designMoodboardUrl: "https://images.unsplash.com/photo-1513694203232-719a280e022f?w=400&auto=format&fit=crop&q=60",
-      photoUrl: "https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?w=400&auto=format&fit=crop&q=60",
+      designMoodboardUrl: "",
+      photoUrl: "",
       boughtFurniture: []
     });
+    setChroniclePhotoError("");
     setIsAddingChronicle(true);
   };
 
@@ -1596,7 +1782,7 @@ export default function EcosystemPortal({
         type: "other",
         name: newBuildingLabel,
         builderType: "self",
-        materials: "Выбрано по клику на планограмме",
+        materials: "Выбрано по клику на схеме участка",
         completionYear: new Date().getFullYear().toString(),
         operationNotes: "Характеристики конструкции добавлены из режима быстрого клика чертежа.",
         wishes: "Редактировать детальную карточку постройки.",
@@ -1606,7 +1792,7 @@ export default function EcosystemPortal({
       };
       setSecondaryBuildings(prev => [...prev, newSB]);
 
-      // Не перенаправляем пользователя при рисовании на планограмме
+      // Не перенаправляем пользователя при рисовании на схеме участка
       // setActiveSubApp("buildings");
       // startEditingBuilding(newSB);
     } 
@@ -1933,7 +2119,7 @@ export default function EcosystemPortal({
               Вход в Личную Экосистему и Ландшафт
             </h2>
             <p className="text-xs text-zinc-400 leading-relaxed">
-              Вы входите в интерактивный пульт управления вашим земельным участком и сооружениями. Выберите конкретный объект недвижимости, чтобы вести личный фотодневник («История»), просматривать технические спецификации котлов и фильтров («Цифровой паспорт»), проектировать планограмму насаждений («Мой сад») и вести учет второстепенных строений («Мои постройки»).
+              Вы входите в интерактивный пульт управления вашим земельным участком и сооружениями. Выберите конкретный объект недвижимости, чтобы вести личный фотодневник («История»), просматривать технические спецификации котлов и фильтров («Цифровой паспорт»), проектировать схему участка и насаждений («Мой сад») и вести учет второстепенных строений («Мои постройки»).
             </p>
           </div>
         </div>
@@ -2049,7 +2235,7 @@ export default function EcosystemPortal({
                 <span className="text-[9px] bg-emerald-500 text-neutral-950 font-black px-1.5 py-0.5 rounded uppercase tracking-wider">Информационный Портал</span>
               </div>
               <p className="text-[10px] text-zinc-400">
-                Цифровой журнал усадьбы: ведение истории, планограммы, параметров и передача архива при продаже
+                Цифровой журнал усадьбы: ведение истории, схемы участка, параметров и передача архива при продаже
               </p>
             </div>
           </div>
@@ -2079,14 +2265,27 @@ export default function EcosystemPortal({
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
-              <button
-                onClick={() => setIsTransferModalOpen(true)}
-                className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs rounded-xl transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer justify-center flex-1 sm:flex-none"
-                title="Передать объект новому собственнику (при продаже/передаче)"
-              >
-                <Share2 className="w-3.5 h-3.5" />
-                <span>Передать объект новому собственнику</span>
-              </button>
+              {currentUser?.role === 'owner' && (
+                <>
+                  <button
+                    onClick={() => setIsFamilyModalOpen(true)}
+                    className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-xl transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer justify-center flex-1 sm:flex-none shadow-sm"
+                    title="Управление семейным доступом и управляющим объекта"
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    <span>👨‍👩‍👧‍👦 Семейный доступ</span>
+                  </button>
+
+                  <button
+                    onClick={() => setIsTransferModalOpen(true)}
+                    className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs rounded-xl transition-all active:scale-95 flex items-center gap-1.5 cursor-pointer justify-center flex-1 sm:flex-none"
+                    title="Передать объект новому собственнику (при продаже/передаче)"
+                  >
+                    <Share2 className="w-3.5 h-3.5" />
+                    <span>Передать объект новому собственнику</span>
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => setSelectedObjectId("")}
                 className="px-3.5 py-1.5 bg-white/10 hover:bg-white/15 border border-white/10 text-xs font-black text-white rounded-xl flex items-center gap-1.5 transition cursor-pointer justify-center flex-1 sm:flex-none"
@@ -2369,13 +2568,74 @@ export default function EcosystemPortal({
                   </div>
 
                   <div>
-                    <label className="block font-bold text-zinc-400 text-[10px] uppercase mb-1">Ссылка на фотоиллюстрацию (Unsplash)</label>
-                    <input 
-                      type="text" 
-                      value={chronicleEditForm.photoUrl}
-                      onChange={(e) => setChronicleEditForm({...chronicleEditForm, photoUrl: e.target.value})}
-                      className="w-full p-2.5 rounded bg-neutral-50 dark:bg-black/40 border border-neutral-200 dark:border-neutral-800 text-xs text-neutral-800 dark:text-neutral-100"
-                    />
+                    <label className="block font-bold text-zinc-400 text-[10px] uppercase mb-1">
+                      Прикрепить фото к событию (файлом до 20 МБ)
+                    </label>
+                    
+                    <div
+                      onClick={() => document.getElementById("chronicle-photo-file-input")?.click()}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) handleChroniclePhotoFileChange(file);
+                      }}
+                      className="border-2 border-dashed border-neutral-300 dark:border-zinc-800 hover:border-purple-500 rounded-xl p-3.5 text-center cursor-pointer bg-neutral-50/50 dark:bg-black/20 hover:bg-purple-500/5 transition space-y-1.5"
+                    >
+                      <input 
+                        id="chronicle-photo-file-input"
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleChroniclePhotoFileChange(file);
+                        }}
+                        className="hidden"
+                      />
+                      <Upload className="w-5 h-5 mx-auto text-purple-600 dark:text-purple-400" />
+                      <div className="text-xs font-bold text-neutral-700 dark:text-neutral-200">
+                        {chroniclePhotoCompressing ? "Обработка и сжатие изображения..." : "Загрузить фото события (до 20 МБ)"}
+                      </div>
+                      <div className="text-[10px] text-zinc-400">
+                        Нажмите для выбора файла или перетащите его сюда
+                      </div>
+                    </div>
+
+                    {chroniclePhotoError && (
+                      <div className="mt-1.5 text-[11px] text-rose-500 font-bold flex items-center gap-1">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{chroniclePhotoError}</span>
+                      </div>
+                    )}
+
+                    {chronicleEditForm.photoUrl && (
+                      <div className="mt-2.5 p-2 rounded-xl bg-neutral-100 dark:bg-zinc-800/60 border border-neutral-200 dark:border-zinc-700 flex items-center gap-3">
+                        <img 
+                          src={chronicleEditForm.photoUrl} 
+                          alt="Превью события" 
+                          className="w-16 h-12 object-cover rounded-lg border border-neutral-300 dark:border-zinc-700 shrink-0" 
+                        />
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs font-extrabold text-emerald-600 dark:text-emerald-400 block truncate">
+                            ✓ Фотография прикреплена
+                          </span>
+                          <span className="text-[10px] text-zinc-400 block truncate">
+                            Готово к публикации в летописи
+                          </span>
+                        </div>
+                        <button 
+                          type="button" 
+                          onClick={() => {
+                            setChronicleEditForm({ ...chronicleEditForm, photoUrl: "" });
+                            setChroniclePhotoError("");
+                          }} 
+                          className="p-1.5 text-xs font-bold text-rose-500 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition cursor-pointer"
+                          title="Удалить фотографию"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Purchased Furniture Add Section */}
@@ -2944,34 +3204,28 @@ export default function EcosystemPortal({
           {/* Garden Subapp tabs */}
           <div className="p-1.5 bg-neutral-100 dark:bg-black/35 rounded-xl border border-neutral-300/10 max-w-sm sm:max-w-max flex flex-wrap gap-1">
             <button
+              onClick={() => { setGardenSubTab("planogram"); setSelectedPlant(null); }}
+              className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "planogram" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
+            >
+              🗺️ Схема участка
+            </button>
+            <button
               onClick={() => setGardenSubTab("gardens")}
               className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "gardens" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
             >
               🌿 Мои Сады ({gardens.length})
             </button>
             <button
-              onClick={() => { setGardenSubTab("planogram"); setSelectedPlant(null); }}
-              className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "planogram" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
+              onClick={() => setGardenSubTab("services")}
+              className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "services" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
             >
-              🗺️ Электронная планограмма
-            </button>
-            <button
-              onClick={() => setGardenSubTab("3d_plot")}
-              className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "3d_plot" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
-            >
-              👁️ 3D-модель участка
+              🚜 Сервисы & Садовники
             </button>
             <button
               onClick={() => setGardenSubTab("seeds")}
               className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "seeds" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
             >
-              🎒 Каталог семян & сортов
-            </button>
-            <button
-              onClick={() => setGardenSubTab("services")}
-              className={`p-2 px-4 text-xs font-bold rounded-lg transition-colors cursor-pointer ${gardenSubTab === "services" ? "bg-emerald-600 text-white" : "hover:text-emerald-500"}`}
-            >
-              🚜 Сервисы & Садовники
+              🎒 Каталог семян и растений
             </button>
           </div>
 
@@ -3090,10 +3344,10 @@ export default function EcosystemPortal({
                     contractorName: "Застройщик по проекту",
                     materials: "Определено концептом на планировке",
                     completionYear: new Date().getFullYear().toString(),
-                    operationNotes: "Характеристики конструкции импортированы из интерактивной планограммы.",
+                    operationNotes: "Характеристики конструкции импортированы из интерактивной схемы участка.",
                     wishes: "Добавить детальное описание строения на схеме.",
                     growthTimeline: [
-                      { title: "Посадка строения на планограмме", date: new Date().toLocaleDateString("ru-RU", { month: "long", year: "numeric" }), photoUrl: "https://images.unsplash.com/photo-1590069261209-f8e9b8642343?w=400&auto=format&fit=crop&q=60" }
+                      { title: "Посадка строения на схеме участка", date: new Date().toLocaleDateString("ru-RU", { month: "long", year: "numeric" }), photoUrl: "https://images.unsplash.com/photo-1590069261209-f8e9b8642343?w=400&auto=format&fit=crop&q=60" }
                     ]
                   };
                   setSecondaryBuildings(prev => [...prev, newSB]);
@@ -3128,14 +3382,26 @@ export default function EcosystemPortal({
               }
             };
 
-            const handleDragMouseDown = (e: React.MouseEvent, type: "building" | "plant", item: any) => {
+            const getReactPointerCoords = (e: React.MouseEvent | React.TouchEvent) => {
+              if ('touches' in e && e.touches && e.touches.length > 0) {
+                return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
+              }
+              if ('changedTouches' in e && e.changedTouches && e.changedTouches.length > 0) {
+                return { clientX: e.changedTouches[0].clientX, clientY: e.changedTouches[0].clientY };
+              }
+              const m = e as React.MouseEvent;
+              return { clientX: m.clientX, clientY: m.clientY };
+            };
+
+            const handleDragMouseDown = (e: React.MouseEvent | React.TouchEvent, type: "building" | "plant", item: any) => {
               e.stopPropagation();
-              e.preventDefault();
+              if (e.cancelable) e.preventDefault();
+              const coords = getReactPointerCoords(e);
               setActiveDragId(item.id);
               setActiveDragType(type);
               dragStartRef.current = {
-                initMouseX: e.clientX,
-                initMouseY: e.clientY,
+                initMouseX: coords.clientX,
+                initMouseY: coords.clientY,
                 initX: item.xMeters || 0,
                 initY: item.yMeters || 0,
                 initW: item.wMeters || item.diameterMeters || 4,
@@ -3153,14 +3419,15 @@ export default function EcosystemPortal({
               }
             };
 
-            const handleResizeMouseDown = (e: React.MouseEvent, dir: string, item: any) => {
+            const handleResizeMouseDown = (e: React.MouseEvent | React.TouchEvent, dir: string, item: any) => {
               e.stopPropagation();
-              e.preventDefault();
+              if (e.cancelable) e.preventDefault();
+              const coords = getReactPointerCoords(e);
               setActiveResizeId(item.id);
               setActiveResizeDirection(dir);
               dragStartRef.current = {
-                initMouseX: e.clientX,
-                initMouseY: e.clientY,
+                initMouseX: coords.clientX,
+                initMouseY: coords.clientY,
                 initX: item.xMeters || 0,
                 initY: item.yMeters || 0,
                 initW: item.wMeters || item.diameterMeters || 4,
@@ -3183,7 +3450,7 @@ export default function EcosystemPortal({
                         ) : (
                           <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
                         )}
-                        Режим планограммы:
+                        Режим схемы участка:
                       </h4>
                       <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-snug">
                         {isEditingPlanogram 
@@ -3191,23 +3458,32 @@ export default function EcosystemPortal({
                           : "👁️ Просмотр активен — кликайте на растение или объект на карте для просмотра истории и паспорта."}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsEditingPlanogram(!isEditingPlanogram);
-                        // Reset interactions
-                        setActiveTemplate(null);
-                        setActiveDragId(null);
-                        setActiveResizeId(null);
-                      }}
-                      className={`px-4 py-2 text-xs font-black rounded-lg shadow-sm transition-all flex items-center gap-2 cursor-pointer ${
-                        isEditingPlanogram 
-                          ? "bg-amber-500 hover:bg-amber-600 text-neutral-900 border border-amber-600/30" 
-                          : "bg-emerald-600 hover:bg-emerald-700 text-white"
-                      }`}
-                    >
-                      {isEditingPlanogram ? "👁️ Завершить редактирование" : "🛠️ Редактировать планограмму"}
-                    </button>
+                    <div className="flex items-center gap-2.5 shrink-0 flex-wrap sm:flex-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => setGardenSubTab("3d_plot")}
+                        className="px-4 py-2 text-xs font-black rounded-lg shadow-sm bg-purple-600 hover:bg-purple-700 text-white transition-all flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Eye className="w-4 h-4" /> 👁️ 3D-модель участка
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsEditingPlanogram(!isEditingPlanogram);
+                          // Reset interactions
+                          setActiveTemplate(null);
+                          setActiveDragId(null);
+                          setActiveResizeId(null);
+                        }}
+                        className={`px-4 py-2 text-xs font-black rounded-lg shadow-sm transition-all flex items-center gap-2 cursor-pointer ${
+                          isEditingPlanogram 
+                            ? "bg-amber-500 hover:bg-amber-600 text-neutral-900 border border-amber-600/30" 
+                            : "bg-emerald-600 hover:bg-emerald-700 text-white"
+                        }`}
+                      >
+                        {isEditingPlanogram ? "👁️ Завершить редактирование" : "🛠️ Редактировать схему"}
+                      </button>
+                    </div>
                   </div>
 
                   {/* Plot Dimensions (Only during active editing) */}
@@ -3452,6 +3728,7 @@ export default function EcosystemPortal({
                             <div
                               key={b.id}
                               onMouseDown={isEditingPlanogram ? (e) => handleDragMouseDown(e, "building", b) : undefined}
+                              onTouchStart={isEditingPlanogram ? (e) => handleDragMouseDown(e, "building", b) : undefined}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setSelectedPlanBuildingId(b.id);
@@ -3459,7 +3736,7 @@ export default function EcosystemPortal({
                                 setActiveTemplate(null);
                               }}
                               className={`absolute rounded-lg border-2 select-none flex flex-col justify-between shadow-sm ${
-                                isEditingPlanogram ? "cursor-move" : "cursor-pointer hover:scale-[1.01]"
+                                isEditingPlanogram ? "cursor-move touch-none" : "cursor-pointer hover:scale-[1.01]"
                               } ${
                                 !isEditingPlanogram ? "transition-all duration-200" : ""
                               } ${
@@ -3497,44 +3774,52 @@ export default function EcosystemPortal({
                                   {/* Corner handles */}
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "nw", b)}
-                                    className="absolute -top-1 -left-1 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-nwse-resize z-40 hover:scale-125 transition-transform"
+                                    onTouchStart={(e) => handleResizeMouseDown(e, "nw", b)}
+                                    className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-amber-500 rounded-sm cursor-nwse-resize z-40 hover:scale-125 transition-transform touch-none"
                                     title="Изменить размер: Вверх-Влево"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "ne", b)}
-                                    className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-nesw-resize z-40 hover:scale-125 transition-transform"
+                                    onTouchStart={(e) => handleResizeMouseDown(e, "ne", b)}
+                                    className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-white border-2 border-amber-500 rounded-sm cursor-nesw-resize z-40 hover:scale-125 transition-transform touch-none"
                                     title="Изменить размер: Вверх-Вправо"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "sw", b)}
-                                    className="absolute -bottom-1 -left-1 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-nesw-resize z-40 hover:scale-125 transition-transform"
+                                    onTouchStart={(e) => handleResizeMouseDown(e, "sw", b)}
+                                    className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-white border-2 border-amber-500 rounded-sm cursor-nesw-resize z-40 hover:scale-125 transition-transform touch-none"
                                     title="Изменить размер: Вниз-Влево"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "se", b)}
-                                    className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-nwse-resize z-40 hover:scale-125 transition-transform"
+                                    onTouchStart={(e) => handleResizeMouseDown(e, "se", b)}
+                                    className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-white border-2 border-amber-500 rounded-sm cursor-nwse-resize z-40 hover:scale-125 transition-transform touch-none"
                                     title="Изменить размер: Вниз-Вправо"
                                   />
 
                                   {/* Edge handles */}
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "n", b)}
-                                    className="absolute -top-1 left-1/2 -translate-x-1/2 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-ns-resize z-40 hover:scale-125 transition-transform"
+                                    onTouchStart={(e) => handleResizeMouseDown(e, "n", b)}
+                                    className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3.5 h-3.5 bg-white border-2 border-amber-500 rounded-sm cursor-ns-resize z-40 hover:scale-125 transition-transform touch-none"
                                     title="Изменить размер: Вверх"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "s", b)}
-                                    className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-ns-resize z-40 hover:scale-125 transition-transform"
+                                    onTouchStart={(e) => handleResizeMouseDown(e, "s", b)}
+                                    className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3.5 h-3.5 bg-white border-2 border-amber-500 rounded-sm cursor-ns-resize z-40 hover:scale-125 transition-transform touch-none"
                                     title="Изменить размер: Вниз"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "w", b)}
-                                    className="absolute top-1/2 -left-1 -translate-y-1/2 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-ew-resize z-40 hover:scale-125 transition-transform"
+                                    onTouchStart={(e) => handleResizeMouseDown(e, "w", b)}
+                                    className="absolute top-1/2 -left-1.5 -translate-y-1/2 w-3.5 h-3.5 bg-white border-2 border-amber-500 rounded-sm cursor-ew-resize z-40 hover:scale-125 transition-transform touch-none"
                                     title="Изменить размер: Влево"
                                   />
                                   <div
                                     onMouseDown={(e) => handleResizeMouseDown(e, "e", b)}
-                                    className="absolute top-1/2 -right-1 -translate-y-1/2 w-2.5 h-2.5 bg-white border-2 border-amber-500 rounded-sm cursor-ew-resize z-40 hover:scale-125 transition-transform"
+                                    onTouchStart={(e) => handleResizeMouseDown(e, "e", b)}
+                                    className="absolute top-1/2 -right-1.5 -translate-y-1/2 w-3.5 h-3.5 bg-white border-2 border-amber-500 rounded-sm cursor-ew-resize z-40 hover:scale-125 transition-transform touch-none"
                                     title="Изменить размер: Вправо"
                                   />
                                 </>
@@ -3572,6 +3857,7 @@ export default function EcosystemPortal({
                             <div
                               key={p.id}
                               onMouseDown={isEditingPlanogram ? (e) => handleDragMouseDown(e, "plant", p) : undefined}
+                              onTouchStart={isEditingPlanogram ? (e) => handleDragMouseDown(e, "plant", p) : undefined}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setSelectedPlant(p);
@@ -3579,7 +3865,7 @@ export default function EcosystemPortal({
                                 setActiveTemplate(null);
                               }}
                               className={`absolute rounded-full border flex flex-col items-center justify-center select-none hover:scale-105 z-20 ${
-                                isEditingPlanogram ? "cursor-move" : "cursor-pointer"
+                                isEditingPlanogram ? "cursor-move touch-none" : "cursor-pointer"
                               } ${
                                 !isEditingPlanogram ? "transition-all duration-200" : ""
                               } ${border} ${
@@ -3604,7 +3890,8 @@ export default function EcosystemPortal({
                               {isSel && isEditingPlanogram && (
                                 <div
                                   onMouseDown={(e) => handleResizeMouseDown(e, "plant_diameter", p)}
-                                  className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3.5 h-3.5 bg-white border-2 border-amber-500 rounded-full cursor-ew-resize z-40 flex items-center justify-center shadow-md hover:scale-125 transition-transform"
+                                  onTouchStart={(e) => handleResizeMouseDown(e, "plant_diameter", p)}
+                                  className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-4 h-4 bg-white border-2 border-amber-500 rounded-full cursor-ew-resize z-40 flex items-center justify-center shadow-md hover:scale-125 transition-transform touch-none"
                                   title="Изменить диаметр кроны (растянуть крону)"
                                 >
                                   <span className="w-1.5 h-1.5 bg-amber-500 rounded-full" />
@@ -3626,7 +3913,12 @@ export default function EcosystemPortal({
                                 e.preventDefault();
                                 setActiveCornerIndex(index);
                               }}
-                              className="absolute w-5 h-5 -ml-2.5 -mb-2.5 bg-gradient-to-br from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 border-2 border-white dark:border-zinc-900 rounded-full cursor-grab active:cursor-grabbing z-50 flex items-center justify-center shadow-lg transition-transform hover:scale-125 group"
+                              onTouchStart={(e) => {
+                                e.stopPropagation();
+                                if (e.cancelable) e.preventDefault();
+                                setActiveCornerIndex(index);
+                              }}
+                              className="absolute w-6 h-6 -ml-3 -mb-3 bg-gradient-to-br from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 border-2 border-white dark:border-zinc-900 rounded-full cursor-grab active:cursor-grabbing z-50 flex items-center justify-center shadow-lg transition-transform hover:scale-125 group touch-none"
                               style={{
                                 left: `${leftPct}%`,
                                 bottom: `${bottomPct}%`
@@ -4128,7 +4420,7 @@ export default function EcosystemPortal({
                           contractorName: "Застройщик по проекту",
                           materials: "Определено копированием",
                           completionYear: new Date().getFullYear().toString(),
-                          operationNotes: "Характеристики скопированы на интерактивной планограмме.",
+                          operationNotes: "Характеристики скопированы на интерактивной схеме участка.",
                           wishes: "",
                           growthTimeline: []
                         };
@@ -4743,6 +5035,33 @@ export default function EcosystemPortal({
           {gardenSubTab === "services" && (
             <div className="space-y-6 animate-fadeIn text-xs text-neutral-800 dark:text-neutral-100">
               
+              {/* SMART SPECIALIST SEARCH HERO BANNER */}
+              <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white border border-amber-500/30 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="p-1.5 bg-amber-500/20 border border-amber-500/30 rounded-lg text-amber-400">
+                      <Search className="w-5 h-5" />
+                    </span>
+                    <h4 className="font-black text-sm text-amber-400">🔎 Умный поиск и подбор технических специалистов</h4>
+                    <span className="px-2 py-0.5 rounded text-[9px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      Владелец & Семья
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-300 font-medium">
+                    Быстрый выбор инженеров под любую задачу (котлы, электрика, автополив, сантехника) с просмотром отзывов и прямых контактов в отдельном окне.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onOpenSpecialistSearch?.()}
+                  className="px-4 py-3 bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs rounded-xl cursor-pointer flex items-center justify-center gap-2 transition-all shadow-lg shrink-0 transform active:scale-95"
+                >
+                  <Search className="w-4 h-4 text-neutral-950" />
+                  <span>Открыть подбор специалистов →</span>
+                </button>
+              </div>
+
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-neutral-850">
                 <div className="space-y-1">
                   <h4 className="font-extrabold text-sm text-neutral-950 dark:text-white flex items-center gap-2">
@@ -6441,7 +6760,7 @@ export default function EcosystemPortal({
                   </div>
                   <div className="flex items-center gap-2">
                     <input type="checkbox" required defaultChecked id="transfer_g" className="w-3.5 h-3.5 text-amber-600" />
-                    <label htmlFor="transfer_g" className="font-semibold text-neutral-800 dark:text-zinc-200">Передать чертеж и саженцы планограммы</label>
+                    <label htmlFor="transfer_g" className="font-semibold text-neutral-800 dark:text-zinc-200">Передать чертеж и саженцы схемы участка</label>
                   </div>
                   <div className="flex items-center gap-2">
                     <input type="checkbox" required defaultChecked id="transfer_e" className="w-3.5 h-3.5 text-amber-600" />
@@ -6457,6 +6776,183 @@ export default function EcosystemPortal({
                 </button>
               </form>
             )}
+
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================= */}
+      {/* FAMILY & MANAGER ACCESS MANAGEMENT MODAL */}
+      {isFamilyModalOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-lg w-full border shadow-2xl p-6 text-neutral-850 dark:text-neutral-50 space-y-4 animate-scaleUp">
+            
+            <div className="flex items-center justify-between border-b pb-3 border-neutral-100 dark:border-neutral-800">
+              <h3 className="font-extrabold text-sm text-blue-600 dark:text-blue-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Users className="w-4 h-4" />
+                <span>Семейный доступ и Управляющий объекта</span>
+              </h3>
+              <button 
+                onClick={() => setIsFamilyModalOpen(false)}
+                className="p-1 hover:bg-neutral-100 dark:hover:bg-zinc-800 rounded text-zinc-400 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-zinc-500 leading-relaxed">
+              Вы можете предоставить доступ к объекту <strong>«{activeObject?.name}»</strong> членам своей семьи или управляющему. Пользователи смогут просматривать объект и вносить записи от своего имени. 
+              <br/><span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold mt-1 block">🔒 Передача объекта новому собственнику доступна исключительно вам как Владельцу.</span>
+            </p>
+
+            {/* List of current members */}
+            <div className="space-y-2">
+              <h4 className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">
+                Предоставленный доступ ({(activeObject?.familyAccessList || []).length}):
+              </h4>
+              
+              {(!activeObject?.familyAccessList || activeObject.familyAccessList.length === 0) ? (
+                <div className="p-3 rounded-xl border border-dashed border-neutral-300 dark:border-zinc-800 text-center text-xs text-zinc-400">
+                  Доступ пока никому не предоставлен. Заполните форму ниже, чтобы добавить члена семьи или управляющего.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  {activeObject.familyAccessList.map((member) => (
+                    <div key={member.id} className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-800/60 border border-slate-200 dark:border-zinc-700 flex items-center justify-between text-xs gap-2">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-extrabold text-slate-800 dark:text-zinc-100">{member.name || member.fullname}</span>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold ${
+                            member.role === 'manager' 
+                              ? 'bg-amber-500/10 text-amber-600 border border-amber-500/20' 
+                              : 'bg-blue-500/10 text-blue-600 border border-blue-500/20'
+                          }`}>
+                            {member.role === 'manager' ? '🔑 Управляющий' : '👨‍👩‍👧‍👦 Член семьи'}
+                          </span>
+
+                          {member.role === 'family' && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleFamilyShareContacts(member.id)}
+                              className={`px-2 py-0.5 rounded text-[9px] font-bold border transition-colors cursor-pointer ${
+                                member.shareContactsWithSpecialist
+                                  ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/20"
+                                  : "bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/20"
+                              }`}
+                              title="Нажмите для изменения видимости контактов для специалиста"
+                            >
+                              {member.shareContactsWithSpecialist ? "🔓 Контакты видит специалист" : "🔒 Контакты скрыты от специалиста"}
+                            </button>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-zinc-500 flex flex-wrap gap-2">
+                          {member.email && <span>📧 {member.email}</span>}
+                          {member.phone && <span>📞 {member.phone}</span>}
+                          {member.addedAt && <span className="opacity-60">Добавлен: {member.addedAt}</span>}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleRemoveFamilyMember(member.id)}
+                        className="p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg cursor-pointer transition-colors"
+                        title="Отозвать доступ"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Owner Contact Privacy Settings */}
+            <div className="p-3 bg-slate-100 dark:bg-zinc-800/80 rounded-xl border border-slate-200 dark:border-zinc-700/80 space-y-1.5">
+              <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 dark:text-amber-400 block">
+                🔒 Настройка приватности контактов собственника
+              </span>
+              <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700 dark:text-zinc-200">
+                <input
+                  type="checkbox"
+                  checked={Boolean(activeObject?.hideOwnerContactsFromSpecialists)}
+                  onChange={handleToggleHideOwnerContacts}
+                  className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500 cursor-pointer"
+                />
+                <span>Скрыть мои контакты (телефон и email) от специалистов ТО для данного объекта</span>
+              </label>
+              <p className="text-[10px] text-zinc-400 leading-snug">
+                Если галочка установлена, специалист выездного ТО не сможет видеть ваш телефон и e-mail в карточке объекта.
+              </p>
+            </div>
+
+            {/* Form to add a new member */}
+            <form onSubmit={handleAddFamilyMember} className="space-y-3 pt-2 border-t border-neutral-100 dark:border-neutral-800 text-xs">
+              <h4 className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">
+                Предоставить новый доступ:
+              </h4>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 mb-1">ФИО / Имя *</label>
+                  <input
+                    type="text" required placeholder="Елена Иванова"
+                    value={familyMemberName}
+                    onChange={(e) => setFamilyMemberName(e.target.value)}
+                    className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 mb-1">Роль доступа *</label>
+                  <select
+                    value={familyMemberRole}
+                    onChange={(e) => setFamilyMemberRole(e.target.value as any)}
+                    className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
+                  >
+                    <option value="family">👨‍👩‍👧‍👦 Член семьи</option>
+                    <option value="manager">🔑 Управляющий</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 mb-1">E-mail адрес</label>
+                  <input
+                    type="email" placeholder="family@estate.ru"
+                    value={familyMemberEmail}
+                    onChange={(e) => setFamilyMemberEmail(e.target.value)}
+                    className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-zinc-400 mb-1">Телефон</label>
+                  <input
+                    type="text" placeholder="+7 (999) 000-00-00"
+                    value={familyMemberPhone}
+                    onChange={(e) => setFamilyMemberPhone(e.target.value)}
+                    className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
+                  />
+                </div>
+              </div>
+
+              {familyMemberRole === 'family' && (
+                <label className="flex items-center gap-2 cursor-pointer p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-semibold text-slate-800 dark:text-zinc-200">
+                  <input
+                    type="checkbox"
+                    checked={familyShareContacts}
+                    onChange={(e) => setFamilyShareContacts(e.target.checked)}
+                    className="w-4 h-4 text-amber-600 rounded border-amber-300 focus:ring-amber-500 cursor-pointer"
+                  />
+                  <span>🔓 Открыть доступ к контактам (телефон/email) для специалистов ТО</span>
+                </label>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-lg shadow cursor-pointer transition-colors text-xs flex items-center justify-center gap-1.5"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>Предоставить доступ</span>
+              </button>
+            </form>
 
           </div>
         </div>

@@ -631,7 +631,7 @@ app.put("/api/auth/me", async (req, res) => {
     return res.status(401).json({ error: "Вы не авторизованы" });
   }
 
-  const { fullname, phone, company, telegramChatId, maxChatId, vkUserId, email, oldPassword, newPassword, confirmNewPassword, keySkills, avatarUrl } = req.body;
+  const { fullname, phone, company, telegramChatId, maxChatId, vkUserId, email, oldPassword, newPassword, confirmNewPassword, keySkills, avatarUrl, hideContactsFromSpecialist } = req.body;
   const payload: any = { fullname, phone, company };
   if (telegramChatId !== undefined) payload.telegramChatId = telegramChatId;
   if (maxChatId !== undefined) payload.maxChatId = maxChatId;
@@ -639,6 +639,7 @@ app.put("/api/auth/me", async (req, res) => {
   if (email !== undefined) payload.email = email;
   if (keySkills !== undefined) payload.keySkills = keySkills;
   if (avatarUrl !== undefined) payload.avatarUrl = avatarUrl;
+  if (hideContactsFromSpecialist !== undefined) payload.hideContactsFromSpecialist = hideContactsFromSpecialist;
 
   if (newPassword && newPassword.trim() !== "") {
     if (!oldPassword || oldPassword.trim() === "") {

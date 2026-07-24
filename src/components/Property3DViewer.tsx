@@ -133,10 +133,11 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
     renderer.domElement.style.display = "block";
     renderer.domElement.style.width = "100%";
     renderer.domElement.style.height = "100%";
+    renderer.domElement.style.touchAction = "none";
 
     mountRef.current.appendChild(renderer.domElement);
 
-    // 2. Add OrbitControls
+    // 2. Add OrbitControls with Touch configuration
     const controls = new OrbitControls(camera, renderer.domElement);
     controlsRef.current = controls;
     controls.enableDamping = true;
@@ -145,6 +146,15 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
     controls.minDistance = 3;
     controls.maxDistance = Math.max(W, H) * 3;
     controls.target.set(W / 2, 0, H / 2); // Look at center of plot
+    
+    // Enable mobile touch controls (1 finger rotate, 2 finger zoom/pan)
+    controls.touches = {
+      ONE: THREE.TOUCH.ROTATE,
+      TWO: THREE.TOUCH.DOLLY_PAN,
+    };
+    controls.enableZoom = true;
+    controls.enableRotate = true;
+    controls.enablePan = true;
     controls.update();
 
     // Setup ResizeObserver for robust sizing inside hidden containers/animations
@@ -1469,7 +1479,7 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
                   </div>
                 ) : (
                   <div className="p-2.5 rounded-lg border border-neutral-800 bg-neutral-900/40 text-center text-[10px] text-zinc-500 italic">
-                    У объекта нет прикрепленных фотографий. Добавьте фотографии в форму объекта на планограмме, и они автоматически подгрузятся сюда!
+                    У объекта нет прикрепленных фотографий. Добавьте фотографии в форму объекта на схеме участка, и они автоматически подгрузятся сюда!
                   </div>
                 )}
               </div>

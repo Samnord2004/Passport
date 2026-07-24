@@ -17,6 +17,8 @@ import LoginScreen from "./components/LoginScreen";
 import { LegalTabContent } from "./components/LegalAgreements";
 import SupportTab from "./components/SupportTab";
 import EcosystemPortal from "./components/EcosystemPortal";
+import { SpecialistSkillsEditor } from "./components/SpecialistSkillsEditor";
+import { SpecialistSearchModal } from "./components/SpecialistSearchModal";
 import { 
   Building, 
   Calendar, 
@@ -32,6 +34,8 @@ import {
   Plus, 
   Download, 
   AlertCircle, 
+  AlertTriangle,
+  Clock,
   CheckCircle2, 
   Image as ImageIcon, 
   Mail, 
@@ -58,6 +62,7 @@ import {
   Star,
   Palette,
   Phone,
+  Search,
   User as UserIcon
 } from "lucide-react";
 
@@ -178,6 +183,7 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<string>('objects');
   const [qrModalSchedule, setQrModalSchedule] = useState<ScheduleItem | null>(null);
+  const [isSpecialistSearchModalOpen, setIsSpecialistSearchModalOpen] = useState(false);
   
   // Reports Filter states
   const [selectedReportObjectId, setSelectedReportObjectId] = useState<string>('all');
@@ -329,6 +335,9 @@ export default function App() {
 
   // User profile modal states
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isSpecNotificationModalOpen, setIsSpecNotificationModalOpen] = useState<boolean>(false);
+  const [specModalDismissedSession, setSpecModalDismissedSession] = useState<boolean>(false);
+  const [specModalFilter, setSpecModalFilter] = useState<'all' | 'overdue' | 'upcoming'>('all');
   const [profileFullname, setProfileFullname] = useState("");
   const [profilePhone, setProfilePhone] = useState("");
   const [profileCompany, setProfileCompany] = useState("");
@@ -365,6 +374,7 @@ export default function App() {
   const [ownerVkId, setOwnerVkId] = useState("");
   const [ownerFullname, setOwnerFullname] = useState("");
   const [ownerPhone, setOwnerPhone] = useState("");
+  const [ownerHideContacts, setOwnerHideContacts] = useState<boolean>(false);
   const [ownerEditMsg, setOwnerEditMsg] = useState("");
   const [ownerEditError, setOwnerEditError] = useState("");
 
@@ -456,6 +466,12 @@ export default function App() {
   const [specFormAllowedObjects, setSpecFormAllowedObjects] = useState<string[]>([]);
   const [mySkills, setMySkills] = useState("");
   const [savingSkills, setSavingSkills] = useState(false);
+
+  useEffect(() => {
+    if (currentUser?.keySkills) {
+      setMySkills(currentUser.keySkills);
+    }
+  }, [currentUser?.keySkills]);
 
   // Schedule Editor modal form
   const [editingSchId, setEditingSchId] = useState<string | null>(null);
@@ -661,6 +677,109 @@ export default function App() {
     }, 6000);
 
     return () => clearInterval(intervalId);
+  }, [currentUser?.id]);
+
+  // Calculate days difference and statuses
+  const getScheduleStatus = (sch: ScheduleItem) => {
+    if (!sch.lastDoneDate) {
+      return { label: "Ни разу не проводилось", class: "bg-red-100 text-red-800 border-red-300", overdue: true, diffDays: -999 };
+    }
+    const lastDone = new Date(sch.lastDoneDate);
+    const nextDue = new Date(lastDone);
+    nextDue.setDate(lastDone.getDate() + sch.intervalDays);
+    const today = new Date("2026-05-24"); // Simulated static current date
+    const diffTime = nextDue.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    if (diffDays < 0) {
+      return { label: `Просрочено на ${Math.abs(diffDays)} дн.`, class: "bg-rose-100 text-rose-700 border-rose-300 font-bold", overdue: true, diffDays };
+    } else if (diffDays === 0) {
+      return { label: "Требуется выполнить сегодня!", class: "bg-amber-100 text-amber-700 border-amber-300 font-bold animate-pulse", overdue: true, diffDays: 0 };
+    } else if (diffDays <= systemSettings.reminderDaysBefore) {
+      return { label: `Предстоит выполнить через ${diffDays} дн.`, class: "bg-amber-50 text-amber-600 border-amber-200", overdue: false, upcoming: true, diffDays };
+    } else {
+      return { label: `В норме (Осталось ${diffDays} дн.)`, class: "bg-emerald-50 text-emerald-700 border-emerald-200", overdue: false, upcoming: false, diffDays };
+    }
+  };
+
+  // Memoized alert calculation specifically for the active specialist
+  const specialistAlertsData = useMemo(() => {
+    if (!currentUser || currentUser.role !== 'specialist') {
+      return { overdueItems: [], upcomingItems: [], totalCount: 0, relevantObjects: [] };
+    }
+
+    // 1. Objects belonging/assigned to this specialist
+    let accessibleObjects = objects;
+    if (currentUser.id !== 'anonymous_specialist') {
+      const assigned = objects.filter(o => o.allowedSpecialistIds && o.allowedSpecialistIds.includes(currentUser.id));
+      if (assigned.length > 0) {
+        accessibleObjects = assigned;
+      }
+    }
+    const accessibleObjIds = new Set(accessibleObjects.map(o => o.id));
+
+    // 2. Schedule regulations relating to this specialist
+    const relevantSchedules = schedules.filter(sch => {
+      if (!accessibleObjIds.has(sch.objectId)) return false;
+      if (sch.responsibleUserId && sch.responsibleUserId.trim() !== "" && sch.responsibleUserId !== currentUser.id) {
+        return false;
+      }
+      return true;
+    });
+
+    const overdueItems: Array<{ sch: ScheduleItem; obj: BuildingObject | undefined; statusLabel: string; class: string; diffDays: number }> = [];
+    const upcomingItems: Array<{ sch: ScheduleItem; obj: BuildingObject | undefined; statusLabel: string; class: string; diffDays: number }> = [];
+
+    relevantSchedules.forEach(sch => {
+      const obj = objects.find(o => o.id === sch.objectId);
+      const status = getScheduleStatus(sch);
+      const diffDaysVal = (status as any).diffDays ?? 0;
+
+      if (status.overdue) {
+        overdueItems.push({
+          sch,
+          obj,
+          statusLabel: status.label,
+          class: status.class,
+          diffDays: diffDaysVal
+        });
+      } else if (diffDaysVal >= 0 && diffDaysVal <= (systemSettings.reminderDaysBefore || 3)) {
+        upcomingItems.push({
+          sch,
+          obj,
+          statusLabel: status.label,
+          class: status.class,
+          diffDays: diffDaysVal
+        });
+      }
+    });
+
+    overdueItems.sort((a, b) => a.diffDays - b.diffDays);
+    upcomingItems.sort((a, b) => a.diffDays - b.diffDays);
+
+    return {
+      overdueItems,
+      upcomingItems,
+      totalCount: overdueItems.length + upcomingItems.length,
+      relevantObjects: accessibleObjects
+    };
+  }, [currentUser, objects, schedules, systemSettings.reminderDaysBefore]);
+
+  // Auto-trigger popup for Specialist on app opening if there are overdue or upcoming maintenance items
+  useEffect(() => {
+    if (
+      currentUser &&
+      currentUser.role === 'specialist' &&
+      !specModalDismissedSession &&
+      isInitialized &&
+      specialistAlertsData.totalCount > 0
+    ) {
+      setIsSpecNotificationModalOpen(true);
+    }
+  }, [currentUser, isInitialized, specialistAlertsData.totalCount, specModalDismissedSession]);
+
+  useEffect(() => {
+    setSpecModalDismissedSession(false);
   }, [currentUser?.id]);
 
   // Synchronize Yandex.Disk
@@ -877,6 +996,7 @@ export default function App() {
     setOwnerTelegram(currentUser.telegramChatId || "");
     setOwnerMaxId(currentUser.maxChatId || "");
     setOwnerVkId(currentUser.vkUserId || "");
+    setOwnerHideContacts(Boolean(currentUser.hideContactsFromSpecialist));
     setOwnerEditMsg("");
     setOwnerEditError("");
     setIsOwnerEditing(true);
@@ -896,7 +1016,8 @@ export default function App() {
           email: ownerEmail.trim(),
           telegramChatId: ownerTelegram.trim(),
           maxChatId: ownerMaxId.trim(),
-          vkUserId: ownerVkId.trim()
+          vkUserId: ownerVkId.trim(),
+          hideContactsFromSpecialist: ownerHideContacts
         })
       });
       const data = await response.json();
@@ -1923,29 +2044,6 @@ export default function App() {
     }
   };
 
-  // Calculate days difference and statuses
-  const getScheduleStatus = (sch: ScheduleItem) => {
-    if (!sch.lastDoneDate) {
-      return { label: "Ни разу не проводилось", class: "bg-red-100 text-red-800 border-red-300", overdue: true };
-    }
-    const lastDone = new Date(sch.lastDoneDate);
-    const nextDue = new Date(lastDone);
-    nextDue.setDate(lastDone.getDate() + sch.intervalDays);
-    const today = new Date("2026-05-24"); // Simulated static current date
-    const diffTime = nextDue.getTime() - today.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-    if (diffDays < 0) {
-      return { label: `Просрочено на ${Math.abs(diffDays)} дн.`, class: "bg-rose-100 text-rose-700 border-rose-300 font-bold", overdue: true };
-    } else if (diffDays === 0) {
-      return { label: "Требуется выполнить сегодня!", class: "bg-amber-100 text-amber-700 border-amber-300 font-bold animate-pulse", overdue: true };
-    } else if (diffDays <= systemSettings.reminderDaysBefore) {
-      return { label: `Предстоит выполнить через ${diffDays} дн.`, class: "bg-amber-50 text-amber-600 border-amber-200", overdue: false };
-    } else {
-      return { label: `В норме (Осталось ${diffDays} дн.)`, class: "bg-emerald-50 text-emerald-700 border-emerald-200", overdue: false };
-    }
-  };
-
   // Pre-fill active profile info on specialist load
   const triggerLoadProfileDefaults = () => {
     if (currentUser) {
@@ -2525,7 +2623,8 @@ export default function App() {
                           <Wrench className="w-4 h-4" />
                           <span>🔧 Сервисные службы</span>
                         </button>
-                        
+
+
                         <button
                           onClick={() => { setOwnerActiveTab('settings'); setIsOwnerMenuOpen(false); }}
                           className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
@@ -2745,53 +2844,75 @@ export default function App() {
             )}
 
             {currentUser.role === 'specialist' && (
-              <div className="relative">
-                <button
-                  id="spec-menu-toggle-btn"
-                  onClick={() => setIsSpecMenuOpen(!isSpecMenuOpen)}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-extrabold rounded-xl bg-amber-600 hover:bg-amber-700 text-white shadow-md transition-all cursor-pointer"
-                >
-                  <Menu className="w-4 h-4" />
-                  <span>🔧 Кабинет Исполнителя</span>
-                  <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isSpecMenuOpen ? 'rotate-180' : ''}`} />
-                </button>
-                
-                {isSpecMenuOpen && (
-                  <>
-                    <div className="fixed inset-0 z-40 bg-black/10" onClick={() => setIsSpecMenuOpen(false)} />
-                    <div className={`absolute right-0 mt-2 w-72 max-w-[calc(100vw-32px)] rounded-2xl shadow-2xl border p-4 z-50 animate-scaleUp text-neutral-800 dark:text-neutral-100 ${
-                      theme === 'modern' ? 'bg-zinc-950 border-zinc-800' : theme === 'terminal' ? 'bg-black border-amber-500' : theme === 'warm' ? 'bg-[#fdf6e2] border-amber-900/10' : 'bg-white border-slate-200'
-                    }`}>
-                      <div className="pb-3 border-b border-black/5 dark:border-white/10 mb-3 flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                        <div>
-                          <div className="font-extrabold text-xs tracking-wide uppercase opacity-55">Авторизован как</div>
-                          <div className="font-black text-sm text-neutral-900 dark:text-neutral-50 truncate max-w-[200px]" title={currentUser.fullname}>
-                            {currentUser.fullname}
-                          </div>
-                          <div className="text-[10px] opacity-65">Тех. Специалист</div>
-                        </div>
-                      </div>
-                      
-                      <div className="space-y-1">
-                         <button
-                           onClick={() => { 
-                             setActiveTab('ecosystem'); 
-                             setIsSpecMenuOpen(false); 
-                           }}
-                           className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
-                             activeTab === 'ecosystem' ? 'bg-amber-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-750 dark:text-neutral-50 font-extrabold text-[#d97706]'
-                           }`}
-                         >
-                           <LayoutGrid className="w-4 h-4 text-emerald-500 animate-pulse" />
-                           <span>🌿 Наша Экосистема</span>
-                         </button>
+              <div className="flex items-center gap-2 relative">
+                {specialistAlertsData.totalCount > 0 && (
+                  <button
+                    type="button"
+                    id="spec-notifications-btn"
+                    onClick={() => setIsSpecNotificationModalOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-extrabold rounded-xl bg-amber-500/20 text-amber-900 dark:text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 transition-all cursor-pointer shadow-sm animate-pulse"
+                    title="Уведомления о ТО по вашим объектам"
+                  >
+                    <Bell className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                    <span className="hidden sm:inline">Уведомления ТО</span>
+                    <span className="px-1.5 py-0.2 bg-rose-600 text-white rounded-full text-[10px] font-black">
+                      {specialistAlertsData.totalCount}
+                    </span>
+                  </button>
+                )}
 
-                         <button
-                           onClick={() => { 
-                             setActiveTab('workplace'); 
-                             setIsSpecMenuOpen(false); 
-                           }}
+                <div className="relative">
+                  <button
+                    id="spec-menu-toggle-btn"
+                    onClick={() => setIsSpecMenuOpen(!isSpecMenuOpen)}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-extrabold rounded-xl bg-amber-600 hover:bg-amber-700 text-white shadow-md transition-all cursor-pointer"
+                  >
+                    <Menu className="w-4 h-4" />
+                    <span>🔧 Кабинет Исполнителя</span>
+                    <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isSpecMenuOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  
+                  {isSpecMenuOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40 bg-black/10" onClick={() => setIsSpecMenuOpen(false)} />
+                      <div className={`absolute right-0 mt-2 w-72 max-w-[calc(100vw-32px)] rounded-2xl shadow-2xl border p-4 z-50 animate-scaleUp text-neutral-800 dark:text-neutral-100 ${
+                        theme === 'modern' ? 'bg-zinc-950 border-zinc-800' : theme === 'terminal' ? 'bg-black border-amber-500' : theme === 'warm' ? 'bg-[#fdf6e2] border-amber-900/10' : 'bg-white border-slate-200'
+                      }`}>
+                        <div className="pb-3 border-b border-black/5 dark:border-white/10 mb-3 flex items-center gap-2">
+                          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          <div>
+                            <div className="font-extrabold text-xs tracking-wide uppercase opacity-55">Авторизован как</div>
+                            <div className="font-black text-sm text-neutral-900 dark:text-neutral-50 truncate max-w-[200px]" title={currentUser.fullname}>
+                              {currentUser.fullname}
+                            </div>
+                            <div className="text-[10px] opacity-65">Тех. Специалист</div>
+                          </div>
+                        </div>
+                        
+                        <div className="space-y-1">
+                          <button
+                            onClick={() => { 
+                              setIsSpecNotificationModalOpen(true); 
+                              setIsSpecMenuOpen(false); 
+                            }}
+                            className="w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center justify-between hover:bg-amber-500/10 text-amber-700 dark:text-amber-300 transition-all cursor-pointer bg-amber-500/5 border border-amber-500/20"
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <Bell className="w-4 h-4 text-amber-500" />
+                              <span>🔔 Уведомления ТО</span>
+                            </div>
+                            {specialistAlertsData.totalCount > 0 && (
+                              <span className="px-1.5 py-0.2 text-[10px] font-black rounded-full bg-rose-500 text-white animate-pulse">
+                                {specialistAlertsData.totalCount}
+                              </span>
+                            )}
+                          </button>
+
+                           <button
+                             onClick={() => { 
+                               setActiveTab('workplace'); 
+                               setIsSpecMenuOpen(false); 
+                             }}
                            className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
                              activeTab === 'workplace' || activeTab === 'objects' ? 'bg-amber-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
                            }`}
@@ -2887,7 +3008,8 @@ export default function App() {
                   </>
                 )}
               </div>
-            )}
+            </div>
+          )}
           </div>
         </header>
 
@@ -3557,7 +3679,10 @@ export default function App() {
                               ? objects
                               : currentUser.role === 'owner'
                                 ? objects.filter(o => o.ownerId === currentUser.id)
-                                : objects.filter(o => o.allowedSpecialistIds && o.allowedSpecialistIds.includes(currentUser.id)))
+                                : (() => {
+                                    const assigned = objects.filter(o => o.allowedSpecialistIds && o.allowedSpecialistIds.includes(currentUser.id));
+                                    return assigned.length > 0 ? assigned : objects;
+                                  })())
                           : [];
 
                         if (displayObjects.length === 0) {
@@ -5784,6 +5909,7 @@ export default function App() {
                   }
                 }}
                 currentTheme={theme}
+                onOpenSpecialistSearch={() => setIsSpecialistSearchModalOpen(true)}
               />
             )}
 
@@ -6682,13 +6808,53 @@ export default function App() {
             {/* Registered Service Specialists Contact Info for Owners */}
             {ownerActiveTab === 'specialists' && (
               <div className="space-y-4 animate-fadeIn max-w-4xl mx-auto w-full">
+                
+                {/* HERO BANNER FOR SPECIALIST SEARCH */}
+                <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white border border-amber-500/30 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="p-2 bg-amber-500/20 border border-amber-500/30 rounded-xl text-amber-400">
+                        <Search className="w-5 h-5" />
+                      </span>
+                      <h4 className="font-extrabold text-sm sm:text-base text-amber-400">
+                        🔎 Поиск и умный подбор специалистов под задачу
+                      </h4>
+                      <span className="px-2 py-0.5 rounded text-[9px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        Владелец & Семья
+                      </span>
+                    </div>
+                    <p className="text-xs text-zinc-300 font-medium max-w-xl">
+                      Быстрый подбор сертифицированных специалистов по компетенциям (котлы, электрика, автополив, КИПиА) с карточками мастеров, прямыми контактами и отзывами собственников в отдельном окне.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsSpecialistSearchModalOpen(true)}
+                    className="px-5 py-3 bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs rounded-xl cursor-pointer flex items-center justify-center gap-2 transition-all shadow-lg shrink-0 transform active:scale-95"
+                  >
+                    <Search className="w-4 h-4 text-neutral-950" />
+                    <span>Открыть подбор специалистов →</span>
+                  </button>
+                </div>
+
                 <div className={getCardStyle()}>
               <div className={getSubHeaderStyle()}>
                 <span className="text-[10px] uppercase font-bold text-[#bc1c24] block tracking-widest mb-1">Служба эксплуатации</span>
-                <h3 className="font-extrabold text-base flex items-center gap-1.5 text-zinc-800">
-                  <HardHat className="w-5 h-5 text-amber-500" />
-                  Контакты сервисных специалистов инженеров
-                </h3>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <h3 className="font-extrabold text-base flex items-center gap-1.5 text-zinc-800 dark:text-zinc-100">
+                    <HardHat className="w-5 h-5 text-amber-500" />
+                    Контакты сервисных специалистов и инженеров
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setIsSpecialistSearchModalOpen(true)}
+                    className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/30 font-bold text-xs rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Search className="w-3.5 h-3.5" />
+                    <span>Подбор в отдельном окне</span>
+                  </button>
+                </div>
                 <p className="text-xs opacity-60">
                   Список авторизованных профилей специалистов, закрепленных за обслуживанием ваших объектов
                 </p>
@@ -7012,6 +7178,21 @@ export default function App() {
                         className={getInputStyle()}
                         placeholder="Например: vk_456"
                       />
+                    </div>
+
+                    <div className="p-3 bg-amber-500/10 rounded-xl border border-amber-500/20 space-y-1 my-2">
+                      <label className="flex items-center gap-2 font-bold text-xs text-amber-900 dark:text-amber-200 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ownerHideContacts}
+                          onChange={(e) => setOwnerHideContacts(e.target.checked)}
+                          className="w-4 h-4 text-amber-600 rounded border-amber-300 focus:ring-amber-500 cursor-pointer"
+                        />
+                        <span>🔒 Скрыть мои личные контакты (телефон и email) от выездных специалистов во всех объектах</span>
+                      </label>
+                      <p className="text-[10px] text-zinc-500 leading-snug">
+                        Специалисты выездного ТО не увидят ваш прямой номер телефона и e-mail. Связь будет производиться через внутренний чат или управляющего.
+                      </p>
                     </div>
 
                     <div className="flex gap-2 pt-2">
@@ -7498,24 +7679,8 @@ export default function App() {
         {currentUser.role === 'specialist' && (
           <div className="space-y-6">
 
-            {activeTab === 'ecosystem' && (
-              <EcosystemPortal
-                currentUser={currentUser}
-                objects={objects}
-                schedules={schedules}
-                reports={reports}
-                onNavigateToObjects={() => {
-                  setActiveTab('workplace');
-                }}
-                onNavigateToSchedules={() => {
-                  setActiveTab('workplace');
-                }}
-                currentTheme={theme}
-              />
-            )}
-
             {/* 1. WORKPLACE / DEFAULT TAB */}
-            {(activeTab === 'workplace' || activeTab === 'objects' || !activeTab) && (
+            {(activeTab === 'workplace' || activeTab === 'objects' || activeTab === 'ecosystem' || !activeTab) && (
               <div className="space-y-6">
                 
                 {/* РАЗДЕЛ: КЛЮЧЕВЫЕ НАВЫКИ СПЕЦИАЛИСТА */}
@@ -7643,50 +7808,41 @@ export default function App() {
                   </div>
 
                   {/* Skills panel */}
-                  <div className="md:col-span-3 space-y-3">
-                    <textarea
-                      value={mySkills}
-                      onChange={(e) => setMySkills(e.target.value)}
-                      placeholder="Пример: Наладка автоматики ИТП Danfoss, обслуживание приточно-вытяжных вентиляций Systemair, ремонт чиллеров Carrier, допуски по электробезопасности IV группа..."
-                      className={`${getInputStyle()} w-full p-3 text-xs bg-slate-50 border border-slate-200 focus:bg-white transition-colors`}
-                      rows={3}
-                    />
-                    <div className="flex justify-end">
-                      <button
-                        onClick={async () => {
-                          setSavingSkills(true);
-                          try {
-                            const response = await fetch("/api/auth/me", {
-                              method: "PUT",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({
-                                fullname: currentUser?.fullname,
-                                phone: currentUser?.phone,
-                                company: currentUser?.company,
-                                keySkills: mySkills,
-                                avatarUrl: currentUser?.avatarUrl
-                              })
-                            });
-                            const data = await response.ok ? await response.json() : null;
-                            if (data && data.success) {
-                              localStorage.setItem("user_session", JSON.stringify(data.user));
-                              setCurrentUser(data.user);
-                              alert("Ключевые навыки успешно обновлены в вашем профиле!");
-                            } else {
-                              alert(data?.error || "Произошла ошибка при сохранении навыков.");
-                            }
-                          } catch (err) {
-                            alert("Не удалось связаться с сервером.");
-                          } finally {
-                            setSavingSkills(false);
+                  <div className="md:col-span-3">
+                    <SpecialistSkillsEditor
+                      initialValue={mySkills}
+                      onChange={(val) => setMySkills(val)}
+                      isSaving={savingSkills}
+                      onSave={async (val) => {
+                        setSavingSkills(true);
+                        try {
+                          const response = await fetch("/api/auth/me", {
+                            method: "PUT",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              fullname: currentUser?.fullname,
+                              phone: currentUser?.phone,
+                              company: currentUser?.company,
+                              keySkills: val,
+                              avatarUrl: currentUser?.avatarUrl
+                            })
+                          });
+                          const data = await response.ok ? await response.json() : null;
+                          if (data && data.success) {
+                            localStorage.setItem("user_session", JSON.stringify(data.user));
+                            setCurrentUser(data.user);
+                            setMySkills(val);
+                            alert("Ключевые навыки и разделы систем успешно обновлены в вашем профиле!");
+                          } else {
+                            alert(data?.error || "Произошла ошибка при сохранении навыков.");
                           }
-                        }}
-                        disabled={savingSkills}
-                        className="py-1.5 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded shadow transition-all cursor-pointer disabled:opacity-50"
-                      >
-                        {savingSkills ? "Сохранение..." : "💾 Сохранить ключевые навыки"}
-                      </button>
-                    </div>
+                        } catch (err) {
+                          alert("Не удалось связаться с сервером.");
+                        } finally {
+                          setSavingSkills(false);
+                        }
+                      }}
+                    />
                   </div>
                 </div>
               </div>
@@ -7712,9 +7868,13 @@ export default function App() {
                     >
                       <option value="">-- Выбрать здание --</option>
                       {(() => {
-                        const accessibleObjects = currentUser && currentUser.role === 'specialist' && currentUser.id !== 'anonymous_specialist'
-                          ? objects.filter(o => o.allowedSpecialistIds && o.allowedSpecialistIds.includes(currentUser.id))
-                          : objects;
+                        let accessibleObjects = objects;
+                        if (currentUser && currentUser.role === 'specialist' && currentUser.id !== 'anonymous_specialist') {
+                          const assigned = objects.filter(o => o.allowedSpecialistIds && o.allowedSpecialistIds.includes(currentUser.id));
+                          if (assigned.length > 0) {
+                            accessibleObjects = assigned;
+                          }
+                        }
                         return accessibleObjects.map(o => (
                           <option key={o.id} value={o.id} title={o.name}>
                             {o.name.length > 32 ? `${o.name.substring(0, 30)}...` : o.name}
@@ -7822,6 +7982,98 @@ export default function App() {
                       
                       return (
                         <div className="space-y-6 animate-fade-in text-left">
+                          {/* Owner & Family contacts card */}
+                          {(() => {
+                            const owner = users.find(u => u.id === obj.ownerId);
+                            return (
+                              <div className={`${getCardStyle()} border-l-4 border-l-blue-500`}>
+                                <div className="border-b border-neutral-350/15 pb-3 mb-3">
+                                  <span className="text-[10px] uppercase font-bold text-blue-600 tracking-widest block mb-0.5">Контактная информация</span>
+                                  <h4 className="font-extrabold text-sm text-slate-850 dark:text-zinc-100 flex items-center gap-2">
+                                    👤 Контакты владельца и управляющего
+                                  </h4>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                                  {/* Owner details */}
+                                  {(() => {
+                                    const isOwnerContactsHidden = Boolean(
+                                      obj.hideOwnerContactsFromSpecialists || owner?.hideContactsFromSpecialist
+                                    );
+
+                                    return (
+                                      <div className="p-3 bg-blue-500/5 rounded-xl border border-blue-500/10 space-y-2">
+                                        <div className="flex items-center justify-between">
+                                          <span className="font-bold text-blue-600 text-[10px] uppercase tracking-wider">👑 Собственник объекта</span>
+                                          <span className="text-[10px] font-mono text-zinc-400">ID: {obj.ownerId || "—"}</span>
+                                        </div>
+                                        <div className="space-y-1">
+                                          <p className="font-extrabold text-sm text-slate-800 dark:text-zinc-100">{owner?.fullname || "Собственник усадьбы"}</p>
+                                          {isOwnerContactsHidden ? (
+                                            <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-900 dark:text-amber-200 font-semibold">
+                                              🔒 Собственник скрыл прямое отображение контактов (телефона и email) от специалистов. Связь через внутренний чат или управляющего.
+                                            </div>
+                                          ) : (
+                                            <>
+                                              {owner?.phone && <p className="text-zinc-600 dark:text-zinc-400">📞 Телефон: <a href={`tel:${owner.phone}`} className="font-bold text-blue-600 underline">{owner.phone}</a></p>}
+                                              {owner?.email && <p className="text-zinc-600 dark:text-zinc-400">📧 E-mail: <a href={`mailto:${owner.email}`} className="font-bold text-blue-600 underline">{owner.email}</a></p>}
+                                            </>
+                                          )}
+                                        </div>
+                                        {!isOwnerContactsHidden && owner?.phone && (
+                                          <div className="flex gap-2 pt-1">
+                                            <a href={`tel:${owner.phone}`} className="px-2.5 py-1 bg-blue-600 text-white font-bold rounded-lg text-[10px]">Позвонить</a>
+                                            <a href={`https://t.me/${owner.phone.replace(/[^0-9]/g, '')}`} target="_blank" rel="noreferrer" className="px-2.5 py-1 bg-sky-500 text-white font-bold rounded-lg text-[10px]">Telegram</a>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
+
+                                  {/* Family & Managers details */}
+                                  <div className="p-3 bg-neutral-100/50 dark:bg-zinc-800/30 rounded-xl border border-neutral-300/10 space-y-2">
+                                    <span className="font-bold text-slate-500 text-[10px] uppercase tracking-wider">👨‍👩‍👧‍👦 Члены семьи и Управляющие</span>
+                                    {(!obj.familyAccessList || obj.familyAccessList.length === 0) ? (
+                                      <p className="text-[11px] text-zinc-400 italic">Дополнительные контактные лица не указаны.</p>
+                                    ) : (
+                                      <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
+                                        {obj.familyAccessList.map(fam => {
+                                          const isFamilyRole = fam.role === 'family';
+                                          const canSeeContacts = !isFamilyRole || Boolean(fam.shareContactsWithSpecialist);
+
+                                          return (
+                                            <div key={fam.id} className="p-2 bg-white dark:bg-zinc-800 rounded-lg border text-[11px] space-y-1">
+                                              <div className="flex justify-between items-center font-bold">
+                                                <span>{fam.name}</span>
+                                                <span className={`text-[9px] px-1.5 py-0.2 rounded font-black ${
+                                                  fam.role === 'manager' 
+                                                    ? 'bg-amber-500/10 text-amber-600 border border-amber-500/20' 
+                                                    : 'bg-blue-500/10 text-blue-600 border border-blue-500/20'
+                                                }`}>
+                                                  {fam.role === 'manager' ? '🔑 Управляющий' : '👨‍👩‍👧‍👦 Семья'}
+                                                </span>
+                                              </div>
+                                              {canSeeContacts ? (
+                                                <>
+                                                  {fam.phone && <div>📞 <a href={`tel:${fam.phone}`} className="text-blue-600 underline font-semibold">{fam.phone}</a></div>}
+                                                  {fam.email && <div>📧 <a href={`mailto:${fam.email}`} className="text-blue-600 underline font-semibold">{fam.email}</a></div>}
+                                                </>
+                                              ) : (
+                                                <div className="text-[10px] text-amber-700 dark:text-amber-400 italic font-medium pt-0.5">
+                                                  🔒 Член семьи не дал согласие на открытие доступа к контактам
+                                                </div>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
+
                           {/* Object passport card */}
                           <div className={getCardStyle()}>
                             <div className="border-b border-neutral-350/15 pb-4 mb-4">
@@ -9066,14 +9318,10 @@ export default function App() {
               </div>
 
               {currentUser?.role === 'specialist' && (
-                <div className="flex flex-col gap-1">
-                  <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">Ключевые профессиональные навыки</label>
-                  <textarea 
-                    value={profileKeySkills}
-                    onChange={(e) => setProfileKeySkills(e.target.value)}
-                    placeholder="Например: Обслуживание ИТП, наладка автоматики Danfoss, ремонт чиллеров, КИПиА..."
-                    className={getInputStyle()} 
-                    rows={3}
+                <div className="flex flex-col gap-2 pt-2 border-t border-neutral-200 dark:border-zinc-800">
+                  <SpecialistSkillsEditor
+                    initialValue={profileKeySkills}
+                    onChange={(val) => setProfileKeySkills(val)}
                   />
                 </div>
               )}
@@ -9563,6 +9811,269 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* MODAL: SPECIALIST MAINTENANCE NOTIFICATIONS (POPUP) */}
+      {isSpecNotificationModalOpen && currentUser?.role === 'specialist' && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-[100] animate-fadeIn">
+          <div className="max-w-2xl w-full max-h-[90vh] bg-white dark:bg-zinc-900 border border-amber-500/30 rounded-2xl shadow-2xl overflow-hidden flex flex-col relative text-slate-900 dark:text-zinc-100">
+            
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 border-b border-amber-500/20 bg-gradient-to-r from-amber-500/15 via-rose-500/10 to-transparent flex items-start justify-between">
+              <div className="flex items-start gap-3">
+                <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5 shadow-sm">
+                  <Bell className="w-6 h-6 animate-pulse" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-amber-500 text-white">
+                      Уведомление специалиста
+                    </span>
+                    <span className="text-xs font-bold text-amber-600 dark:text-amber-400">
+                      Объектов: {specialistAlertsData.relevantObjects.length}
+                    </span>
+                  </div>
+                  <h3 className="text-lg font-black leading-snug mt-1">
+                    Сводка по регламентам работ ТО
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-zinc-400 mt-0.5">
+                    Внимание! По относящимся к вам объектам обнаружены регламенты, требующие выполнения.
+                  </p>
+                </div>
+              </div>
+
+              <button 
+                onClick={() => {
+                  setIsSpecNotificationModalOpen(false);
+                  setSpecModalDismissedSession(true);
+                }}
+                className="p-1.5 hover:bg-slate-200 dark:hover:bg-zinc-800 rounded-full text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 transition-colors cursor-pointer shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Quick Stat Badges & Filter Tabs */}
+            <div className="p-4 bg-slate-50 dark:bg-zinc-850/50 border-b border-slate-200 dark:border-zinc-800 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                    <div>
+                      <div className="text-[10px] font-extrabold uppercase text-rose-600 dark:text-rose-400">Просрочено / Сегодня</div>
+                      <div className="text-xs text-slate-500 dark:text-zinc-400">Срочные работы</div>
+                    </div>
+                  </div>
+                  <span className="text-xl font-black text-rose-600 dark:text-rose-400 px-2.5 py-0.5 rounded-lg bg-rose-500/20">
+                    {specialistAlertsData.overdueItems.length}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-amber-500 shrink-0" />
+                    <div>
+                      <div className="text-[10px] font-extrabold uppercase text-amber-600 dark:text-amber-400">Готовятся к ТО</div>
+                      <div className="text-xs text-slate-500 dark:text-zinc-400">Срок до {systemSettings.reminderDaysBefore} дн.</div>
+                    </div>
+                  </div>
+                  <span className="text-xl font-black text-amber-600 dark:text-amber-400 px-2.5 py-0.5 rounded-lg bg-amber-500/20">
+                    {specialistAlertsData.upcomingItems.length}
+                  </span>
+                </div>
+              </div>
+
+              {/* Filter pills */}
+              <div className="flex gap-2 text-xs font-bold pt-1">
+                <button
+                  type="button"
+                  onClick={() => setSpecModalFilter('all')}
+                  className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                    specModalFilter === 'all'
+                      ? 'bg-slate-900 text-white dark:bg-zinc-100 dark:text-zinc-900 shadow-sm'
+                      : 'bg-slate-200/60 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-300 dark:hover:bg-zinc-700'
+                  }`}
+                >
+                  Все ({specialistAlertsData.totalCount})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSpecModalFilter('overdue')}
+                  className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                    specModalFilter === 'overdue'
+                      ? 'bg-rose-600 text-white shadow-sm'
+                      : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 border border-rose-500/20'
+                  }`}
+                >
+                  🚨 Просрочено ({specialistAlertsData.overdueItems.length})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSpecModalFilter('upcoming')}
+                  className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+                    specModalFilter === 'upcoming'
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 border border-amber-500/20'
+                  }`}
+                >
+                  ⏳ Готовящиеся ({specialistAlertsData.upcomingItems.length})
+                </button>
+              </div>
+            </div>
+
+            {/* List of maintenance alerts */}
+            <div className="p-4 overflow-y-auto space-y-3 flex-1 max-h-[50vh]">
+              {(() => {
+                const list = specModalFilter === 'overdue'
+                  ? specialistAlertsData.overdueItems
+                  : specModalFilter === 'upcoming'
+                    ? specialistAlertsData.upcomingItems
+                    : [...specialistAlertsData.overdueItems, ...specialistAlertsData.upcomingItems];
+
+                if (list.length === 0) {
+                  return (
+                    <div className="text-center py-8 space-y-2">
+                      <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto" />
+                      <p className="text-sm font-bold text-slate-700 dark:text-zinc-300">
+                        В выбранной категории нет активных уведомлений.
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        Все относящиеся к вам регламенты находятся в норме.
+                      </p>
+                    </div>
+                  );
+                }
+
+                return list.map((item) => {
+                  const isOverdue = specialistAlertsData.overdueItems.some(o => o.sch.id === item.sch.id);
+
+                  return (
+                    <div 
+                      key={item.sch.id}
+                      className={`p-3.5 rounded-xl border transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+                        isOverdue 
+                          ? 'bg-rose-500/5 border-rose-500/30 hover:border-rose-500/50 dark:bg-rose-950/20' 
+                          : 'bg-amber-500/5 border-amber-500/30 hover:border-amber-500/50 dark:bg-amber-950/20'
+                      }`}
+                    >
+                      <div className="space-y-1 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded bg-slate-200 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 flex items-center gap-1">
+                            <Building className="w-3 h-3 text-blue-500" />
+                            {item.obj?.name || "Здание"}
+                          </span>
+
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20">
+                            {item.sch.category}
+                          </span>
+
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${item.class}`}>
+                            {item.statusLabel}
+                          </span>
+                        </div>
+
+                        <h4 className="font-extrabold text-sm text-slate-900 dark:text-zinc-100 leading-snug">
+                          {item.sch.title}
+                        </h4>
+
+                        <div className="text-[11px] text-slate-500 dark:text-zinc-400 flex items-center gap-3 flex-wrap pt-0.5">
+                          <span>📍 {item.obj?.address || "Адрес не указан"}</span>
+                          <span>⏳ Периодичность: {item.sch.intervalDays} дн.</span>
+                          <span>
+                            🗓️ Посл. проведение: {item.sch.lastDoneDate ? new Date(item.sch.lastDoneDate).toLocaleDateString('ru-RU') : "Ни разу не проводилось"}
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTab('workplace');
+                          setSelectedObjId(item.sch.objectId);
+                          handleScheduleSelectForChecklist(item.sch.id);
+                          setIsSpecNotificationModalOpen(false);
+                          setSpecModalDismissedSession(true);
+                        }}
+                        className="py-2 px-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-md hover:shadow-lg transition-all cursor-pointer shrink-0 self-stretch sm:self-center justify-center"
+                      >
+                        <Wrench className="w-3.5 h-3.5" />
+                        <span>⚡ Выполнить ТО</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-850/50 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+              <span className="text-slate-500 dark:text-zinc-400 text-[11px] text-center sm:text-left">
+                🔒 Отфильтровано строго по вашим персональным объектам и регламентам.
+              </span>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSpecNotificationModalOpen(false);
+                  setSpecModalDismissedSession(true);
+                }}
+                className="py-2 px-5 bg-slate-800 hover:bg-slate-900 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 font-extrabold rounded-xl shadow transition-all cursor-pointer w-full sm:w-auto"
+              >
+                Понятно, приступить к работе
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* Specialist Search Modal for Owner & Family Access */}
+      <SpecialistSearchModal
+        isOpen={isSpecialistSearchModalOpen}
+        onClose={() => setIsSpecialistSearchModalOpen(false)}
+        users={users}
+        reports={reports}
+        objects={objects}
+        currentUser={currentUser}
+        onAssignSpecialistToObject={async (specialistId, objectId) => {
+          const targetObj = objects.find(o => o.id === objectId);
+          if (!targetObj) return;
+          const currentAllowed = targetObj.allowedSpecialistIds || [];
+          if (currentAllowed.includes(specialistId)) return;
+          const newAllowed = [...currentAllowed, specialistId];
+          const updatedObj = { ...targetObj, allowedSpecialistIds: newAllowed };
+          setObjects(prev => prev.map(o => o.id === objectId ? updatedObj : o));
+          try {
+            await fetch(`/api/objects/${objectId}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(updatedObj)
+            });
+          } catch (err) {
+            console.error("Failed to assign specialist to object:", err);
+          }
+        }}
+        onRemoveSpecialistFromObject={async (specialistId, objectId) => {
+          const targetObj = objects.find(o => o.id === objectId);
+          if (!targetObj) return;
+          const currentAllowed = targetObj.allowedSpecialistIds || [];
+          if (!currentAllowed.includes(specialistId)) return;
+          const newAllowed = currentAllowed.filter(id => id !== specialistId);
+          const updatedObj = { ...targetObj, allowedSpecialistIds: newAllowed };
+          setObjects(prev => prev.map(o => o.id === objectId ? updatedObj : o));
+          try {
+            await fetch(`/api/objects/${objectId}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(updatedObj)
+            });
+          } catch (err) {
+            console.error("Failed to remove specialist from object:", err);
+          }
+        }}
+      />
 
     </div>
   );

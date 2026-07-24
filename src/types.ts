@@ -18,6 +18,19 @@ export interface User {
   rating?: number;
   ratingCount?: number;
   avatarUrl?: string;
+  hideContactsFromSpecialist?: boolean;
+}
+
+export interface FamilyMemberAccess {
+  id: string;
+  fullname: string;
+  name?: string;
+  role: 'family' | 'manager';
+  phone?: string;
+  email?: string;
+  addedAt: string;
+  notes?: string;
+  shareContactsWithSpecialist?: boolean; // Галочка об открытии доступа к контактам для специалистов
 }
 
 export interface BuildingObject {
@@ -33,6 +46,8 @@ export interface BuildingObject {
   equipmentSpecs?: string; // Ключевое оборудование
   info?: string; // Ввод в эксплуатацию
   objectType?: 'house' | 'admin_building' | 'land' | 'dacha' | 'other';
+  familyAccessList?: FamilyMemberAccess[]; // Family and Manager access
+  hideOwnerContactsFromSpecialists?: boolean; // Скрыть контакты собственника от специалистов ТО
 }
 
 export interface ScheduleItem {
