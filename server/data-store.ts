@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
-import { 
+import type { 
   User, 
   BuildingObject, 
   ScheduleItem, 
@@ -11,7 +11,7 @@ import {
   NotificationLog, 
   SystemSettings,
   SupportTicket
-} from '../src/types';
+} from '../src/types.ts';
 
 const { Pool } = pg;
 const DB_FILE = path.join(process.cwd(), 'server', 'db.json');

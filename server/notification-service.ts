@@ -1,5 +1,5 @@
-import { DataStore } from "./data-store";
-import { User, NotificationLog } from "../src/types";
+import { DataStore } from "./data-store.ts";
+import type { User, NotificationLog } from "../src/types.ts";
 import nodemailer from "nodemailer";
 
 interface NotificationTask {

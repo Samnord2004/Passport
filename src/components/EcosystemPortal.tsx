@@ -34,6 +34,26 @@ import {
 import { User as UserType, BuildingObject, ScheduleItem, CompletedChecklist, FamilyMemberAccess } from "../types";
 import { parseEquipment, parseLifeSupport, parseBuildingInfo, parseSpecs } from "../utils/specParsers";
 import { Property3DViewer } from "./Property3DViewer";
+import { 
+  BuildingShapeType, 
+  CutCornerOrientation, 
+  SHAPE_PRESETS, 
+  getBuildingVerticesMeters, 
+  getBuildingPolygonPointsPct, 
+  calculateBuildingAreaMeters,
+  FenceMaterialType,
+  GateType,
+  FENCE_MATERIALS,
+  GATE_PRESETS,
+  getFenceColor,
+  getFenceHeight
+} from "../utils/shapeUtils";
+import { 
+  Building3DStyle, 
+  BuildingFloorPlan 
+} from "../types/architecturalTypes";
+import { Building3DCustomizerModal } from "./Building3DCustomizerModal";
+import { FloorPlanModal } from "./FloorPlanModal";
 
 function mapPlanSubtypeToSecondaryType(subType?: string): "banya" | "shed" | "gazebo" | "bonfire" | "bbq" | "playground" | "garage" | "security_house" | "guest_house" | "observatory" | "admin_building" | "boiler_room" | "other" {
   switch (subType) {
@@ -165,6 +185,11 @@ interface BoundaryLine {
   endY: number;
   lengthLabel: string; // e.g., "Северная граница: 45м"
   linkedObjectId?: string; // ID of the BuildingObject this boundary belongs to
+  fenceMaterial?: FenceMaterialType;
+  gateType?: GateType;
+  gateMaterial?: FenceMaterialType;
+  gateWidthMeters?: number;
+  gatePositionPct?: number; // 0..100 along line
 }
 
 // Custom structures on the planogram
@@ -178,13 +203,23 @@ interface PlanogramBuilding {
   yMeters?: number;
   wMeters?: number;
   hMeters?: number;
-  itemType?: string;
-  subType?: string;
+  itemType?: string; // "building" | "path" | "fence" | "gate"
+  subType?: string; // "house", "banya", "wicket", "gate_swing", "gate_sliding", "fence_wall"
   rotation?: number;
   label: string;
   color: string;
   emoji?: string;
   linkedObjectId?: string; // ID of the BuildingObject this outbuilding belongs to
+  shapeType?: BuildingShapeType;
+  cutCorner?: CutCornerOrientation;
+  wingWidthPct?: number;
+  wingDepthPct?: number;
+  customVertices?: Array<{ x: number; y: number }>;
+  fenceMaterial?: FenceMaterialType;
+  gateType?: GateType;
+  gateMaterial?: FenceMaterialType;
+  architecturalStyle?: Building3DStyle;
+  floorPlan?: BuildingFloorPlan;
 }
 
 interface SecondaryBuilding {
@@ -291,15 +326,24 @@ export default function EcosystemPortal({
     ];
   });
 
+  // Global fence material state
+  const [globalFenceMaterial, setGlobalFenceMaterial] = useState<FenceMaterialType>(() => {
+    return (localStorage.getItem("eco_global_fence_mat") as FenceMaterialType) || "wood";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("eco_global_fence_mat", globalFenceMaterial);
+  }, [globalFenceMaterial]);
+
   // Boundary lines state
   const [boundaryLines, setBoundaryLines] = useState<BoundaryLine[]>(() => {
     const saved = localStorage.getItem("eco_boundary_lines");
     if (saved) return JSON.parse(saved);
     return [
-      { id: "b_1", startX: 10, startY: 10, endX: 90, endY: 10, lengthLabel: "Забор Север (55 метров)", linkedObjectId: "1" },
-      { id: "b_2", startX: 90, startY: 10, endX: 90, endY: 90, lengthLabel: "Забор Восток (40 метров)", linkedObjectId: "1" },
-      { id: "b_3", startX: 90, startY: 90, endX: 10, endY: 90, lengthLabel: "Забор Юг (55 метров)", linkedObjectId: "1" },
-      { id: "b_4", startX: 10, startY: 90, endX: 10, endY: 10, lengthLabel: "Забор Запад (40 метров)", linkedObjectId: "1" }
+      { id: "b_1", startX: 10, startY: 10, endX: 90, endY: 10, lengthLabel: "Забор Север (55 метров)", linkedObjectId: "1", fenceMaterial: "wood", gateType: "gate_swing", gateMaterial: "metal", gateWidthMeters: 4.0, gatePositionPct: 50 },
+      { id: "b_2", startX: 90, startY: 10, endX: 90, endY: 90, lengthLabel: "Забор Восток (40 метров)", linkedObjectId: "1", fenceMaterial: "wood" },
+      { id: "b_3", startX: 90, startY: 90, endX: 10, endY: 90, lengthLabel: "Забор Юг (55 метров)", linkedObjectId: "1", fenceMaterial: "wood", gateType: "wicket", gateMaterial: "wood", gateWidthMeters: 1.2, gatePositionPct: 30 },
+      { id: "b_4", startX: 10, startY: 90, endX: 10, endY: 10, lengthLabel: "Забор Запад (40 метров)", linkedObjectId: "1", fenceMaterial: "wood" }
     ];
   });
 
@@ -338,6 +382,10 @@ export default function EcosystemPortal({
   // Selected item on map
   const [selectedCanvasItemId, setSelectedCanvasItemId] = useState<string | null>(null);
   const [selectedCanvasItemType, setSelectedCanvasItemType] = useState<"building" | "plant" | null>(null);
+
+  // 3D Architectural Customization & Floor Planning Modals
+  const [editing3DBuilding, setEditing3DBuilding] = useState<PlanogramBuilding | null>(null);
+  const [editingFloorPlanBuilding, setEditingFloorPlanBuilding] = useState<PlanogramBuilding | null>(null);
 
   // Buildings drawn on plot planogram
   const [planBuildings, setPlanBuildings] = useState<PlanogramBuilding[]>(() => {
@@ -1042,6 +1090,8 @@ export default function EcosystemPortal({
   // Planogram state extensions
   const [selectedPlanBuildingId, setSelectedPlanBuildingId] = useState<string | null>(null);
   const [selectedBoundaryLineId, setSelectedBoundaryLineId] = useState<string | null>(null);
+  const [isAnalyzingPhoto, setIsAnalyzingPhoto] = useState<boolean>(false);
+  const [photoAnalysisResult, setPhotoAnalysisResult] = useState<string | null>(null);
 
   // Dragging and resizing states
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
@@ -1296,6 +1346,24 @@ export default function EcosystemPortal({
         if (activeDragType === "building") {
           let newX = Math.round(startX + deltaXMeters);
           let newY = Math.round(startY + deltaYMeters);
+
+          // Find dragged building to check if it's a gate, wicket or fence
+          const curB = planBuildings.find(b => b.id === activeDragId);
+          const isGateOrFence = curB && (
+            curB.itemType === "gate" || 
+            curB.itemType === "fence" || 
+            !!curB.gateType || 
+            ["wicket", "gate_swing", "gate_sliding", "fence_wall", "garden_fence"].includes(curB.subType || "")
+          );
+
+          const snapThreshold = isGateOrFence ? 3.0 : 1.2;
+
+          // Magnet snap to perimeter fences (0, H - startH, W - startW)
+          if (Math.abs(newY) < snapThreshold) newY = 0;
+          else if (Math.abs(newY - (H - startH)) < snapThreshold) newY = H - startH;
+
+          if (Math.abs(newX) < snapThreshold) newX = 0;
+          else if (Math.abs(newX - (W - startW)) < snapThreshold) newX = W - startW;
 
           newX = Math.max(0, Math.min(W - startW, newX));
           newY = Math.max(0, Math.min(H - startH, newY));
@@ -3238,7 +3306,10 @@ export default function EcosystemPortal({
             const activePlants = plantNodes.filter(p => p.linkedObjectId === (selectedObjectId || "1"));
 
             const templates = [
-              { type: "building", subType: "house", label: "Дом", wMeters: 10, hMeters: 10, color: "rgba(59, 130, 246, 0.25)", emoji: "🏠" },
+              { type: "building", subType: "house", label: "Дом (Прямоугольный)", wMeters: 10, hMeters: 10, color: "rgba(59, 130, 246, 0.25)", emoji: "🏠", shapeType: "rect" as BuildingShapeType },
+              { type: "building", subType: "house", label: "Г-образный дом", wMeters: 12, hMeters: 10, color: "rgba(59, 130, 246, 0.25)", emoji: "🗄️", shapeType: "l_shape" as BuildingShapeType, cutCorner: "ne" as CutCornerOrientation, wingWidthPct: 50, wingDepthPct: 50 },
+              { type: "building", subType: "house", label: "П-образная усадьба", wMeters: 14, hMeters: 10, color: "rgba(99, 102, 241, 0.25)", emoji: "🏰", shapeType: "u_shape" as BuildingShapeType, cutCorner: "n" as CutCornerOrientation, wingWidthPct: 35, wingDepthPct: 50 },
+              { type: "building", subType: "house", label: "Т-образный коттедж", wMeters: 12, hMeters: 10, color: "rgba(168, 85, 247, 0.25)", emoji: "🏛️", shapeType: "t_shape" as BuildingShapeType, cutCorner: "n" as CutCornerOrientation, wingWidthPct: 40, wingDepthPct: 50 },
               { type: "building", subType: "banya", label: "Баня", wMeters: 6, hMeters: 6, color: "rgba(245, 158, 11, 0.25)", emoji: "🛁" },
               { type: "building", subType: "garage", label: "Гараж", wMeters: 6, hMeters: 4, color: "rgba(107, 114, 128, 0.25)", emoji: "🚗" },
               { type: "building", subType: "gazebo", label: "Беседка", wMeters: 4, hMeters: 4, color: "rgba(16, 185, 129, 0.25)", emoji: "⛺" },
@@ -3265,7 +3336,11 @@ export default function EcosystemPortal({
               { type: "building", subType: "pergola", label: "Пергола", wMeters: 4, hMeters: 3, color: "rgba(180, 83, 9, 0.25)", emoji: "⛩️" },
               { type: "building", subType: "swings", label: "Качели", wMeters: 3, hMeters: 2, color: "rgba(244, 63, 94, 0.25)", emoji: "🎠" },
               { type: "building", subType: "health_trail", label: "Тропа здоровья", wMeters: 6, hMeters: 1.5, color: "rgba(139, 92, 246, 0.25)", emoji: "👣" },
-              { type: "building", subType: "garden_fence", label: "Садовый забор", wMeters: 5, hMeters: 0.4, color: "rgba(120, 113, 108, 0.35)", emoji: "🪵" },
+              { type: "gate", subType: "wicket", label: "Калитка входная", wMeters: 1.2, hMeters: 0.8, color: "rgba(217, 119, 6, 0.3)", emoji: "🚪", gateType: "wicket" as GateType, gateMaterial: "wood" as FenceMaterialType },
+              { type: "gate", subType: "gate_swing", label: "Распашные ворота", wMeters: 4.0, hMeters: 1.0, color: "rgba(217, 119, 6, 0.3)", emoji: "🚪🚪", gateType: "gate_swing" as GateType, gateMaterial: "metal" as FenceMaterialType },
+              { type: "gate", subType: "gate_sliding", label: "Откатные ворота", wMeters: 4.5, hMeters: 1.0, color: "rgba(217, 119, 6, 0.3)", emoji: "🚪➡️", gateType: "gate_sliding" as GateType, gateMaterial: "dpk" as FenceMaterialType },
+              { type: "fence", subType: "fence_wall", label: "Секция забора", wMeters: 6.0, hMeters: 0.6, color: "rgba(120, 113, 108, 0.3)", emoji: "🧱", fenceMaterial: "brick" as FenceMaterialType },
+              { type: "building", subType: "garden_fence", label: "Садовый забор", wMeters: 5, hMeters: 0.4, color: "rgba(120, 113, 108, 0.35)", emoji: "🪵", fenceMaterial: "wood" as FenceMaterialType },
               { type: "building", subType: "parking", label: "Парковка", wMeters: 6, hMeters: 4, color: "rgba(148, 163, 184, 0.3)", emoji: "🅿️" },
               { type: "building", subType: "carport", label: "Навес для авто", wMeters: 6, hMeters: 4, color: "rgba(56, 189, 248, 0.25)", emoji: "🎪" },
               { type: "building", subType: "water_tap", label: "Водяной кран", wMeters: 0.8, hMeters: 0.8, color: "rgba(59, 130, 246, 0.35)", emoji: "🚰" },
@@ -3284,8 +3359,27 @@ export default function EcosystemPortal({
             const handleInsertTemplate = (tpl: any, customX?: number, customY?: number) => {
               const itemW = tpl.wMeters;
               const itemH = tpl.hMeters;
+
+              const isGateOrFence = tpl.type === "gate" || tpl.type === "fence" || !!(tpl as any).gateType || ["wicket", "gate_swing", "gate_sliding", "fence_wall", "garden_fence"].includes(tpl.subType);
+
               const itemX = customX !== undefined ? customX : Math.max(0, Math.round(W / 2 - itemW / 2));
-              const itemY = customY !== undefined ? customY : Math.max(0, Math.round(H / 2 - itemH / 2));
+              const itemY = customY !== undefined ? customY : (isGateOrFence ? 0 : Math.max(0, Math.round(H / 2 - itemH / 2)));
+
+              // If adding a gate or wicket, auto-embed into the main boundary line b_1 (Северный забор)
+              if ((tpl.type === "gate" || (tpl as any).gateType || ["wicket", "gate_swing", "gate_sliding"].includes(tpl.subType)) && customY === undefined) {
+                setBoundaryLines(prev => prev.map((bl, idx) => {
+                  if (idx === 0 || bl.id === "b_1") {
+                    return {
+                      ...bl,
+                      gateType: (tpl as any).gateType || (tpl.subType as GateType) || "wicket",
+                      gateMaterial: (tpl as any).gateMaterial || (tpl as any).fenceMaterial || globalFenceMaterial,
+                      gateWidthMeters: itemW,
+                      gatePositionPct: 50
+                    };
+                  }
+                  return bl;
+                }));
+              }
 
               if (tpl.type === "plant") {
                 const newId = "Pl_" + Date.now();
@@ -3329,7 +3423,14 @@ export default function EcosystemPortal({
                   subType: tpl.subType,
                   rotation: 0,
                   emoji: tpl.emoji,
-                  linkedObjectId: selectedObjectId || "1"
+                  linkedObjectId: selectedObjectId || "1",
+                  shapeType: (tpl as any).shapeType || "rect",
+                  cutCorner: (tpl as any).cutCorner,
+                  wingWidthPct: (tpl as any).wingWidthPct,
+                  wingDepthPct: (tpl as any).wingDepthPct,
+                  gateType: (tpl as any).gateType,
+                  gateMaterial: (tpl as any).gateMaterial,
+                  fenceMaterial: (tpl as any).fenceMaterial
                 };
                 setPlanBuildings(prev => [...prev, newB]);
 
@@ -3706,13 +3807,89 @@ export default function EcosystemPortal({
                           }}
                         />
 
-                        {/* Beautiful custom irregular boundary polygon fence rendering */}
-                        <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                        {/* Beautiful custom irregular boundary polygon fence rendering & interactive boundary vector lines */}
+                        <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" viewBox="0 0 100 100" preserveAspectRatio="none">
                           <polygon 
                             points={getPlotCorners(selectedObjectId || "1", W, H).map(c => `${(c.x / W) * 100},${100 - (c.y / H) * 100}`).join(" ")}
-                            className="fill-emerald-500/[0.04] dark:fill-emerald-500/[0.07] stroke-emerald-600/50 dark:stroke-emerald-500/50 stroke-[0.3]"
+                            className="fill-emerald-500/[0.04] dark:fill-emerald-500/[0.07] stroke-emerald-600/30 dark:stroke-emerald-500/30 stroke-[0.3]"
                             strokeDasharray="0.6,0.6"
                           />
+
+                          {/* Render custom vector boundary fence lines with material styling */}
+                          {boundaryLines.map(line => {
+                            const isSel = selectedBoundaryLineId === line.id;
+                            const mat = line.fenceMaterial || globalFenceMaterial;
+                            const strokeColor = getFenceColor(mat);
+                            const posPct = line.gatePositionPct || 50;
+
+                            const gx = line.startX + (line.endX - line.startX) * (posPct / 100);
+                            const gy = line.startY + (line.endY - line.startY) * (posPct / 100);
+
+                            return (
+                              <g key={line.id}>
+                                {/* Wide invisible click hit area for selecting fence line */}
+                                <line
+                                  x1={line.startX}
+                                  y1={line.startY}
+                                  x2={line.endX}
+                                  y2={line.endY}
+                                  stroke="transparent"
+                                  strokeWidth="6"
+                                  className="pointer-events-auto cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedBoundaryLineId(line.id);
+                                    setSelectedPlanBuildingId(null);
+                                    setSelectedPlant(null);
+                                  }}
+                                />
+
+                                {/* Main fence stroke */}
+                                <line
+                                  x1={line.startX}
+                                  y1={line.startY}
+                                  x2={line.endX}
+                                  y2={line.endY}
+                                  stroke={isSel ? "#f59e0b" : strokeColor}
+                                  strokeWidth={isSel ? "1.8" : "1.2"}
+                                  strokeDasharray={mat === "wood" ? "1.5,0.8" : mat === "metal" ? "2,0.5" : "none"}
+                                  className="transition-all duration-200"
+                                />
+
+                                {/* Selection glow line */}
+                                {isSel && (
+                                  <line
+                                    x1={line.startX}
+                                    y1={line.startY}
+                                    x2={line.endX}
+                                    y2={line.endY}
+                                    stroke="#f59e0b"
+                                    strokeWidth="3"
+                                    opacity="0.3"
+                                  />
+                                )}
+
+                                {/* Gate or Wicket Badge on Fence Line */}
+                                {line.gateType && line.gateType !== "none" && (
+                                  <g 
+                                    transform={`translate(${gx}, ${gy})`}
+                                    className="pointer-events-auto cursor-pointer"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedBoundaryLineId(line.id);
+                                      setSelectedPlanBuildingId(null);
+                                      setSelectedPlant(null);
+                                    }}
+                                  >
+                                    <circle r="3" fill={isSel ? "#f59e0b" : "#d97706"} stroke="#ffffff" strokeWidth="0.5" />
+                                    <text y="0.8" textAnchor="middle" fontSize="2.5" fill="#ffffff" fontWeight="bold">
+                                      {line.gateType === "wicket" ? "🚪" : line.gateType === "gate_swing" ? "🚪🚪" : "🚪➡️"}
+                                    </text>
+                                  </g>
+                                )}
+                              </g>
+                            );
+                          })}
                         </svg>
 
                         {/* Stamped Building/Path Layers */}
@@ -3749,21 +3926,34 @@ export default function EcosystemPortal({
                                 bottom: `${bottom}%`,
                                 width: `${w}%`,
                                 height: `${h}%`,
-                                backgroundColor: color,
-                                borderColor: isSel ? undefined : color.replace(/[^,]+(?=\))/, "0.7")
+                                backgroundColor: b.shapeType && b.shapeType !== "rect" ? "transparent" : color,
+                                borderColor: b.shapeType && b.shapeType !== "rect" ? (isSel ? undefined : "transparent") : (isSel ? undefined : color.replace(/[^,]+(?=\))/, "0.7"))
                               }}
                             >
-                              <div className="p-1 h-full flex flex-col justify-between overflow-hidden">
+                              {/* Non-rectangular SVG shape layer */}
+                              {b.shapeType && b.shapeType !== "rect" && (
+                                <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible z-0" viewBox="0 0 100 100" preserveAspectRatio="none">
+                                  <polygon
+                                    points={getBuildingPolygonPointsPct(b)}
+                                    fill={color}
+                                    stroke={isSel ? "#f59e0b" : color.replace(/[^,]+(?=\))/, "0.85")}
+                                    strokeWidth={isSel ? "3" : "1.8"}
+                                    vectorEffect="non-scaling-stroke"
+                                  />
+                                </svg>
+                              )}
+
+                              <div className="p-1 h-full flex flex-col justify-between overflow-hidden z-10 relative pointer-events-none">
                                 <div className="flex items-start justify-between whitespace-nowrap overflow-hidden">
-                                  <span className="text-[10px] font-black text-neutral-900 dark:text-zinc-100 leading-tight truncate">
+                                  <span className="text-[10px] font-black text-neutral-900 dark:text-zinc-100 leading-tight truncate drop-shadow-sm">
                                     {b.label}
                                   </span>
-                                  <span className="text-[10px] font-mono select-none bg-black/5 rounded p-0.5 shrink-0 ml-1">
+                                  <span className="text-[10px] font-mono select-none bg-black/10 rounded p-0.5 shrink-0 ml-1">
                                     {b.emoji || (b.itemType === "path" ? "🛣️" : b.subType === "banya" ? "🛁" : b.subType === "garage" ? "🚗" : "🏠")}
                                   </span>
                                 </div>
-                                <div className="flex justify-between items-end text-[7.5px] font-mono opacity-80 text-zinc-650 dark:text-zinc-400">
-                                  <span>{b.wMeters}x{b.hMeters}м</span>
+                                <div className="flex justify-between items-end text-[7.5px] font-mono font-bold text-zinc-800 dark:text-zinc-200 drop-shadow-sm">
+                                  <span>{calculateBuildingAreaMeters(b)}м² ({b.wMeters}x{b.hMeters}м)</span>
                                   <span>X:{b.xMeters} Y:{b.yMeters}</span>
                                 </div>
                               </div>
@@ -4429,12 +4619,64 @@ export default function EcosystemPortal({
                     }
                   };
 
+                  const handleUploadBuildingPhotoForAI = async (e: React.ChangeEvent<HTMLInputElement>) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+
+                    setIsAnalyzingPhoto(true);
+                    setPhotoAnalysisResult(null);
+
+                    try {
+                      const reader = new FileReader();
+                      reader.onload = async () => {
+                        const base64Data = reader.result as string;
+                        const csrfToken = document.cookie.match(/(?:^|;\s*)_csrf=([^;]*)/)?.[1] || "";
+                        const res = await fetch("/api/analyze-building-photo", {
+                          method: "POST",
+                          headers: {
+                            "Content-Type": "application/json",
+                            "X-CSRF-Token": csrfToken
+                          },
+                          body: JSON.stringify({
+                            imageBase64: base64Data,
+                            mimeType: file.type || "image/jpeg"
+                          })
+                        });
+
+                        const data = await res.json();
+                        if (data.error) {
+                          throw new Error(data.error);
+                        }
+
+                        if (data.success) {
+                          const updates: Partial<PlanogramBuilding> = {};
+                          if (data.shapeType) updates.shapeType = data.shapeType;
+                          if (data.cutCorner) updates.cutCorner = data.cutCorner;
+                          if (data.wingWidthPct) updates.wingWidthPct = data.wingWidthPct;
+                          if (data.wingDepthPct) updates.wingDepthPct = data.wingDepthPct;
+                          if (data.estimatedWidthMeters) updates.wMeters = data.estimatedWidthMeters;
+                          if (data.estimatedHeightMeters) updates.hMeters = data.estimatedHeightMeters;
+                          if (data.suggestedLabel) updates.label = data.suggestedLabel;
+                          if (data.customVertices) updates.customVertices = data.customVertices;
+
+                          handleUpdateBuildingMeters(updates);
+                          setPhotoAnalysisResult(`Форма: ${data.suggestedLabel || data.shapeType}. ${data.description || ""}`);
+                        }
+                      };
+                      reader.readAsDataURL(file);
+                    } catch (err: any) {
+                      alert(`Ошибка ИИ-анализа фотографии: ${err.message}`);
+                    } finally {
+                      setIsAnalyzingPhoto(false);
+                    }
+                  };
+
                   return (
-                    <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-neutral-205 dark:border-zinc-800 space-y-4 shadow-sm animate-fadeIn text-xs text-neutral-850 dark:text-neutral-100">
-                      <div className="flex items-center justify-between border-b pb-3 border-neutral-100 dark:border-zinc-805">
+                    <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 space-y-4 shadow-sm animate-fadeIn text-xs text-neutral-800 dark:text-neutral-100">
+                      <div className="flex items-center justify-between border-b pb-3 border-neutral-100 dark:border-zinc-800">
                         <div>
                           <span className="text-[10px] uppercase font-bold text-emerald-600 block">Инспектор постройки</span>
-                          <h4 className="font-extrabold text-sm text-neutral-900 dark:text-neutral-51 flex items-center gap-1">
+                          <h4 className="font-extrabold text-sm text-neutral-900 dark:text-neutral-100 flex items-center gap-1">
                             🏢 {b.label}
                           </h4>
                         </div>
@@ -4445,6 +4687,45 @@ export default function EcosystemPortal({
                         >
                           <X className="w-4 h-4" />
                         </button>
+                      </div>
+
+                      {/* AI Photo Recognition Banner */}
+                      <div className="p-3 rounded-xl bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-blue-500/10 border border-indigo-500/30 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 text-[10px] font-extrabold text-indigo-700 dark:text-indigo-300">
+                            <Sparkles className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
+                            <span>ИИ-определение формы по фото</span>
+                          </div>
+                          <label className="cursor-pointer text-[9.5px] font-bold px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all flex items-center gap-1">
+                            <Camera className="w-3 h-3" />
+                            <span>{isAnalyzingPhoto ? "Анализ..." : "Загрузить фото / план"}</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              disabled={isAnalyzingPhoto}
+                              className="hidden"
+                              onChange={handleUploadBuildingPhotoForAI}
+                            />
+                          </label>
+                        </div>
+                        <p className="text-[9px] text-zinc-600 dark:text-zinc-400 leading-tight">
+                          Загрузите фото дома, эскиз или план БТИ. Модель Gemini автоматически определит Г/П/Т-образную форму фундамента и размеры.
+                        </p>
+                        {isAnalyzingPhoto && (
+                          <div className="flex items-center gap-2 p-2 bg-indigo-50 dark:bg-indigo-950/40 rounded-lg text-[10px] font-medium text-indigo-800 dark:text-indigo-200 animate-pulse">
+                            <div className="w-3 h-3 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+                            <span>ИИ Gemini сканирует контуры здания на снимке...</span>
+                          </div>
+                        )}
+                        {photoAnalysisResult && (
+                          <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800/60 rounded-lg text-[10px] space-y-1">
+                            <div className="font-extrabold text-emerald-800 dark:text-emerald-300 flex items-center justify-between">
+                              <span>✅ Результат распознавания:</span>
+                              <button type="button" onClick={() => setPhotoAnalysisResult(null)} className="text-zinc-400 hover:text-zinc-600 text-xs">✕</button>
+                            </div>
+                            <p className="text-zinc-700 dark:text-zinc-300 leading-relaxed font-sans">{photoAnalysisResult}</p>
+                          </div>
+                        )}
                       </div>
 
                       <div className="space-y-3.5">
@@ -4485,6 +4766,215 @@ export default function EcosystemPortal({
                           </div>
                         </div>
 
+                        {/* Architectural Shape Selector */}
+                        <div className="space-y-2.5 p-3 bg-neutral-50 dark:bg-black/25 rounded-xl border border-neutral-200 dark:border-zinc-800">
+                          <div className="flex justify-between items-center">
+                            <label className="block font-bold text-zinc-400 text-[9px] uppercase">
+                              📐 Архитектурная форма строения:
+                            </label>
+                            <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-extrabold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                              Площадь: {calculateBuildingAreaMeters(b)} м²
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                            {SHAPE_PRESETS.map(sp => {
+                              const isAct = (b.shapeType || "rect") === sp.type;
+                              return (
+                                <button
+                                  key={sp.type}
+                                  type="button"
+                                  onClick={() => {
+                                    const updates: Partial<PlanogramBuilding> = { shapeType: sp.type };
+                                    if (sp.type === "polygon" && (!b.customVertices || b.customVertices.length < 3)) {
+                                      const w = b.wMeters || 4;
+                                      const h = b.hMeters || 4;
+                                      updates.customVertices = [
+                                        { x: 0, y: 0 },
+                                        { x: w, y: 0 },
+                                        { x: w, y: h * 0.7 },
+                                        { x: w * 0.5, y: h },
+                                        { x: 0, y: h * 0.7 }
+                                      ];
+                                    }
+                                    handleUpdateBuildingMeters(updates);
+                                  }}
+                                  className={`p-1.5 rounded-lg border text-center flex flex-col items-center gap-0.5 transition-all cursor-pointer ${
+                                    isAct 
+                                      ? "bg-amber-500/15 border-amber-500 text-amber-700 dark:text-amber-300 font-extrabold ring-1 ring-amber-500/30" 
+                                      : "bg-white dark:bg-zinc-900 border-neutral-200 dark:border-zinc-800 text-neutral-700 dark:text-zinc-300 hover:border-amber-400"
+                                  }`}
+                                  title={sp.desc}
+                                >
+                                  <span className="text-sm leading-none">{sp.emoji}</span>
+                                  <span className="text-[8.5px] leading-tight truncate max-w-full font-bold">{sp.label}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {/* Controls for L-Shape, U-Shape, T-Shape orientation & wing depth */}
+                          {(b.shapeType === "l_shape" || b.shapeType === "u_shape" || b.shapeType === "t_shape") && (
+                            <div className="space-y-2.5 pt-2 border-t border-neutral-200/60 dark:border-zinc-800/60">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <label className="text-[9px] font-extrabold uppercase text-zinc-400">
+                                  Ориентация выреза / пристройки:
+                                </label>
+                                <div className="flex gap-1 flex-wrap">
+                                  {b.shapeType === "l_shape" && [
+                                    { id: "ne", label: "СВ (Top-Right)" },
+                                    { id: "nw", label: "СЗ (Top-Left)" },
+                                    { id: "se", label: "ЮВ (Bottom-Right)" },
+                                    { id: "sw", label: "ЮЗ (Bottom-Left)" }
+                                  ].map(opt => (
+                                    <button
+                                      key={opt.id}
+                                      type="button"
+                                      onClick={() => handleUpdateBuildingMeters({ cutCorner: opt.id as any })}
+                                      className={`text-[9px] font-bold px-2 py-1 rounded border transition-all ${
+                                        (b.cutCorner || "ne") === opt.id 
+                                          ? "bg-emerald-600 text-white border-emerald-600 shadow-sm" 
+                                          : "bg-white dark:bg-zinc-800 border-neutral-200 dark:border-zinc-700 hover:bg-neutral-100 dark:hover:bg-zinc-700"
+                                      }`}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  ))}
+                                  {b.shapeType === "u_shape" && [
+                                    { id: "n", label: "Двор сверху (Север)" },
+                                    { id: "s", label: "Двор снизу (Юг)" }
+                                  ].map(opt => (
+                                    <button
+                                      key={opt.id}
+                                      type="button"
+                                      onClick={() => handleUpdateBuildingMeters({ cutCorner: opt.id as any })}
+                                      className={`text-[9px] font-bold px-2 py-1 rounded border transition-all ${
+                                        (b.cutCorner || "n") === opt.id 
+                                          ? "bg-emerald-600 text-white border-emerald-600 shadow-sm" 
+                                          : "bg-white dark:bg-zinc-800 border-neutral-200 dark:border-zinc-700 hover:bg-neutral-100 dark:hover:bg-zinc-700"
+                                      }`}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Sliders for wing width & depth % */}
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <div className="flex justify-between text-[8.5px] font-extrabold text-zinc-400 mb-1">
+                                    <span>ШИРИНА ВЫРЕЗА:</span>
+                                    <span className="text-amber-600 dark:text-amber-400 font-mono">{b.wingWidthPct ?? 50}%</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min="20"
+                                    max="80"
+                                    value={b.wingWidthPct ?? 50}
+                                    onChange={(e) => handleUpdateBuildingMeters({ wingWidthPct: parseInt(e.target.value) })}
+                                    className="w-full accent-amber-500 cursor-pointer"
+                                  />
+                                </div>
+                                <div>
+                                  <div className="flex justify-between text-[8.5px] font-extrabold text-zinc-400 mb-1">
+                                    <span>ГЛУБИНА ВЫРЕЗА:</span>
+                                    <span className="text-amber-600 dark:text-amber-400 font-mono">{b.wingDepthPct ?? 50}%</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min="20"
+                                    max="80"
+                                    value={b.wingDepthPct ?? 50}
+                                    onChange={(e) => handleUpdateBuildingMeters({ wingDepthPct: parseInt(e.target.value) })}
+                                    className="w-full accent-amber-500 cursor-pointer"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Vertex Editor for Custom Polygon */}
+                          {b.shapeType === "polygon" && (
+                            <div className="space-y-2 pt-2 border-t border-neutral-200/60 dark:border-zinc-800/60">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[9px] font-extrabold uppercase text-amber-600 dark:text-amber-400">
+                                  Углы многоугольника (в метрах от угла 0,0):
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const current = b.customVertices && b.customVertices.length >= 3 
+                                      ? [...b.customVertices] 
+                                      : getBuildingVerticesMeters(b);
+                                    const w = b.wMeters || 4;
+                                    const h = b.hMeters || 4;
+                                    current.push({ x: Math.round(w / 2), y: Math.round(h / 2) });
+                                    handleUpdateBuildingMeters({ customVertices: current });
+                                  }}
+                                  className="text-[9px] font-bold px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800 hover:bg-emerald-500 hover:text-white transition-all cursor-pointer"
+                                >
+                                  + Добавить угол
+                                </button>
+                              </div>
+
+                              <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                                {(b.customVertices && b.customVertices.length >= 3 ? b.customVertices : getBuildingVerticesMeters(b)).map((v, vIdx) => (
+                                  <div key={vIdx} className="flex items-center justify-between gap-1.5 p-1 px-2 bg-white dark:bg-zinc-900 border border-neutral-200 dark:border-zinc-800 rounded-lg text-[10px]">
+                                    <span className="font-mono font-extrabold text-amber-500">
+                                      #{vIdx + 1}
+                                    </span>
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-zinc-400 font-bold">X:</span>
+                                      <input
+                                        type="number"
+                                        step="0.5"
+                                        min="0"
+                                        max={b.wMeters || 4}
+                                        value={v.x}
+                                        onChange={(e) => {
+                                          const current = b.customVertices && b.customVertices.length >= 3 ? [...b.customVertices] : getBuildingVerticesMeters(b);
+                                          current[vIdx] = { ...current[vIdx], x: parseFloat(e.target.value) || 0 };
+                                          handleUpdateBuildingMeters({ customVertices: current });
+                                        }}
+                                        className="w-14 p-0.5 px-1 bg-neutral-100 dark:bg-black/40 border border-neutral-200 dark:border-zinc-800 rounded font-mono text-[10px]"
+                                      />
+                                      <span className="text-zinc-400 font-bold">Y:</span>
+                                      <input
+                                        type="number"
+                                        step="0.5"
+                                        min="0"
+                                        max={b.hMeters || 4}
+                                        value={v.y}
+                                        onChange={(e) => {
+                                          const current = b.customVertices && b.customVertices.length >= 3 ? [...b.customVertices] : getBuildingVerticesMeters(b);
+                                          current[vIdx] = { ...current[vIdx], y: parseFloat(e.target.value) || 0 };
+                                          handleUpdateBuildingMeters({ customVertices: current });
+                                        }}
+                                        className="w-14 p-0.5 px-1 bg-neutral-100 dark:bg-black/40 border border-neutral-200 dark:border-zinc-800 rounded font-mono text-[10px]"
+                                      />
+                                    </div>
+                                    {(b.customVertices || []).length > 3 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const current = [...(b.customVertices || [])];
+                                          current.splice(vIdx, 1);
+                                          handleUpdateBuildingMeters({ customVertices: current });
+                                        }}
+                                        className="text-red-500 hover:text-red-700 p-0.5 font-bold"
+                                        title="Удалить вершину"
+                                      >
+                                        ❌
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
                         {/* Direct Meters Positions */}
                         <div className="grid grid-cols-2 gap-3 p-2.5 bg-neutral-50/50 dark:bg-black/20 rounded-xl border border-neutral-200/50 dark:border-zinc-800/50">
                           <div>
@@ -4509,6 +4999,74 @@ export default function EcosystemPortal({
                               className="w-full p-1.5 rounded bg-white dark:bg-zinc-950 border text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400"
                             />
                           </div>
+                        </div>
+
+                        {/* Quick Boundary Fence Snapping & Embedding Panel */}
+                        <div className="p-3 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent rounded-xl border border-amber-500/30 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-extrabold uppercase text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                              📍 Привязка к линии забора (периметру)
+                            </span>
+                            <span className="text-[8.5px] text-zinc-400 font-mono">Snap to fence</span>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateBuildingMeters({ yMeters: 0 })}
+                              className="p-1.5 rounded-lg border border-amber-500/30 bg-white dark:bg-zinc-900 text-[10px] font-bold text-amber-800 dark:text-amber-300 hover:bg-amber-500/20 text-center transition-all cursor-pointer"
+                              title="Привязать к Северному забору"
+                            >
+                              ⬆️ Север (y=0)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateBuildingMeters({ yMeters: Math.max(0, H - (b.hMeters || 4)) })}
+                              className="p-1.5 rounded-lg border border-amber-500/30 bg-white dark:bg-zinc-900 text-[10px] font-bold text-amber-800 dark:text-amber-300 hover:bg-amber-500/20 text-center transition-all cursor-pointer"
+                              title="Привязать к Южному забору"
+                            >
+                              ⬇️ Юг (y=H)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateBuildingMeters({ xMeters: 0 })}
+                              className="p-1.5 rounded-lg border border-amber-500/30 bg-white dark:bg-zinc-900 text-[10px] font-bold text-amber-800 dark:text-amber-300 hover:bg-amber-500/20 text-center transition-all cursor-pointer"
+                              title="Привязать к Западному забору"
+                            >
+                              ⬅️ Запад (x=0)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateBuildingMeters({ xMeters: Math.max(0, W - (b.wMeters || 4)) })}
+                              className="p-1.5 rounded-lg border border-amber-500/30 bg-white dark:bg-zinc-900 text-[10px] font-bold text-amber-800 dark:text-amber-300 hover:bg-amber-500/20 text-center transition-all cursor-pointer"
+                              title="Привязать к Восточному забору"
+                            >
+                              ➡️ Восток (x=W)
+                            </button>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBoundaryLines(prev => prev.map((bl, idx) => {
+                                if (idx === 0 || bl.id === "b_1") {
+                                  return {
+                                    ...bl,
+                                    gateType: (b.gateType || (b.subType as GateType)) || "wicket",
+                                    gateMaterial: b.gateMaterial || b.fenceMaterial || globalFenceMaterial,
+                                    gateWidthMeters: b.wMeters || 1.2,
+                                    gatePositionPct: 50
+                                  };
+                                }
+                                return bl;
+                              }));
+                              handleUpdateBuildingMeters({ yMeters: 0 });
+                              alert("✅ Калитка/ворота успешно встроены в конструкцию ограждения периметра!");
+                            }}
+                            className="w-full py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-neutral-900 font-extrabold text-[10px] transition-all flex items-center justify-center gap-1 shadow-sm cursor-pointer"
+                          >
+                            🚪 Встроить прямо в ограждение участка (Boundary Fence)
+                          </button>
                         </div>
 
                         {/* Linked Property Object */}
@@ -4585,6 +5143,36 @@ export default function EcosystemPortal({
                                 {colorOpt.name}
                               </button>
                             ))}
+                          </div>
+                        </div>
+
+                        {/* 🏛️ 3D Фасады, кровля и планировка этажей */}
+                        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
+                              🏛️ 3D Архитектура и планировка
+                            </span>
+                            <span className="text-[9px] font-mono text-zinc-400">
+                              {b.floorPlan?.rooms?.length ? `${b.floorPlan.rooms.length} комнат` : "Черновик"}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setEditing3DBuilding(b)}
+                              className="py-2 px-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-neutral-950 font-black text-[11px] flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer"
+                            >
+                              <span>🏛️ 3D Фасад, кровля, окна</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setEditingFloorPlanBuilding(b)}
+                              className="py-2 px-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-extrabold text-[11px] flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer"
+                            >
+                              <span>📐 План этажей и сети</span>
+                            </button>
                           </div>
                         </div>
 
@@ -4765,6 +5353,147 @@ export default function EcosystemPortal({
                           }}
                           className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 border text-xs text-neutral-900 dark:text-white border-neutral-200 dark:border-zinc-800"
                         />
+                      </div>
+
+                      {/* Material selection for this boundary */}
+                      <div className="space-y-1.5 p-3 rounded-xl bg-neutral-50 dark:bg-black/25 border border-neutral-200 dark:border-zinc-800">
+                        <label className="block font-extrabold text-[9px] uppercase text-zinc-500">
+                          🪵 Материал забора на этой меже:
+                        </label>
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+                          {FENCE_MATERIALS.map(fm => {
+                            const line = boundaryLines.find(l => l.id === selectedBoundaryLineId);
+                            const isSel = (line?.fenceMaterial || globalFenceMaterial) === fm.id;
+                            return (
+                              <button
+                                key={fm.id}
+                                type="button"
+                                onClick={() => {
+                                  setBoundaryLines(prev => prev.map(l => l.id === selectedBoundaryLineId ? { ...l, fenceMaterial: fm.id } : l));
+                                }}
+                                className={`p-1.5 rounded-lg border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                                  isSel
+                                    ? "border-amber-500 bg-amber-500/15 font-bold text-amber-600 ring-2 ring-amber-500/30"
+                                    : "border-neutral-200 dark:border-zinc-800 hover:bg-neutral-100 dark:hover:bg-zinc-800"
+                                }`}
+                              >
+                                <span className="text-base">{fm.emoji}</span>
+                                <span className="text-[9px] truncate max-w-full leading-tight">{fm.label.split(" ")[0]}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Embedded Gate / Wicket Configuration */}
+                      <div className="space-y-2 p-3 rounded-xl bg-neutral-50 dark:bg-black/25 border border-neutral-200 dark:border-zinc-800">
+                        <div className="flex justify-between items-center">
+                          <label className="block font-extrabold text-[9px] uppercase text-zinc-500">
+                            🚪 Проем / Ворота / Калитка на этой меже:
+                          </label>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                          {[
+                            { id: "none", label: "Сплошной", emoji: "🧱" },
+                            { id: "wicket", label: "Калитка", emoji: "🚪" },
+                            { id: "gate_swing", label: "Распашные", emoji: "🚪🚪" },
+                            { id: "gate_sliding", label: "Откатные", emoji: "🚪➡️" }
+                          ].map(gt => {
+                            const line = boundaryLines.find(l => l.id === selectedBoundaryLineId);
+                            const isSel = (line?.gateType || "none") === gt.id;
+                            return (
+                              <button
+                                key={gt.id}
+                                type="button"
+                                onClick={() => {
+                                  setBoundaryLines(prev => prev.map(l => {
+                                    if (l.id !== selectedBoundaryLineId) return l;
+                                    const defWMeters = gt.id === "wicket" ? 1.2 : gt.id === "gate_swing" ? 4.0 : 4.5;
+                                    return {
+                                      ...l,
+                                      gateType: gt.id as GateType,
+                                      gateWidthMeters: l.gateWidthMeters || defWMeters,
+                                      gatePositionPct: l.gatePositionPct || 50,
+                                      gateMaterial: l.gateMaterial || l.fenceMaterial || globalFenceMaterial
+                                    };
+                                  }));
+                                }}
+                                className={`p-1.5 rounded-lg border text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                                  isSel
+                                    ? "border-amber-500 bg-amber-500/15 font-bold text-amber-600 ring-2 ring-amber-500/30"
+                                    : "border-neutral-200 dark:border-zinc-800 hover:bg-neutral-100 dark:hover:bg-zinc-800"
+                                }`}
+                              >
+                                <span className="text-base">{gt.emoji}</span>
+                                <span className="text-[9px] truncate max-w-full leading-tight">{gt.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {(() => {
+                          const line = boundaryLines.find(l => l.id === selectedBoundaryLineId);
+                          if (!line || !line.gateType || line.gateType === "none") return null;
+
+                          return (
+                            <div className="space-y-2 pt-2 border-t border-neutral-200/60 dark:border-zinc-800">
+                              <div>
+                                <label className="block text-[9px] font-bold text-zinc-500 uppercase mb-1">Материал ворот / калитки:</label>
+                                <div className="grid grid-cols-5 gap-1">
+                                  {FENCE_MATERIALS.map(gm => {
+                                    const isSelG = (line.gateMaterial || line.fenceMaterial || globalFenceMaterial) === gm.id;
+                                    return (
+                                      <button
+                                        key={gm.id}
+                                        type="button"
+                                        onClick={() => {
+                                          setBoundaryLines(prev => prev.map(l => l.id === selectedBoundaryLineId ? { ...l, gateMaterial: gm.id } : l));
+                                        }}
+                                        className={`p-1 rounded text-center text-[9px] font-bold border transition-all ${
+                                          isSelG ? "bg-amber-500 text-white border-amber-600" : "bg-white dark:bg-zinc-900 border-neutral-200 dark:border-zinc-800"
+                                        }`}
+                                      >
+                                        {gm.emoji}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="block text-[9px] font-bold text-zinc-500 uppercase mb-0.5">Ширина (м):</label>
+                                  <input 
+                                    type="number" 
+                                    step="0.1" 
+                                    min="0.8" 
+                                    max="10" 
+                                    value={line.gateWidthMeters || 4} 
+                                    onChange={(e) => {
+                                      const v = parseFloat(e.target.value) || 1;
+                                      setBoundaryLines(prev => prev.map(l => l.id === selectedBoundaryLineId ? { ...l, gateWidthMeters: v } : l));
+                                    }}
+                                    className="w-full p-1 rounded bg-white dark:bg-zinc-900 border text-xs font-mono font-bold"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[9px] font-bold text-zinc-500 uppercase mb-0.5">Позиция (%):</label>
+                                  <input 
+                                    type="range" 
+                                    min="10" 
+                                    max="90" 
+                                    value={line.gatePositionPct || 50} 
+                                    onChange={(e) => {
+                                      const v = parseInt(e.target.value) || 50;
+                                      setBoundaryLines(prev => prev.map(l => l.id === selectedBoundaryLineId ? { ...l, gatePositionPct: v } : l));
+                                    }}
+                                    className="w-full accent-amber-500 cursor-pointer"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       <div className="p-2.5 bg-neutral-50 dark:bg-black/20 rounded border border-neutral-200 dark:border-zinc-800 text-[11px] space-y-1">
@@ -5765,9 +6494,22 @@ export default function EcosystemPortal({
                   planBuildings={activeBuildings}
                   secondaryBuildings={secondaryBuildings}
                   plantNodes={activePlants}
+                  boundaryLines={boundaryLines}
+                  globalFenceMaterial={globalFenceMaterial}
                   plotWidth={W}
                   plotHeight={H}
                   plotCorners={getPlotCorners(selectedObjectId || "1", W, H)}
+                  onUpdateBuilding={(id, updates) => {
+                    setPlanBuildings((prev) => {
+                      const updated = prev.map((b) => (b.id === id ? { ...b, ...updates } : b));
+                      try {
+                        localStorage.setItem("eco_plan_buildings", JSON.stringify(updated));
+                      } catch (e) {
+                        console.error("Storage error", e);
+                      }
+                      return updated;
+                    });
+                  }}
                   onClose={() => setGardenSubTab("planogram")}
                 />
               </div>
@@ -7870,6 +8612,57 @@ export default function EcosystemPortal({
         );
       })()}
 
+      {/* 3D Architectural Customizer Modal from Planogram */}
+      {editing3DBuilding && (
+        <Building3DCustomizerModal
+          buildingLabel={editing3DBuilding.label}
+          wMeters={editing3DBuilding.wMeters || 4}
+          hMeters={editing3DBuilding.hMeters || 4}
+          subType={editing3DBuilding.subType}
+          currentStyle={editing3DBuilding.architecturalStyle}
+          onSave={(newStyle) => {
+            setPlanBuildings((prev) => {
+              const updated = prev.map((b) =>
+                b.id === editing3DBuilding.id ? { ...b, architecturalStyle: newStyle } : b
+              );
+              try {
+                localStorage.setItem("eco_plan_buildings", JSON.stringify(updated));
+              } catch (e) {
+                console.error("Storage error", e);
+              }
+              return updated;
+            });
+            setEditing3DBuilding(null);
+          }}
+          onClose={() => setEditing3DBuilding(null)}
+        />
+      )}
+
+      {/* Floor Plan & Engineering Modeling Modal from Planogram */}
+      {editingFloorPlanBuilding && (
+        <FloorPlanModal
+          buildingLabel={editingFloorPlanBuilding.label}
+          wMeters={editingFloorPlanBuilding.wMeters || 4}
+          hMeters={editingFloorPlanBuilding.hMeters || 4}
+          subType={editingFloorPlanBuilding.subType}
+          initialFloorPlan={editingFloorPlanBuilding.floorPlan}
+          onSave={(newPlan) => {
+            setPlanBuildings((prev) => {
+              const updated = prev.map((b) =>
+                b.id === editingFloorPlanBuilding.id ? { ...b, floorPlan: newPlan } : b
+              );
+              try {
+                localStorage.setItem("eco_plan_buildings", JSON.stringify(updated));
+              } catch (e) {
+                console.error("Storage error", e);
+              }
+              return updated;
+            });
+            setEditingFloorPlanBuilding(null);
+          }}
+          onClose={() => setEditingFloorPlanBuilding(null)}
+        />
+      )}
 
     </div>
   );

@@ -1,7 +1,41 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { X, ZoomIn, RotateCcw, Box, Info, Image as ImageIcon } from "lucide-react";
+import { X, ZoomIn, RotateCcw, Box, Info, Image as ImageIcon, Eye, Home, Layers, Settings2, Sliders, Maximize2 } from "lucide-react";
+import { 
+  getBuildingVerticesMeters, 
+  BuildingShapeType, 
+  CutCornerOrientation,
+  FenceMaterialType,
+  GateType,
+  getFenceColor,
+  getFenceHeight
+} from "../utils/shapeUtils";
+import { 
+  Building3DStyle, 
+  BuildingFloorPlan, 
+  WALL_MATERIALS, 
+  ROOF_TYPES, 
+  ROOF_MATERIALS,
+  FacadeOpening
+} from "../types/architecturalTypes";
+import { Building3DCustomizerModal } from "./Building3DCustomizerModal";
+import { FloorPlanModal } from "./FloorPlanModal";
+
+interface BoundaryLine {
+  id: string;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  lengthLabel: string;
+  linkedObjectId?: string;
+  fenceMaterial?: FenceMaterialType;
+  gateType?: GateType;
+  gateMaterial?: FenceMaterialType;
+  gateWidthMeters?: number;
+  gatePositionPct?: number;
+}
 
 interface PlanogramBuilding {
   id: string;
@@ -20,6 +54,16 @@ interface PlanogramBuilding {
   color: string;
   emoji?: string;
   linkedObjectId?: string;
+  shapeType?: BuildingShapeType;
+  cutCorner?: CutCornerOrientation;
+  wingWidthPct?: number;
+  wingDepthPct?: number;
+  customVertices?: Array<{ x: number; y: number }>;
+  fenceMaterial?: FenceMaterialType;
+  gateType?: GateType;
+  gateMaterial?: FenceMaterialType;
+  architecturalStyle?: Building3DStyle;
+  floorPlan?: BuildingFloorPlan;
 }
 
 interface SecondaryBuilding {
@@ -57,9 +101,12 @@ interface Property3DViewerProps {
   planBuildings: PlanogramBuilding[];
   secondaryBuildings: SecondaryBuilding[];
   plantNodes: PlantNode[];
+  boundaryLines?: BoundaryLine[];
+  globalFenceMaterial?: FenceMaterialType;
   plotWidth: number; // in meters (W)
   plotHeight: number; // in meters (H)
   plotCorners?: Array<{ x: number; y: number }>;
+  onUpdateBuilding?: (id: string, updates: Partial<PlanogramBuilding>) => void;
   onClose: () => void;
 }
 
@@ -67,9 +114,12 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
   planBuildings,
   secondaryBuildings,
   plantNodes,
+  boundaryLines = [],
+  globalFenceMaterial = "wood",
   plotWidth,
   plotHeight,
   plotCorners,
+  onUpdateBuilding,
   onClose,
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -77,6 +127,11 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
   const [selectedObjectType, setSelectedObjectType] = useState<"building" | "plant" | null>(null);
   const [showHelperPanel, setShowHelperPanel] = useState<boolean>(true);
   const [isSceneReady, setIsSceneReady] = useState<boolean>(false);
+
+  // Architectural customization & floor planning modals state
+  const [customizingBuilding, setCustomizingBuilding] = useState<PlanogramBuilding | null>(null);
+  const [floorPlanningBuilding, setFloorPlanningBuilding] = useState<PlanogramBuilding | null>(null);
+  const [isCutawayView, setIsCutawayView] = useState<boolean>(false);
 
   // Keep refs for animation and camera manipulation
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -250,30 +305,115 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
           { x: 0, z: 0 },
         ];
 
-    // Build fence columns and rails
-    for (let i = 0; i < cornerCoordinates.length; i++) {
-      const p1 = cornerCoordinates[i];
-      const p2 = cornerCoordinates[(i + 1) % cornerCoordinates.length];
+    // Build custom boundary fence lines with materials & gates
+    const linesToBuild = (boundaryLines && boundaryLines.length > 0)
+      ? boundaryLines.map(bl => ({
+          p1: { x: (bl.startX / 100) * W, z: H - (bl.startY / 100) * H },
+          p2: { x: (bl.endX / 100) * W, z: H - (bl.endY / 100) * H },
+          fenceMat: bl.fenceMaterial || globalFenceMaterial,
+          gateType: bl.gateType || "none",
+          gateMat: bl.gateMaterial || bl.fenceMaterial || globalFenceMaterial,
+          gateWidth: bl.gateWidthMeters || (bl.gateType === "wicket" ? 1.2 : 4.0),
+          gatePosPct: bl.gatePositionPct || 50
+        }))
+      : cornerCoordinates.map((p1, idx) => {
+          const p2 = cornerCoordinates[(idx + 1) % cornerCoordinates.length];
+          return {
+            p1,
+            p2,
+            fenceMat: globalFenceMaterial,
+            gateType: idx === 0 ? "gate_swing" as GateType : idx === 2 ? "wicket" as GateType : "none" as GateType,
+            gateMat: globalFenceMaterial,
+            gateWidth: idx === 0 ? 4.0 : 1.2,
+            gatePosPct: 50
+          };
+        });
 
-      // Add a pillar at corner
-      const pillarGeo = new THREE.CylinderGeometry(0.2, 0.25, 2, 8);
-      pillarGeo.translate(p1.x, 1, p1.z);
-      const pillar = new THREE.Mesh(pillarGeo, fenceMat);
+    linesToBuild.forEach(bl => {
+      const p1 = bl.p1;
+      const p2 = bl.p2;
+      const dist = Math.sqrt((p2.x - p1.x) ** 2 + (p2.z - p1.z) ** 2);
+      if (dist < 0.1) return;
+
+      const fMatHex = getFenceColor(bl.fenceMat);
+      const fMat = new THREE.MeshStandardMaterial({ color: fMatHex, roughness: 0.7 });
+
+      // Corner Pillar at start
+      const pillarGeo = new THREE.BoxGeometry(0.25, 1.8, 0.25);
+      pillarGeo.translate(p1.x, 0.9, p1.z);
+      const pillar = new THREE.Mesh(pillarGeo, fMat);
       pillar.castShadow = true;
-      pillar.receiveShadow = true;
       scene.add(pillar);
 
-      // Add rails
-      const dist = Math.sqrt((p2.x - p1.x) ** 2 + (p2.z - p1.z) ** 2);
-      if (dist > 0.1) {
-        const railGeo = new THREE.BoxGeometry(0.08, 0.4, dist);
-        const railMesh = new THREE.Mesh(railGeo, fenceMat);
-        railMesh.position.set((p1.x + p2.x) / 2, 0.8, (p1.z + p2.z) / 2);
-        railMesh.lookAt(new THREE.Vector3(p2.x, 0.8, p2.z));
-        railMesh.castShadow = true;
-        scene.add(railMesh);
+      if (!bl.gateType || bl.gateType === "none") {
+        // Continuous fence wall / rails
+        const fenceWallGeo = new THREE.BoxGeometry(0.08, 1.4, dist);
+        const fenceWallMesh = new THREE.Mesh(fenceWallGeo, fMat);
+        fenceWallMesh.position.set((p1.x + p2.x) / 2, 0.7, (p1.z + p2.z) / 2);
+        fenceWallMesh.lookAt(new THREE.Vector3(p2.x, 0.7, p2.z));
+        fenceWallMesh.castShadow = true;
+        scene.add(fenceWallMesh);
+      } else {
+        // Fence with embedded Gate / Wicket
+        const gw = Math.min(dist * 0.8, bl.gateWidth);
+        const gPosDist = dist * (bl.gatePosPct / 100);
+
+        const seg1Len = Math.max(0, gPosDist - gw / 2);
+        const seg2Len = Math.max(0, dist - (gPosDist + gw / 2));
+
+        // Direction vector along line
+        const dx = (p2.x - p1.x) / dist;
+        const dz = (p2.z - p1.z) / dist;
+
+        // Segment 1 (before gate)
+        if (seg1Len > 0.1) {
+          const s1Center = { x: p1.x + dx * (seg1Len / 2), z: p1.z + dz * (seg1Len / 2) };
+          const s1Mesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.4, seg1Len), fMat);
+          s1Mesh.position.set(s1Center.x, 0.7, s1Center.z);
+          s1Mesh.lookAt(new THREE.Vector3(p2.x, 0.7, p2.z));
+          s1Mesh.castShadow = true;
+          scene.add(s1Mesh);
+        }
+
+        // Segment 2 (after gate)
+        if (seg2Len > 0.1) {
+          const s2StartDist = gPosDist + gw / 2;
+          const s2Center = { x: p1.x + dx * (s2StartDist + seg2Len / 2), z: p1.z + dz * (s2StartDist + seg2Len / 2) };
+          const s2Mesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.4, seg2Len), fMat);
+          s2Mesh.position.set(s2Center.x, 0.7, s2Center.z);
+          s2Mesh.lookAt(new THREE.Vector3(p2.x, 0.7, p2.z));
+          s2Mesh.castShadow = true;
+          scene.add(s2Mesh);
+        }
+
+        // Gate Structure at Center
+        const gCenter = { x: p1.x + dx * gPosDist, z: p1.z + dz * gPosDist };
+        const gMatHex = getFenceColor(bl.gateMat);
+        const gateLeafMat = new THREE.MeshStandardMaterial({ color: gMatHex, roughness: 0.5 });
+        const postMat = new THREE.MeshStandardMaterial({ color: "#1e293b", roughness: 0.4 });
+
+        // 2 Gate Posts
+        const post1Pos = { x: p1.x + dx * (gPosDist - gw / 2), z: p1.z + dz * (gPosDist - gw / 2) };
+        const post2Pos = { x: p1.x + dx * (gPosDist + gw / 2), z: p1.z + dz * (gPosDist + gw / 2) };
+
+        const post1 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.0, 0.2), postMat);
+        post1.position.set(post1Pos.x, 1.0, post1Pos.z);
+        post1.castShadow = true;
+        scene.add(post1);
+
+        const post2 = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.0, 0.2), postMat);
+        post2.position.set(post2Pos.x, 1.0, post2Pos.z);
+        post2.castShadow = true;
+        scene.add(post2);
+
+        // Gate Door Leaf
+        const gateLeaf = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.7, gw * 0.95), gateLeafMat);
+        gateLeaf.position.set(gCenter.x, 0.95, gCenter.z);
+        gateLeaf.lookAt(new THREE.Vector3(p2.x, 0.95, p2.z));
+        gateLeaf.castShadow = true;
+        scene.add(gateLeaf);
       }
-    }
+    });
 
     // 6. Dynamic Objects Container Group
     const objectsGroup = new THREE.Group();
@@ -460,78 +600,84 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
       }
 
       const type = b.subType || "other";
-      switch (type) {
-        case "house":
-          h = 7.0; // Large 2-story
-          break;
-        case "banya":
-          h = 4.0;
-          break;
-        case "garage":
-          h = 3.2;
-          break;
-        case "greenhouse":
-          h = 2.8;
-          break;
-        case "gazebo":
-          h = 3.2;
-          break;
-        case "pool":
-          h = 0.15; // Sunk flat pool
-          break;
-        case "bonfire":
-          h = 0.4;
-          break;
-        case "bbq":
-          h = 1.3;
-          break;
-        case "playground":
-          h = 2.4;
-          break;
-        case "sewer_well":
-          h = 0.1;
-          break;
-        case "water_well":
-          h = 1.8;
-          break;
-        case "electric_panel":
-          h = 1.5;
-          break;
-        case "lawn":
-          h = 0.05;
-          break;
-        case "flower_bed":
-          h = 0.25;
-          break;
-        case "pergola":
-          h = 2.5;
-          break;
-        case "swings":
-          h = 2.2;
-          break;
-        case "health_trail":
-          h = 0.05;
-          break;
-        case "garden_fence":
-          h = 1.0;
-          break;
-        case "parking":
-          h = 0.05;
-          break;
-        case "carport":
-          h = 2.6;
-          break;
-        case "water_tap":
-          h = 0.8;
-          break;
-        case "electric_outlet":
-          h = 0.6;
-          break;
-        case "irrigation":
-          h = 0.15;
-          break;
-        default:
-          h = 3.5;
+      const lbl = (b.label || "").toLowerCase();
+      const sub = (b.subType || "").toLowerCase();
+
+      const isSwings = type === "swings" || type === "swing" || sub === "swings" || sub === "swing" || lbl.includes("качел");
+      const isSportsOrWorkout = type === "sports" || type === "workout" || type === "sports_ground" || sub === "sports" || sub === "workout" || sub === "sports_ground" || sub === "gym" || lbl.includes("спорт") || lbl.includes("турник") || lbl.includes("воркаут") || lbl.includes("брусь") || lbl.includes("шведск") || lbl.includes("тренажер");
+      const isPlayground = type === "playground" || type === "children" || sub === "playground" || sub === "children" || lbl.includes("детск") || lbl.includes("горка") || lbl.includes("игров");
+      const isBonfire = type === "bonfire" || type === "firepit" || sub === "bonfire" || sub === "firepit" || lbl.includes("кострищ") || lbl.includes("очаг") || lbl.includes("костер");
+      const isBbq = type === "bbq" || type === "barbecue" || sub === "bbq" || lbl.includes("мангал") || lbl.includes("барбек") || lbl.includes("гриль");
+      const isPergola = type === "pergola" || type === "gazebo" || sub === "pergola" || sub === "gazebo" || lbl.includes("бесед") || lbl.includes("пергол");
+
+      if (isSportsOrWorkout) {
+        h = 2.5;
+      } else if (isPlayground) {
+        h = 2.6;
+      } else if (isSwings) {
+        h = 2.3;
+      } else if (isBonfire) {
+        h = 0.5;
+      } else if (isBbq) {
+        h = 1.6;
+      } else if (isPergola) {
+        h = 3.2;
+      } else {
+        switch (type) {
+          case "house":
+            h = 7.0; // Large 2-story
+            break;
+          case "banya":
+            h = 4.0;
+            break;
+          case "garage":
+            h = 3.2;
+            break;
+          case "greenhouse":
+            h = 2.8;
+            break;
+          case "pool":
+            h = 0.15; // Sunk flat pool
+            break;
+          case "sewer_well":
+            h = 0.1;
+            break;
+          case "water_well":
+            h = 1.8;
+            break;
+          case "electric_panel":
+            h = 1.5;
+            break;
+          case "lawn":
+            h = 0.05;
+            break;
+          case "flower_bed":
+            h = 0.25;
+            break;
+          case "health_trail":
+            h = 0.05;
+            break;
+          case "garden_fence":
+            h = 1.0;
+            break;
+          case "parking":
+            h = 0.05;
+            break;
+          case "carport":
+            h = 2.6;
+            break;
+          case "water_tap":
+            h = 0.8;
+            break;
+          case "electric_outlet":
+            h = 0.6;
+            break;
+          case "irrigation":
+            h = 0.15;
+            break;
+          default:
+            h = 3.5;
+        }
       }
 
       // Check for user-uploaded photographs in SecondaryBuilding to use as Front Facade Texture!
@@ -581,41 +727,135 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
         water.position.y = 0.16;
         buildingGroup.add(water);
       } else if (type === "greenhouse") {
-        // Curved glasshouse cylinder sliced
+        // 🌿 3D Арочная поликарбонатная теплица с грядками внутри
+        const baseH = 0.2; // Высота бруса фундамента
+        const archTotalH = Math.max(2.1, h || 2.4);
+        const halfW = w / 2;
+        const wallH = 0.7; // Высота прямой боковой стенки
+
         const ghFrameMat = new THREE.MeshStandardMaterial({
-          color: "#dedede",
-          roughness: 0.1,
-          metalness: 0.9,
-          wireframe: false,
+          color: "#cbd5e1",
+          roughness: 0.2,
+          metalness: 0.8,
         });
         const ghGlassMat = new THREE.MeshStandardMaterial({
-          color: "#a0e0ff",
-          roughness: 0.05,
+          color: "#e0f2fe",
+          roughness: 0.1,
           metalness: 0.1,
           transparent: true,
-          opacity: 0.45,
+          opacity: 0.5,
           side: THREE.DoubleSide,
         });
+        const woodBaseMat = new THREE.MeshStandardMaterial({
+          color: "#78350f",
+          roughness: 0.8,
+        });
+        const soilMat = new THREE.MeshStandardMaterial({
+          color: "#3f2305",
+          roughness: 0.95,
+        });
+        const plantLeafMat = new THREE.MeshStandardMaterial({
+          color: "#15803d",
+          roughness: 0.6,
+        });
+        const tomatoMat = new THREE.MeshStandardMaterial({
+          color: "#ef4444",
+          roughness: 0.3,
+        });
 
-        // Semi-cylindrical shell
-        const domeGeo = new THREE.CylinderGeometry(w / 2, w / 2, d, 12, 1, false, 0, Math.PI);
-        domeGeo.rotateZ(Math.PI / 2);
-        domeGeo.rotateX(Math.PI / 2);
-        domeGeo.translate(0, 0, 0);
+        // 1. Фундаментный брус
+        const baseBox = new THREE.Mesh(new THREE.BoxGeometry(w, baseH, d), woodBaseMat);
+        baseBox.position.y = baseH / 2;
+        baseBox.receiveShadow = true;
+        baseBox.castShadow = true;
+        buildingGroup.add(baseBox);
 
-        const dome = new THREE.Mesh(domeGeo, ghGlassMat);
-        dome.position.y = 0.1;
-        dome.castShadow = true;
-        buildingGroup.add(dome);
+        // 2. Купол из сотового поликарбоната (ExtrudeGeometry)
+        const ghShape = new THREE.Shape();
+        ghShape.moveTo(-halfW, baseH);
+        ghShape.lineTo(-halfW, baseH + wallH);
+        ghShape.quadraticCurveTo(0, baseH + archTotalH + 0.1, halfW, baseH + wallH);
+        ghShape.lineTo(halfW, baseH);
+        ghShape.closePath();
 
-        // Ribs
-        for (let r = -d / 2; r <= d / 2; r += d / 3) {
-          const ribGeo = new THREE.CylinderGeometry(w / 2 + 0.03, w / 2 + 0.03, 0.08, 12, 1, true, 0, Math.PI);
-          ribGeo.rotateZ(Math.PI / 2);
-          ribGeo.rotateX(Math.PI / 2);
-          const rib = new THREE.Mesh(ribGeo, ghFrameMat);
-          rib.position.set(0, 0.1, r);
-          buildingGroup.add(rib);
+        const extrudeSettings = {
+          depth: d,
+          bevelEnabled: false,
+        };
+        const ghGeo = new THREE.ExtrudeGeometry(ghShape, extrudeSettings);
+        ghGeo.translate(0, 0, -d / 2);
+
+        const ghMesh = new THREE.Mesh(ghGeo, ghGlassMat);
+        ghMesh.castShadow = true;
+        ghMesh.receiveShadow = true;
+        buildingGroup.add(ghMesh);
+
+        // 3. Оцинкованные силовые дуги каркаса
+        const numRibs = Math.max(3, Math.floor(d / 0.8) + 1);
+        for (let i = 0; i < numRibs; i++) {
+          const zPos = -d / 2 + (d / (numRibs - 1)) * i;
+
+          const ribShape = new THREE.Shape();
+          ribShape.moveTo(-halfW, baseH);
+          ribShape.lineTo(-halfW, baseH + wallH);
+          ribShape.quadraticCurveTo(0, baseH + archTotalH + 0.1, halfW, baseH + wallH);
+          ribShape.lineTo(halfW, baseH);
+
+          const ribGeo = new THREE.ExtrudeGeometry(ribShape, { depth: 0.04, bevelEnabled: false });
+          ribGeo.translate(0, 0, -0.02);
+          const ribMesh = new THREE.Mesh(ribGeo, ghFrameMat);
+          ribMesh.position.z = zPos;
+          buildingGroup.add(ribMesh);
+        }
+
+        // 4. Дверные проемы на торцах (Front & Back doors)
+        const doorW = Math.min(0.8, w * 0.4);
+        const doorH = 1.7;
+        const doorFrameMat = new THREE.MeshStandardMaterial({ color: "#475569", roughness: 0.4, metalness: 0.7 });
+
+        [-d / 2 + 0.01, d / 2 - 0.01].forEach((zDoor) => {
+          const door = new THREE.Mesh(new THREE.BoxGeometry(doorW, doorH, 0.03), doorFrameMat);
+          door.position.set(0, baseH + doorH / 2, zDoor);
+          buildingGroup.add(door);
+        });
+
+        // 5. Внутренние грядки и зелень
+        const bedW = Math.max(0.4, (w - 0.5) / 2);
+        const bedL = d * 0.85;
+
+        const leftBedSoil = new THREE.Mesh(new THREE.BoxGeometry(bedW, 0.15, bedL), soilMat);
+        leftBedSoil.position.set(-halfW + bedW / 2 + 0.1, baseH + 0.075, 0);
+        buildingGroup.add(leftBedSoil);
+
+        const rightBedSoil = new THREE.Mesh(new THREE.BoxGeometry(bedW, 0.15, bedL), soilMat);
+        rightBedSoil.position.set(halfW - bedW / 2 - 0.1, baseH + 0.075, 0);
+        buildingGroup.add(rightBedSoil);
+
+        const numPlants = Math.max(2, Math.floor(bedL / 0.6));
+        for (let p = 0; p < numPlants; p++) {
+          const pZ = -bedL / 2 + (bedL / (numPlants - 1)) * p;
+
+          const pLeftGroup = new THREE.Group();
+          const bush = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 8), plantLeafMat);
+          bush.position.set(-halfW + bedW / 2 + 0.1, baseH + 0.32, pZ);
+          pLeftGroup.add(bush);
+
+          const tom = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), tomatoMat);
+          tom.position.set(-halfW + bedW / 2 + 0.12, baseH + 0.3, pZ + 0.05);
+          pLeftGroup.add(tom);
+
+          buildingGroup.add(pLeftGroup);
+
+          const pRightGroup = new THREE.Group();
+          const bushR = new THREE.Mesh(new THREE.SphereGeometry(0.18, 8, 8), plantLeafMat);
+          bushR.position.set(halfW - bedW / 2 - 0.1, baseH + 0.32, pZ);
+          pRightGroup.add(bushR);
+
+          const tomR = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), tomatoMat);
+          tomR.position.set(halfW - bedW / 2 - 0.12, baseH + 0.3, pZ - 0.05);
+          pRightGroup.add(tomR);
+
+          buildingGroup.add(pRightGroup);
         }
       } else if (type === "sewer_well") {
         const wellGeo = new THREE.CylinderGeometry(w / 2, w / 2, 0.08, 16);
@@ -749,8 +989,399 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
           const stem = new THREE.Mesh(stemGeo, stemMat);
           buildingGroup.add(stem);
         }
-      } else if (type === "pergola") {
+      } else if (isSportsOrWorkout) {
+        // 🏋️‍♂️ 3D Спортивный комплекс / Воркаут площадка
+        const metalYellowMat = new THREE.MeshStandardMaterial({ color: "#f59e0b", metalness: 0.8, roughness: 0.2 });
+        const metalBlueMat = new THREE.MeshStandardMaterial({ color: "#0284c7", metalness: 0.8, roughness: 0.2 });
+        const chromeMat = new THREE.MeshStandardMaterial({ color: "#f1f5f9", metalness: 0.95, roughness: 0.1 });
+        const rubberTileMat = new THREE.MeshStandardMaterial({ color: "#991b1b", roughness: 0.9 }); // Terracotta rubber
+        const capMat = new THREE.MeshStandardMaterial({ color: "#0f172a", roughness: 0.4 });
+        const woodBoardMat = new THREE.MeshStandardMaterial({ color: "#78350f", roughness: 0.8 });
+
+        // 1. Rubber Safety Mat Base
+        const rubberBase = new THREE.Mesh(new THREE.BoxGeometry(w, 0.04, d), rubberTileMat);
+        rubberBase.position.y = 0.02;
+        rubberBase.receiveShadow = true;
+        buildingGroup.add(rubberBase);
+
+        // 2. Main Vertical Posts (4 corner pillars for the main workout rack)
+        const pillarH = 2.4;
+        const postRadius = 0.045;
+        const rackW = Math.min(w * 0.7, 2.5);
+        const rackD = Math.min(d * 0.6, 1.2);
+
+        const postsCoords = [
+          { x: -rackW / 2, z: -rackD / 2 },
+          { x: rackW / 2, z: -rackD / 2 },
+          { x: -rackW / 2, z: rackD / 2 },
+          { x: rackW / 2, z: rackD / 2 },
+        ];
+
+        postsCoords.forEach((p) => {
+          const post = new THREE.Mesh(new THREE.CylinderGeometry(postRadius, postRadius, pillarH, 12), metalYellowMat);
+          post.position.set(p.x, pillarH / 2 + 0.04, p.z);
+          post.castShadow = true;
+          buildingGroup.add(post);
+
+          // Plastic top cap
+          const cap = new THREE.Mesh(new THREE.CylinderGeometry(postRadius + 0.01, postRadius + 0.01, 0.06, 12), capMat);
+          cap.position.set(p.x, pillarH + 0.07, p.z);
+          buildingGroup.add(cap);
+        });
+
+        // 3. Multi-level Pull-up Bars (Турники разной высоты)
+        const bar1 = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, rackW, 12), chromeMat);
+        bar1.rotation.z = Math.PI / 2;
+        bar1.position.set(0, 2.3, -rackD / 2);
+        bar1.castShadow = true;
+        buildingGroup.add(bar1);
+
+        const bar2 = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, rackW, 12), chromeMat);
+        bar2.rotation.z = Math.PI / 2;
+        bar2.position.set(0, 1.95, rackD / 2);
+        bar2.castShadow = true;
+        buildingGroup.add(bar2);
+
+        const bar3 = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, rackD, 12), chromeMat);
+        bar3.rotation.x = Math.PI / 2;
+        bar3.position.set(-rackW / 2, 1.6, 0);
+        bar3.castShadow = true;
+        buildingGroup.add(bar3);
+
+        // 4. Swedish Wall Ladder (Шведская стенка)
+        const numRungs = 7;
+        for (let r = 0; r < numRungs; r++) {
+          const ry = 0.5 + r * 0.26;
+          const rung = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, rackD, 10), chromeMat);
+          rung.rotation.x = Math.PI / 2;
+          rung.position.set(rackW / 2, ry, 0);
+          rung.castShadow = true;
+          buildingGroup.add(rung);
+        }
+
+        // 5. Monkey Bars Ladder (Рукоход)
+        const numMonkeyRungs = 6;
+        for (let m = 0; m < numMonkeyRungs; m++) {
+          const mx = -rackW / 2 + (rackW / Math.max(1, numMonkeyRungs - 1)) * m;
+          const mrung = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, rackD, 10), chromeMat);
+          mrung.rotation.x = Math.PI / 2;
+          mrung.position.set(mx, 2.38, 0);
+          mrung.castShadow = true;
+          buildingGroup.add(mrung);
+        }
+
+        // 6. Parallel Dip Bars (Брусья)
+        const dipH = 1.25;
+        const dipW = 0.55;
+        const dipL = 1.2;
+        const dipX = Math.max(-w / 2 + 0.8, -rackW / 2 - 0.7);
+
+        const dipPost1 = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, dipH, 10), metalBlueMat);
+        dipPost1.position.set(dipX, dipH / 2 + 0.04, -dipW / 2);
+        dipPost1.castShadow = true;
+        buildingGroup.add(dipPost1);
+
+        const dipPost2 = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, dipH, 10), metalBlueMat);
+        dipPost2.position.set(dipX, dipH / 2 + 0.04, dipW / 2);
+        dipPost2.castShadow = true;
+        buildingGroup.add(dipPost2);
+
+        const dipBar1 = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, dipL, 10), chromeMat);
+        dipBar1.rotation.z = Math.PI / 2;
+        dipBar1.position.set(dipX, dipH + 0.04, -dipW / 2);
+        dipBar1.castShadow = true;
+        buildingGroup.add(dipBar1);
+
+        const dipBar2 = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, dipL, 10), chromeMat);
+        dipBar2.rotation.z = Math.PI / 2;
+        dipBar2.position.set(dipX, dipH + 0.04, dipW / 2);
+        dipBar2.castShadow = true;
+        buildingGroup.add(dipBar2);
+
+        // 7. Incline Abdominal Board (Скамья для пресса)
+        const benchBoard = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.04, 0.35), woodBoardMat);
+        benchBoard.rotation.z = -0.35;
+        benchBoard.position.set(w / 3, 0.5, -d / 4);
+        benchBoard.castShadow = true;
+        buildingGroup.add(benchBoard);
+
+        const benchLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.7, 8), metalBlueMat);
+        benchLeg.position.set(w / 3 + 0.5, 0.35, -d / 4);
+        buildingGroup.add(benchLeg);
+
+        // 8. Basketball Backboard & Hoop
+        const bbBoard = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.5, 0.03), new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.3 }));
+        bbBoard.position.set(rackW / 2 + 0.02, 2.4, rackD / 2);
+        bbBoard.rotation.y = Math.PI / 2;
+        bbBoard.castShadow = true;
+        buildingGroup.add(bbBoard);
+
+        const bbRim = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.012, 8, 16), new THREE.MeshStandardMaterial({ color: "#dc2626", roughness: 0.3 }));
+        bbRim.rotation.x = Math.PI / 2;
+        bbRim.position.set(rackW / 2 + 0.2, 2.25, rackD / 2);
+        buildingGroup.add(bbRim);
+
+      } else if (isPlayground) {
+        // 🏰 3D Детская площадка с игровой башенкой, горкой и лесенкой
+        const sandMat = new THREE.MeshStandardMaterial({ color: "#fef08a", roughness: 0.95 });
+        const playWoodMat = new THREE.MeshStandardMaterial({ color: "#b45309", roughness: 0.7 });
+        const slideRedMat = new THREE.MeshStandardMaterial({ color: "#ef4444", roughness: 0.3 });
+        const roofYellowMat = new THREE.MeshStandardMaterial({ color: "#eab308", roughness: 0.4 });
+        const railBlueMat = new THREE.MeshStandardMaterial({ color: "#0284c7", roughness: 0.5 });
+
+        // Sand Base
+        const sandFloor = new THREE.Mesh(new THREE.BoxGeometry(w, 0.04, d), sandMat);
+        sandFloor.position.y = 0.02;
+        sandFloor.receiveShadow = true;
+        buildingGroup.add(sandFloor);
+
+        // Tower
+        const towerW = Math.min(w * 0.4, 1.8);
+        const towerD = Math.min(d * 0.4, 1.8);
+        const towerH = 1.2;
+
+        const pCoords = [
+          { x: -towerW / 2, z: -towerD / 2 },
+          { x: towerW / 2, z: -towerD / 2 },
+          { x: -towerW / 2, z: towerD / 2 },
+          { x: towerW / 2, z: towerD / 2 },
+        ];
+        pCoords.forEach((p) => {
+          const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.2, 0.08), playWoodMat);
+          pillar.position.set(p.x, 1.1, p.z);
+          pillar.castShadow = true;
+          buildingGroup.add(pillar);
+        });
+
+        const platform = new THREE.Mesh(new THREE.BoxGeometry(towerW, 0.06, towerD), playWoodMat);
+        platform.position.set(0, towerH, 0);
+        platform.castShadow = true;
+        buildingGroup.add(platform);
+
+        const fenceBack = new THREE.Mesh(new THREE.BoxGeometry(towerW, 0.4, 0.03), railBlueMat);
+        fenceBack.position.set(0, towerH + 0.2, -towerD / 2);
+        buildingGroup.add(fenceBack);
+
+        const fenceLeft = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.4, towerD), railBlueMat);
+        fenceLeft.position.set(-towerW / 2, towerH + 0.2, 0);
+        buildingGroup.add(fenceLeft);
+
+        const towerRoof = new THREE.Mesh(new THREE.ConeGeometry(towerW * 0.8, 0.8, 4), roofYellowMat);
+        towerRoof.rotation.y = Math.PI / 4;
+        towerRoof.position.set(0, 2.2 + 0.4, 0);
+        towerRoof.castShadow = true;
+        buildingGroup.add(towerRoof);
+
+        // Slide
+        const slideLength = 1.8;
+        const slideAngle = 0.55;
+        const slideGroup = new THREE.Group();
+        slideGroup.position.set(0, towerH, towerD / 2);
+
+        const slideTrough = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.04, slideLength), slideRedMat);
+        slideTrough.rotation.x = slideAngle;
+        slideTrough.position.set(0, -0.45, slideLength / 2 - 0.1);
+        slideTrough.castShadow = true;
+        slideGroup.add(slideTrough);
+
+        const railLeft = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.15, slideLength), slideRedMat);
+        railLeft.rotation.x = slideAngle;
+        railLeft.position.set(-0.25, -0.4, slideLength / 2 - 0.1);
+        slideGroup.add(railLeft);
+
+        const railRight = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.15, slideLength), slideRedMat);
+        railRight.rotation.x = slideAngle;
+        railRight.position.set(0.25, -0.4, slideLength / 2 - 0.1);
+        slideGroup.add(railRight);
+
+        buildingGroup.add(slideGroup);
+
+        // Steps Ladder
+        const numSteps = 5;
+        for (let s = 0; s < numSteps; s++) {
+          const sy = (towerH / numSteps) * s + 0.1;
+          const sz = -towerD / 2 - (s * 0.12);
+          const step = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.03, 0.12), playWoodMat);
+          step.position.set(0, sy, sz);
+          step.castShadow = true;
+          buildingGroup.add(step);
+        }
+
+      } else if (isSwings) {
+        // 🎠 3D Качели
+        const sWoodMat = new THREE.MeshStandardMaterial({ color: "#854d0e", roughness: 0.8 });
+        const metalFrameMat = new THREE.MeshStandardMaterial({ color: "#dc2626", metalness: 0.8, roughness: 0.2 });
+        const chainMat = new THREE.MeshStandardMaterial({ color: "#cbd5e1", metalness: 0.9, roughness: 0.1 });
+
+        // Left A-frame
+        const leftGroup = new THREE.Group();
+        const legA1 = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 2.3, 10), metalFrameMat);
+        legA1.position.set(0, 1.15, -0.45);
+        legA1.rotation.x = 0.22;
+        legA1.castShadow = true;
+        leftGroup.add(legA1);
+
+        const legA2 = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 2.3, 10), metalFrameMat);
+        legA2.position.set(0, 1.15, 0.45);
+        legA2.rotation.x = -0.22;
+        legA2.castShadow = true;
+        leftGroup.add(legA2);
+
+        const brace = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.6), metalFrameMat);
+        brace.position.set(0, 0.9, 0);
+        leftGroup.add(brace);
+
+        leftGroup.position.set(-w / 2 + 0.15, 0, 0);
+        buildingGroup.add(leftGroup);
+
+        // Right A-frame
+        const rightGroup = leftGroup.clone();
+        rightGroup.position.set(w / 2 - 0.15, 0, 0);
+        buildingGroup.add(rightGroup);
+
+        // Top horizontal beam
+        const tBeam = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, w, 12), metalFrameMat);
+        tBeam.rotation.z = Math.PI / 2;
+        tBeam.position.set(0, 2.25, 0);
+        tBeam.castShadow = true;
+        buildingGroup.add(tBeam);
+
+        // Double Swings Seats & Chains
+        const seatPositions = [-w * 0.22, w * 0.22];
+        seatPositions.forEach((sx) => {
+          const seatW = 0.45;
+          const chainL = 1.6;
+
+          const c1 = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, chainL, 6), chainMat);
+          c1.position.set(sx - seatW / 2, 2.25 - chainL / 2, 0);
+          buildingGroup.add(c1);
+
+          const c2 = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, chainL, 6), chainMat);
+          c2.position.set(sx + seatW / 2, 2.25 - chainL / 2, 0);
+          buildingGroup.add(c2);
+
+          const seat = new THREE.Mesh(new THREE.BoxGeometry(seatW + 0.06, 0.035, 0.24), sWoodMat);
+          seat.position.set(sx, 2.25 - chainL, 0);
+          seat.castShadow = true;
+          buildingGroup.add(seat);
+        });
+
+      } else if (isBonfire) {
+        // 🔥 3D Кострище / Очаг
+        const stoneMat = new THREE.MeshStandardMaterial({ color: "#78716c", roughness: 0.9 });
+        const ashMat = new THREE.MeshStandardMaterial({ color: "#1c1917", roughness: 0.95 });
+        const logMat = new THREE.MeshStandardMaterial({ color: "#451a03", roughness: 0.9 });
+        const fireMat = new THREE.MeshStandardMaterial({ 
+          color: "#f97316", 
+          roughness: 0.2, 
+          emissive: "#ef4444", 
+          emissiveIntensity: 0.8 
+        });
+
+        const radius = Math.min(w, d) / 2;
+
+        const baseArea = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 0.03, 20), stoneMat);
+        baseArea.position.y = 0.015;
+        baseArea.receiveShadow = true;
+        buildingGroup.add(baseArea);
+
+        const ringGeo = new THREE.TorusGeometry(radius * 0.45, 0.12, 8, 16);
+        ringGeo.rotateX(Math.PI / 2);
+        const stoneRing = new THREE.Mesh(ringGeo, stoneMat);
+        stoneRing.position.y = 0.12;
+        stoneRing.castShadow = true;
+        buildingGroup.add(stoneRing);
+
+        const ashBed = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.38, radius * 0.38, 0.05, 16), ashMat);
+        ashBed.position.y = 0.04;
+        buildingGroup.add(ashBed);
+
+        for (let l = 0; l < 5; l++) {
+          const angle = (l / 5) * Math.PI * 2;
+          const log = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.5, 8), logMat);
+          log.rotation.z = 0.4;
+          log.rotation.y = angle;
+          log.position.set(Math.cos(angle) * 0.1, 0.2, Math.sin(angle) * 0.1);
+          log.castShadow = true;
+          buildingGroup.add(log);
+        }
+
+        const fireFlame = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.25, 0.45, 8), fireMat);
+        fireFlame.position.y = 0.28;
+        buildingGroup.add(fireFlame);
+
+        const benchDist = radius * 0.75;
+        const benchAngles = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
+        benchAngles.forEach((a) => {
+          const logBench = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, radius * 0.6, 12), logMat);
+          logBench.rotation.z = Math.PI / 2;
+          logBench.rotation.y = a;
+          logBench.position.set(Math.cos(a) * benchDist, 0.12, Math.sin(a) * benchDist);
+          logBench.castShadow = true;
+          buildingGroup.add(logBench);
+        });
+
+      } else if (isBbq) {
+        // 🍖 3D Мангал / Барбекю
+        const metalDarkMat = new THREE.MeshStandardMaterial({ color: "#0f172a", roughness: 0.4, metalness: 0.8 });
+        const metalRoofMat = new THREE.MeshStandardMaterial({ color: "#334155", roughness: 0.3, metalness: 0.8 });
+        const woodStackMat = new THREE.MeshStandardMaterial({ color: "#78350f", roughness: 0.9 });
+        const grillGridMat = new THREE.MeshStandardMaterial({ color: "#cbd5e1", roughness: 0.2, metalness: 0.9 });
+
+        const postH = 0.8;
+        const bw = Math.min(w * 0.8, 1.4);
+        const bd = Math.min(d * 0.7, 0.6);
+
+        const bLegs = [
+          { x: -bw / 2 + 0.05, z: -bd / 2 + 0.05 },
+          { x: bw / 2 - 0.05, z: -bd / 2 + 0.05 },
+          { x: -bw / 2 + 0.05, z: bd / 2 - 0.05 },
+          { x: bw / 2 - 0.05, z: bd / 2 - 0.05 },
+        ];
+
+        bLegs.forEach((leg) => {
+          const p = new THREE.Mesh(new THREE.BoxGeometry(0.04, postH, 0.04), metalDarkMat);
+          p.position.set(leg.x, postH / 2, leg.z);
+          p.castShadow = true;
+          buildingGroup.add(p);
+        });
+
+        const trough = new THREE.Mesh(new THREE.BoxGeometry(bw, 0.22, bd), metalDarkMat);
+        trough.position.set(0, postH + 0.11, 0);
+        trough.castShadow = true;
+        buildingGroup.add(trough);
+
+        const grill = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.9, 0.02, bd * 0.85), grillGridMat);
+        grill.position.set(0, postH + 0.23, 0);
+        buildingGroup.add(grill);
+
+        const roofH = 1.6;
+        bLegs.forEach((leg) => {
+          const roofPost = new THREE.Mesh(new THREE.BoxGeometry(0.03, roofH, 0.03), metalDarkMat);
+          roofPost.position.set(leg.x, roofH / 2 + 0.1, leg.z);
+          buildingGroup.add(roofPost);
+        });
+
+        const canopyRoof = new THREE.Mesh(new THREE.ConeGeometry(Math.max(bw, bd) * 0.7, 0.4, 4), metalRoofMat);
+        canopyRoof.rotation.y = Math.PI / 4;
+        canopyRoof.position.set(0, roofH + 0.2, 0);
+        canopyRoof.castShadow = true;
+        buildingGroup.add(canopyRoof);
+
+        const log1 = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, bw * 0.7, 8), woodStackMat);
+        log1.rotation.z = Math.PI / 2;
+        log1.position.set(0, 0.1, -0.05);
+        buildingGroup.add(log1);
+
+        const log2 = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, bw * 0.7, 8), woodStackMat);
+        log2.rotation.z = Math.PI / 2;
+        log2.position.set(0, 0.1, 0.05);
+        buildingGroup.add(log2);
+
+      } else if (isPergola) {
+        // ⛩️ 3D Беседка / Пергола
         const woodMat = new THREE.MeshStandardMaterial({ color: "#a16207", roughness: 0.8 });
+        const roofMat = new THREE.MeshStandardMaterial({ color: "#78350f", roughness: 0.6 });
         const pw = 0.08;
         const corners = [
           { x: -w / 2 + pw, z: -d / 2 + pw },
@@ -780,59 +1411,12 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
         b2.castShadow = true;
         buildingGroup.add(b2);
 
-        // Cross rafters
-        const numRafters = 6;
-        for (let r = 0; r < numRafters; r++) {
-          const rx = -w / 2 + (w / (numRafters - 1)) * r;
-          const rafGeo = new THREE.BoxGeometry(0.04, 0.06, d * 1.1);
-          rafGeo.translate(rx, 2.5, 0);
-          const raf = new THREE.Mesh(rafGeo, woodMat);
-          raf.castShadow = true;
-          buildingGroup.add(raf);
-        }
-      } else if (type === "swings") {
-        const sWoodMat = new THREE.MeshStandardMaterial({ color: "#854d0e", roughness: 0.8 });
-        const ropeMat = new THREE.MeshStandardMaterial({ color: "#475569", roughness: 0.5 });
-
-        // Left A-frame
-        const leftGeo = new THREE.Group();
-        const legA1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.2, 0.06), sWoodMat);
-        legA1.position.set(0, 1.1, -0.4);
-        legA1.rotation.x = 0.2;
-        leftGeo.add(legA1);
-        const legA2 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.2, 0.06), sWoodMat);
-        legA2.position.set(0, 1.1, 0.4);
-        legA2.rotation.x = -0.2;
-        leftGeo.add(legA2);
-        leftGeo.position.set(-w / 2 + 0.1, 0, 0);
-        buildingGroup.add(leftGeo);
-
-        // Right A-frame
-        const rightGeo = leftGeo.clone();
-        rightGeo.position.set(w / 2 - 0.1, 0, 0);
-        buildingGroup.add(rightGeo);
-
-        // Top horizontal beam
-        const tBeamGeo = new THREE.BoxGeometry(w, 0.06, 0.06);
-        tBeamGeo.translate(0, 2.15, 0);
-        const tBeam = new THREE.Mesh(tBeamGeo, sWoodMat);
-        tBeam.castShadow = true;
-        buildingGroup.add(tBeam);
-
-        // Swing Seat chains & board
-        const seatWidth = w * 0.4;
-        const chain1 = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 1.5, 6), ropeMat);
-        chain1.position.set(-seatWidth / 2, 1.35, 0);
-        buildingGroup.add(chain1);
-
-        const chain2 = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 1.5, 6), ropeMat);
-        chain2.position.set(seatWidth / 2, 1.35, 0);
-        buildingGroup.add(chain2);
-
-        const sBoard = new THREE.Mesh(new THREE.BoxGeometry(seatWidth * 1.1, 0.03, 0.35), sWoodMat);
-        sBoard.position.set(0, 0.6, 0);
-        sBoard.castShadow = true;
-        buildingGroup.add(sBoard);
+        // Pyramid Roof
+        const pRoof = new THREE.Mesh(new THREE.ConeGeometry(Math.max(w, d) * 0.7, 0.8, 4), roofMat);
+        pRoof.rotation.y = Math.PI / 4;
+        pRoof.position.set(0, 2.8, 0);
+        pRoof.castShadow = true;
+        buildingGroup.add(pRoof);
       } else if (type === "health_trail") {
         // Natural pebble/wood walkway
         const pathGeo = new THREE.BoxGeometry(w, 0.02, d);
@@ -855,42 +1439,137 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
           stepMesh.receiveShadow = true;
           buildingGroup.add(stepMesh);
         }
-      } else if (type === "garden_fence") {
-        const fenceWood = new THREE.MeshStandardMaterial({ color: "#d6cbbe", roughness: 0.8 });
-        // 2 rails
-        const r1Geo = new THREE.BoxGeometry(w, 0.03, 0.04);
-        r1Geo.translate(0, 0.3, 0);
-        const r1 = new THREE.Mesh(r1Geo, fenceWood);
-        r1.castShadow = true;
-        buildingGroup.add(r1);
+      } else if (type === "wicket" || b.gateType === "wicket" || (b.itemType === "gate" && type === "wicket")) {
+        // 🚪 3D Калитка
+        const matHex = getFenceColor(b.gateMaterial || b.fenceMaterial || globalFenceMaterial);
+        const frameMat = new THREE.MeshStandardMaterial({ color: "#1e293b", roughness: 0.4 });
+        const doorMat = new THREE.MeshStandardMaterial({ color: matHex, roughness: 0.6 });
 
-        const r2Geo = new THREE.BoxGeometry(w, 0.03, 0.04);
-        r2Geo.translate(0, 0.7, 0);
-        const r2 = new THREE.Mesh(r2Geo, fenceWood);
-        r2.castShadow = true;
-        buildingGroup.add(r2);
+        // 2 Side Posts with caps
+        const postLeft = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.9, 0.12), frameMat);
+        postLeft.position.set(-w / 2 + 0.06, 0.95, 0);
+        postLeft.castShadow = true;
+        buildingGroup.add(postLeft);
+
+        const postRight = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.9, 0.12), frameMat);
+        postRight.position.set(w / 2 - 0.06, 0.95, 0);
+        postRight.castShadow = true;
+        buildingGroup.add(postRight);
+
+        // Openable Wicket Door Leaf (angled open 35 deg)
+        const doorLeafGroup = new THREE.Group();
+        doorLeafGroup.position.set(-w / 2 + 0.12, 0.95, 0);
+        doorLeafGroup.rotation.y = Math.PI / 5; // 36 deg open
+
+        const doorLeaf = new THREE.Mesh(new THREE.BoxGeometry(w - 0.28, 1.7, 0.05), doorMat);
+        doorLeaf.position.set((w - 0.28) / 2, 0, 0);
+        doorLeaf.castShadow = true;
+        doorLeafGroup.add(doorLeaf);
+
+        // Golden Handle
+        const handleMat = new THREE.MeshStandardMaterial({ color: "#d97706", metalness: 0.8, roughness: 0.2 });
+        const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.15), handleMat);
+        handle.rotation.z = Math.PI / 2;
+        handle.position.set(w - 0.35, 0, 0.05);
+        doorLeafGroup.add(handle);
+
+        buildingGroup.add(doorLeafGroup);
+
+      } else if (type === "gate_swing" || b.gateType === "gate_swing") {
+        // 🚪🚪 3D Распашные Ворота
+        const matHex = getFenceColor(b.gateMaterial || b.fenceMaterial || globalFenceMaterial);
+        const postMat = new THREE.MeshStandardMaterial({ color: "#0f172a", roughness: 0.3 });
+        const leafMat = new THREE.MeshStandardMaterial({ color: matHex, roughness: 0.5 });
+
+        // Heavy Pillars
+        const pillar1 = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.2, 0.25), postMat);
+        pillar1.position.set(-w / 2 + 0.125, 1.1, 0);
+        pillar1.castShadow = true;
+        buildingGroup.add(pillar1);
+
+        const pillar2 = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.2, 0.25), postMat);
+        pillar2.position.set(w / 2 - 0.125, 1.1, 0);
+        pillar2.castShadow = true;
+        buildingGroup.add(pillar2);
+
+        // Left Gate Leaf (open outward -40 deg)
+        const leftLeafGroup = new THREE.Group();
+        leftLeafGroup.position.set(-w / 2 + 0.25, 1.05, 0);
+        leftLeafGroup.rotation.y = -Math.PI / 4.5;
+        const leftLeaf = new THREE.Mesh(new THREE.BoxGeometry((w - 0.5) / 2, 1.9, 0.06), leafMat);
+        leftLeaf.position.set((w - 0.5) / 4, 0, 0);
+        leftLeaf.castShadow = true;
+        leftLeafGroup.add(leftLeaf);
+        buildingGroup.add(leftLeafGroup);
+
+        // Right Gate Leaf (open outward +40 deg)
+        const rightLeafGroup = new THREE.Group();
+        rightLeafGroup.position.set(w / 2 - 0.25, 1.05, 0);
+        rightLeafGroup.rotation.y = Math.PI / 4.5;
+        const rightLeaf = new THREE.Mesh(new THREE.BoxGeometry((w - 0.5) / 2, 1.9, 0.06), leafMat);
+        rightLeaf.position.set(-(w - 0.5) / 4, 0, 0);
+        rightLeaf.castShadow = true;
+        rightLeafGroup.add(rightLeaf);
+        buildingGroup.add(rightLeafGroup);
+
+      } else if (type === "gate_sliding" || b.gateType === "gate_sliding") {
+        // 🚪➡️ 3D Откатные Ворота
+        const matHex = getFenceColor(b.gateMaterial || b.fenceMaterial || globalFenceMaterial);
+        const postMat = new THREE.MeshStandardMaterial({ color: "#1e293b", roughness: 0.4 });
+        const leafMat = new THREE.MeshStandardMaterial({ color: matHex, roughness: 0.5 });
+
+        // Ground Guide Rail
+        const railMat = new THREE.MeshStandardMaterial({ color: "#64748b", metalness: 0.8, roughness: 0.3 });
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(w * 1.8, 0.03, 0.08), railMat);
+        rail.position.set(w * 0.2, 0.015, 0);
+        buildingGroup.add(rail);
+
+        // Electric Drive Motor Box
+        const motorMat = new THREE.MeshStandardMaterial({ color: "#334155", roughness: 0.3 });
+        const motor = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.4, 0.3), motorMat);
+        motor.position.set(w / 2 - 0.2, 0.2, 0.2);
+        buildingGroup.add(motor);
+
+        // Support Roller Pillars
+        const p1 = new THREE.Mesh(new THREE.BoxGeometry(0.15, 2.2, 0.15), postMat);
+        p1.position.set(-w / 2 + 0.1, 1.1, 0);
+        p1.castShadow = true;
+        buildingGroup.add(p1);
+
+        const p2 = new THREE.Mesh(new THREE.BoxGeometry(0.15, 2.2, 0.15), postMat);
+        p2.position.set(w / 2 - 0.1, 1.1, 0);
+        p2.castShadow = true;
+        buildingGroup.add(p2);
+
+        // Sliding Gate Panel (shifted horizontally)
+        const panelGroup = new THREE.Group();
+        panelGroup.position.set(w * 0.25, 1.1, 0); // Open 50%
+        const panel = new THREE.Mesh(new THREE.BoxGeometry(w - 0.2, 2.0, 0.06), leafMat);
+        panel.castShadow = true;
+        panelGroup.add(panel);
+        buildingGroup.add(panelGroup);
+
+      } else if (type === "fence_wall" || type === "garden_fence" || b.itemType === "fence") {
+        const matHex = getFenceColor(b.fenceMaterial || globalFenceMaterial);
+        const fenceMat = new THREE.MeshStandardMaterial({ color: matHex, roughness: 0.7 });
 
         // End posts
-        const post1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.0, 0.06), fenceWood);
-        post1.position.set(-w / 2 + 0.03, 0.5, 0);
+        const post1 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.5, 0.1), fenceMat);
+        post1.position.set(-w / 2 + 0.05, 0.75, 0);
         post1.castShadow = true;
         buildingGroup.add(post1);
 
-        const post2 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.0, 0.06), fenceWood);
-        post2.position.set(w / 2 - 0.03, 0.5, 0);
+        const post2 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.5, 0.1), fenceMat);
+        post2.position.set(w / 2 - 0.05, 0.75, 0);
         post2.castShadow = true;
         buildingGroup.add(post2);
 
-        // Pickers
-        const numPickers = 10;
-        for (let p = 1; p < numPickers - 1; p++) {
-          const px = -w / 2 + (w / (numPickers - 1)) * p;
-          const pickerGeo = new THREE.BoxGeometry(0.04, 0.8, 0.02);
-          pickerGeo.translate(px, 0.45, 0);
-          const picker = new THREE.Mesh(pickerGeo, fenceWood);
-          picker.castShadow = true;
-          buildingGroup.add(picker);
-        }
+        // Main Fence Panel Body
+        const wallGeo = new THREE.BoxGeometry(w - 0.2, 1.3, 0.08);
+        const wallMesh = new THREE.Mesh(wallGeo, fenceMat);
+        wallMesh.position.set(0, 0.75, 0);
+        wallMesh.castShadow = true;
+        buildingGroup.add(wallMesh);
       } else if (type === "parking") {
         // Tarmac platform
         const parkGeo = new THREE.BoxGeometry(w, 0.02, d);
@@ -1022,38 +1701,90 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
         sprayGeo.translate(0, 0.3, 0);
         const spray = new THREE.Mesh(sprayGeo, waterSprayMat);
         buildingGroup.add(spray);
+      } else if (b.shapeType && b.shapeType !== "rect") {
+        // Non-rectangular building 3D Extrude Geometry (L-shape, U-shape, T-shape, circle, polygon)
+        const vertices = getBuildingVerticesMeters(b);
+        const shape = new THREE.Shape();
+        vertices.forEach((v, idx) => {
+          const sx = v.x - w / 2;
+          const sy = v.y - d / 2;
+          if (idx === 0) shape.moveTo(sx, sy);
+          else shape.lineTo(sx, sy);
+        });
+        shape.closePath();
+
+        const extrudeSettings = {
+          depth: h,
+          bevelEnabled: true,
+          bevelSegments: 2,
+          steps: 1,
+          bevelSize: 0.05,
+          bevelThickness: 0.05
+        };
+
+        const extrudedGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+        extrudedGeo.rotateX(-Math.PI / 2);
+
+        const wallMat = new THREE.MeshStandardMaterial({
+          color: hexColor,
+          roughness: 0.7,
+          metalness: 0.1
+        });
+
+        const extrudedMesh = new THREE.Mesh(extrudedGeo, wallMat);
+        extrudedMesh.castShadow = true;
+        extrudedMesh.receiveShadow = true;
+        buildingGroup.add(extrudedMesh);
+
+        // Extruded roof cap for non-rectangular shape
+        const roofShapeGeo = new THREE.ExtrudeGeometry(shape, { depth: 0.4, bevelEnabled: false });
+        roofShapeGeo.rotateX(-Math.PI / 2);
+        const roofMat = new THREE.MeshStandardMaterial({ color: "#854d0e", roughness: 0.6 });
+        const roofMesh = new THREE.Mesh(roofShapeGeo, roofMat);
+        roofMesh.position.y = h;
+        roofMesh.castShadow = true;
+        buildingGroup.add(roofMesh);
       } else {
-        // Standard Building Box with walls & roof
-        const boxGeo = new THREE.BoxGeometry(w, h, d);
-        boxGeo.translate(0, h / 2, 0);
+        // Advanced Architectural Building with Wall Materials, Plinth, Custom Roofs, Facade Openings & Cutaway Interior
+        const style = b.architecturalStyle;
+        const wallMatType = style?.wallMaterial || (type === "banya" ? "wood_timber" : "brick_red");
+        const wallColor = style?.wallColor || hexColor;
+        const matConfig = WALL_MATERIALS.find((m) => m.id === wallMatType);
+
+        // 1. Plinth (Цокольное основание)
+        const plinthH = Math.min(0.6, style?.plinthHeightMeters ?? 0.35);
+        const plinthColor = style?.plinthColor || "#334155";
+        const plinthMat = new THREE.MeshStandardMaterial({
+          color: plinthColor,
+          roughness: 0.9,
+          metalness: 0.05,
+        });
+        const plinthMesh = new THREE.Mesh(new THREE.BoxGeometry(w + 0.08, plinthH, d + 0.08), plinthMat);
+        plinthMesh.position.y = plinthH / 2;
+        plinthMesh.castShadow = true;
+        plinthMesh.receiveShadow = true;
+        buildingGroup.add(plinthMesh);
+
+        // 2. Main Building Walls
+        const mainWallH = Math.max(1.5, h - plinthH);
+        const boxGeo = new THREE.BoxGeometry(w, mainWallH, d);
+        boxGeo.translate(0, plinthH + mainWallH / 2, 0);
+
+        const wallMat = new THREE.MeshStandardMaterial({
+          color: wallColor,
+          roughness: matConfig?.roughness ?? 0.75,
+          metalness: matConfig?.metalness ?? 0.1,
+        });
 
         let materials: THREE.Material[];
-
         if (facadeTexture) {
-          // If we have a custom photo, load it on the front face (face index 4 is usually positive Z facade)
-          const sideMat = new THREE.MeshStandardMaterial({ color: hexColor, roughness: 0.7, metalness: 0.1 });
           const frontMat = new THREE.MeshStandardMaterial({
             map: facadeTexture,
             roughness: 0.5,
             metalness: 0.1,
           });
-
-          // Material array order in ThreeJS BoxGeometry: [right, left, top, bottom, front, back]
-          materials = [
-            sideMat, // right (+X)
-            sideMat, // left (-X)
-            sideMat, // top (+Y)
-            sideMat, // bottom (-Y)
-            frontMat, // front (+Z) -> facade
-            sideMat,  // back (-Z)
-          ];
+          materials = [wallMat, wallMat, wallMat, wallMat, frontMat, wallMat];
         } else {
-          // Standard wall material
-          const wallMat = new THREE.MeshStandardMaterial({
-            color: hexColor,
-            roughness: 0.7,
-            metalness: 0.1,
-          });
           materials = [wallMat, wallMat, wallMat, wallMat, wallMat, wallMat];
         }
 
@@ -1062,43 +1793,355 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
         walls.receiveShadow = true;
         buildingGroup.add(walls);
 
-        // Add visual window/doors frames to make it look highly stylized and realistic
-        const frameMat = new THREE.MeshStandardMaterial({ color: "#222", roughness: 0.5 });
-        const doorGeo = new THREE.BoxGeometry(0.8, 1.8, 0.05);
-        const door = new THREE.Mesh(doorGeo, frameMat);
-        door.position.set(0, 0.9, d / 2 + 0.03); // center facade door
-        buildingGroup.add(door);
+        // 3. Facade Openings (Оконные и дверные конструкции)
+        const frameColor = style?.windowFrameColor || "#1e293b";
+        const doorColor = style?.doorColor || "#451a03";
+        const frameMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.4 });
+        const glassMat = new THREE.MeshStandardMaterial({
+          color: "#cce6ff",
+          roughness: 0.1,
+          metalness: 0.85,
+          transparent: true,
+          opacity: 0.65,
+        });
+        const doorMat = new THREE.MeshStandardMaterial({ color: doorColor, roughness: 0.5 });
+        const handleMat = new THREE.MeshStandardMaterial({ color: "#eab308", metalness: 0.9, roughness: 0.2 });
 
-        const windowGeo = new THREE.BoxGeometry(1.0, 0.8, 0.05);
-        const winLeft = new THREE.Mesh(windowGeo, frameMat);
-        winLeft.position.set(-w / 3, h / 2, d / 2 + 0.03);
-        buildingGroup.add(winLeft);
+        const openingsList: FacadeOpening[] = (style?.openings && style.openings.length > 0)
+          ? style.openings
+          : [
+              {
+                id: "default_door",
+                type: "door_single",
+                facadeSide: "front",
+                offsetMeters: Math.max(0.2, w / 2 - 0.5),
+                elevationMeters: 0,
+                widthMeters: 0.95,
+                heightMeters: 2.1,
+              },
+              {
+                id: "default_win1",
+                type: "window_double",
+                facadeSide: "front",
+                offsetMeters: Math.max(0.3, w * 0.15),
+                elevationMeters: 0.9,
+                widthMeters: 1.2,
+                heightMeters: 1.4,
+              },
+              ...(w > 4.5
+                ? [
+                    {
+                      id: "default_win2",
+                      type: "window_double" as const,
+                      facadeSide: "front" as const,
+                      offsetMeters: Math.max(2.8, w * 0.7),
+                      elevationMeters: 0.9,
+                      widthMeters: 1.2,
+                      heightMeters: 1.4,
+                    },
+                  ]
+                : []),
+            ];
 
-        const winRight = new THREE.Mesh(windowGeo, frameMat);
-        winRight.position.set(w / 3, h / 2, d / 2 + 0.03);
-        buildingGroup.add(winRight);
+        openingsList.forEach((op) => {
+          const isDoor = op.type.includes("door");
+          const ow = op.widthMeters || 1.0;
+          const oh = op.heightMeters || 1.4;
+          const elev = plinthH + (op.elevationMeters || 0);
 
-        // Add 3D Pitched Roof for residential house / banya / guest house
-        if (type === "house" || type === "banya" || type === "guest_house" || type === "other") {
-          const roofHeight = type === "house" ? 2.5 : 1.5;
-          const roofGeo = new THREE.ConeGeometry(Math.max(w, d) * 0.75, roofHeight, 4);
-          roofGeo.rotateY(Math.PI / 4); // Align square base
-          roofGeo.translate(0, h + roofHeight / 2, 0);
+          let posX = 0;
+          let posZ = 0;
+          let rotY = 0;
 
-          const roofMat = new THREE.MeshStandardMaterial({ color: "#9a2a2a", roughness: 0.5 }); // Rustic tile-red roof
-          const roof = new THREE.Mesh(roofGeo, roofMat);
-          roof.castShadow = true;
-          buildingGroup.add(roof);
+          if (op.facadeSide === "front") {
+            posX = -w / 2 + op.offsetMeters + ow / 2;
+            posZ = d / 2 + 0.025;
+            rotY = 0;
+          } else if (op.facadeSide === "back") {
+            posX = w / 2 - op.offsetMeters - ow / 2;
+            posZ = -d / 2 - 0.025;
+            rotY = Math.PI;
+          } else if (op.facadeSide === "left") {
+            posX = -w / 2 - 0.025;
+            posZ = -d / 2 + op.offsetMeters + ow / 2;
+            rotY = -Math.PI / 2;
+          } else {
+            posX = w / 2 + 0.025;
+            posZ = d / 2 - op.offsetMeters - ow / 2;
+            rotY = Math.PI / 2;
+          }
+
+          const opGroup = new THREE.Group();
+          opGroup.position.set(posX, elev + oh / 2, posZ);
+          opGroup.rotation.y = rotY;
+
+          if (isDoor) {
+            // Door frame
+            const dFrame = new THREE.Mesh(new THREE.BoxGeometry(ow + 0.06, oh + 0.04, 0.06), frameMat);
+            opGroup.add(dFrame);
+
+            // Door leaf
+            const dLeaf = new THREE.Mesh(new THREE.BoxGeometry(ow, oh, 0.04), doorMat);
+            dLeaf.position.z = 0.01;
+            opGroup.add(dLeaf);
+
+            // Door handle
+            const dHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.12, 8), handleMat);
+            dHandle.rotation.z = Math.PI / 2;
+            dHandle.position.set(ow / 2 - 0.12, 0, 0.045);
+            opGroup.add(dHandle);
+
+            if (op.type === "door_glass") {
+              const dGlass = new THREE.Mesh(new THREE.BoxGeometry(ow - 0.2, oh - 0.3, 0.02), glassMat);
+              dGlass.position.z = 0.02;
+              opGroup.add(dGlass);
+            }
+          } else {
+            // Window Frame
+            const wFrame = new THREE.Mesh(new THREE.BoxGeometry(ow, oh, 0.06), frameMat);
+            opGroup.add(wFrame);
+
+            // Glass pane
+            const wGlass = new THREE.Mesh(new THREE.BoxGeometry(ow - 0.12, oh - 0.12, 0.02), glassMat);
+            wGlass.position.z = 0.01;
+            opGroup.add(wGlass);
+
+            // Mullion divider
+            if (op.type === "window_double" || op.type === "window_triple") {
+              const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.04, oh - 0.1, 0.04), frameMat);
+              mullion.position.z = 0.015;
+              opGroup.add(mullion);
+            }
+
+            // Window sill ledge (отлив)
+            const sill = new THREE.Mesh(new THREE.BoxGeometry(ow + 0.1, 0.04, 0.1), frameMat);
+            sill.position.set(0, -oh / 2, 0.04);
+            opGroup.add(sill);
+          }
+
+          buildingGroup.add(opGroup);
+        });
+
+        // 4. Roof Construction (or Cutaway View)
+        if (!isCutawayView) {
+          const roofType =
+            style?.roofType ||
+            (type === "garage"
+              ? "shed"
+              : type === "house" || type === "banya" || type === "other"
+              ? "gable"
+              : "pyramid");
+          const roofMatType = style?.roofMaterial || "metal_tile";
+          const roofColor = style?.roofColor || "#7f1d1d";
+          const roofHeight = style?.roofHeightMeters ?? (type === "house" ? 2.4 : 1.6);
+          const roofMatConfig = ROOF_MATERIALS.find((m) => m.id === roofMatType);
+          const roofMat = new THREE.MeshStandardMaterial({
+            color: roofColor,
+            roughness: roofMatConfig?.roughness ?? 0.5,
+            metalness: roofMatConfig?.metalness ?? 0.3,
+          });
+
+          const overhang = 0.25; // 25cm eave overhang
+
+          if (roofType === "gable") {
+            // 🏠 Classic Gable Roof (Двускатная с фронтонами и свесами)
+            const rw = w + overhang * 2;
+            const rd = d + overhang * 2;
+            const slopeLen = Math.sqrt(Math.pow(rw / 2, 2) + Math.pow(roofHeight, 2));
+            const angle = Math.atan2(roofHeight, rw / 2);
+
+            // Left slope
+            const leftSlope = new THREE.Mesh(new THREE.BoxGeometry(slopeLen, 0.12, rd), roofMat);
+            leftSlope.position.set(-rw / 4, h + roofHeight / 2, 0);
+            leftSlope.rotation.z = angle;
+            leftSlope.castShadow = true;
+            buildingGroup.add(leftSlope);
+
+            // Right slope
+            const rightSlope = new THREE.Mesh(new THREE.BoxGeometry(slopeLen, 0.12, rd), roofMat);
+            rightSlope.position.set(rw / 4, h + roofHeight / 2, 0);
+            rightSlope.rotation.z = -angle;
+            rightSlope.castShadow = true;
+            buildingGroup.add(rightSlope);
+
+            // Ridge cap (конек)
+            const ridge = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.08, rd), roofMat);
+            ridge.position.set(0, h + roofHeight + 0.02, 0);
+            buildingGroup.add(ridge);
+
+            // Gable Triangular End Walls (фронтоны)
+            [-d / 2 + 0.01, d / 2 - 0.01].forEach((gz) => {
+              const triShape = new THREE.Shape();
+              triShape.moveTo(-w / 2, 0);
+              triShape.lineTo(w / 2, 0);
+              triShape.lineTo(0, roofHeight);
+              triShape.closePath();
+              const triGeo = new THREE.ShapeGeometry(triShape);
+              const gableTri = new THREE.Mesh(triGeo, wallMat);
+              gableTri.position.set(0, h, gz);
+              buildingGroup.add(gableTri);
+            });
+          } else if (roofType === "shed") {
+            // 📐 Modern Shed Roof (Односкатная)
+            const rw = w + overhang * 2;
+            const rd = d + overhang * 2;
+            const slopeLen = Math.sqrt(Math.pow(rd, 2) + Math.pow(roofHeight, 2));
+            const angle = Math.atan2(roofHeight, rd);
+
+            const shedRoof = new THREE.Mesh(new THREE.BoxGeometry(rw, 0.12, slopeLen), roofMat);
+            shedRoof.position.set(0, h + roofHeight / 2, 0);
+            shedRoof.rotation.x = angle;
+            shedRoof.castShadow = true;
+            buildingGroup.add(shedRoof);
+          } else if (roofType === "flat") {
+            // 🏢 Flat Roof with Parapet (Плоская с парапетом)
+            const parapetH = 0.35;
+            const parapetThick = 0.15;
+            const parapetMat = wallMat;
+
+            const pFront = new THREE.Mesh(new THREE.BoxGeometry(w, parapetH, parapetThick), parapetMat);
+            pFront.position.set(0, h + parapetH / 2, d / 2 - parapetThick / 2);
+            buildingGroup.add(pFront);
+
+            const pBack = new THREE.Mesh(new THREE.BoxGeometry(w, parapetH, parapetThick), parapetMat);
+            pBack.position.set(0, h + parapetH / 2, -d / 2 + parapetThick / 2);
+            buildingGroup.add(pBack);
+
+            const pLeft = new THREE.Mesh(new THREE.BoxGeometry(parapetThick, parapetH, d), parapetMat);
+            pLeft.position.set(-w / 2 + parapetThick / 2, h + parapetH / 2, 0);
+            buildingGroup.add(pLeft);
+
+            const pRight = new THREE.Mesh(new THREE.BoxGeometry(parapetThick, parapetH, d), parapetMat);
+            pRight.position.set(w / 2 - parapetThick / 2, h + parapetH / 2, 0);
+            buildingGroup.add(pRight);
+
+            const deck = new THREE.Mesh(
+              new THREE.BoxGeometry(w - parapetThick * 2, 0.05, d - parapetThick * 2),
+              roofMat
+            );
+            deck.position.set(0, h + 0.08, 0);
+            buildingGroup.add(deck);
+          } else if (roofType === "mansard") {
+            // 🏘️ Mansard Roof (Мансардная ломаная)
+            const rw = w + overhang;
+            const rd = d + overhang;
+            const lowerH = roofHeight * 0.65;
+            const upperH = roofHeight * 0.35;
+
+            const lowerRoof = new THREE.Mesh(
+              new THREE.ConeGeometry(Math.max(rw, rd) * 0.75, lowerH, 4),
+              roofMat
+            );
+            lowerRoof.rotation.y = Math.PI / 4;
+            lowerRoof.position.set(0, h + lowerH / 2, 0);
+            buildingGroup.add(lowerRoof);
+
+            const upperRoof = new THREE.Mesh(
+              new THREE.ConeGeometry(Math.max(rw, rd) * 0.5, upperH, 4),
+              roofMat
+            );
+            upperRoof.rotation.y = Math.PI / 4;
+            upperRoof.position.set(0, h + lowerH + upperH / 2, 0);
+            buildingGroup.add(upperRoof);
+          } else if (roofType === "hipped") {
+            // 🏰 Hipped Roof (Вальмовая)
+            const coneGeo = new THREE.ConeGeometry(Math.max(w, d) * 0.75, roofHeight, 4);
+            coneGeo.rotateY(Math.PI / 4);
+            coneGeo.scale(w / Math.max(w, d), 1, d / Math.max(w, d));
+            const hippedMesh = new THREE.Mesh(coneGeo, roofMat);
+            hippedMesh.position.set(0, h + roofHeight / 2, 0);
+            hippedMesh.castShadow = true;
+            buildingGroup.add(hippedMesh);
+          } else {
+            // 🎪 Pyramid Roof (Шатровая)
+            const pyrGeo = new THREE.ConeGeometry(Math.max(w, d) * 0.72, roofHeight, 4);
+            pyrGeo.rotateY(Math.PI / 4);
+            const pyrMesh = new THREE.Mesh(pyrGeo, roofMat);
+            pyrMesh.position.set(0, h + roofHeight / 2, 0);
+            pyrMesh.castShadow = true;
+            buildingGroup.add(pyrMesh);
+          }
         }
 
-        // Gazebo roof
-        if (type === "gazebo") {
-          const roofGeo = new THREE.ConeGeometry(w * 0.6, 1.2, 6);
-          roofGeo.translate(0, h + 0.6, 0);
-          const roofMat = new THREE.MeshStandardMaterial({ color: "#304030", roughness: 0.7 });
-          const roof = new THREE.Mesh(roofGeo, roofMat);
-          roof.castShadow = true;
-          buildingGroup.add(roof);
+        // 5. 3D Interior Floor Plan & Rooms Cutaway Visualization
+        if (isCutawayView && b.floorPlan && b.floorPlan.rooms && b.floorPlan.rooms.length > 0) {
+          const interiorGroup = new THREE.Group();
+
+          // Floor slab
+          const floorMat = new THREE.MeshStandardMaterial({ color: "#f1f5f9", roughness: 0.6 });
+          const floorSlab = new THREE.Mesh(new THREE.BoxGeometry(w - 0.2, 0.05, d - 0.2), floorMat);
+          floorSlab.position.set(0, plinthH + 0.025, 0);
+          interiorGroup.add(floorSlab);
+
+          // Partition walls
+          const partWallMat = new THREE.MeshStandardMaterial({ color: "#e2e8f0", roughness: 0.7 });
+          const partWallH = 2.2;
+
+          b.floorPlan.rooms.forEach((room) => {
+            const rColor = room.color || "#fef3c7";
+            const rMat = new THREE.MeshStandardMaterial({
+              color: rColor,
+              roughness: 0.5,
+              transparent: true,
+              opacity: 0.7,
+            });
+            const rMesh = new THREE.Mesh(
+              new THREE.BoxGeometry(room.wMeters - 0.08, 0.02, room.hMeters - 0.08),
+              rMat
+            );
+            const rx = -w / 2 + room.xMeters + room.wMeters / 2;
+            const rz = -d / 2 + room.yMeters + room.hMeters / 2;
+            rMesh.position.set(rx, plinthH + 0.04, rz);
+            interiorGroup.add(rMesh);
+
+            const pWallGeo = new THREE.BoxGeometry(room.wMeters, partWallH, 0.08);
+            const pWall = new THREE.Mesh(pWallGeo, partWallMat);
+            pWall.position.set(rx, plinthH + partWallH / 2, -d / 2 + room.yMeters + room.hMeters);
+            interiorGroup.add(pWall);
+          });
+
+          // Interior Elements & Equipment in 3D
+          if (b.floorPlan.elements) {
+            b.floorPlan.elements.forEach((el) => {
+              const elX = -w / 2 + el.xMeters + el.wMeters / 2;
+              const elZ = -d / 2 + el.yMeters + el.hMeters / 2;
+              const isSocket = el.type.includes("socket");
+              const isPlumbing = el.type.includes("water");
+              const isAC = el.type.includes("ac");
+
+              if (isSocket) {
+                const sockMat = new THREE.MeshStandardMaterial({
+                  color: "#f59e0b",
+                  emissive: "#f59e0b",
+                  emissiveIntensity: 0.6,
+                });
+                const sock = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.18), sockMat);
+                sock.position.set(elX, plinthH + 0.3, elZ);
+                interiorGroup.add(sock);
+              } else if (isPlumbing) {
+                const wMat = new THREE.MeshStandardMaterial({
+                  color: "#0284c7",
+                  emissive: "#0284c7",
+                  emissiveIntensity: 0.6,
+                });
+                const wPoint = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.35, 8), wMat);
+                wPoint.position.set(elX, plinthH + 0.18, elZ);
+                interiorGroup.add(wPoint);
+              } else if (isAC) {
+                const acMat = new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.3 });
+                const ac = new THREE.Mesh(new THREE.BoxGeometry(el.wMeters, 0.25, 0.2), acMat);
+                ac.position.set(elX, plinthH + 1.8, elZ);
+                interiorGroup.add(ac);
+              } else {
+                const furnMat = new THREE.MeshStandardMaterial({ color: "#94a3b8", roughness: 0.6 });
+                const furn = new THREE.Mesh(new THREE.BoxGeometry(el.wMeters, 0.45, el.hMeters), furnMat);
+                furn.position.set(elX, plinthH + 0.225, elZ);
+                interiorGroup.add(furn);
+              }
+            });
+          }
+
+          buildingGroup.add(interiorGroup);
         }
       }
 
@@ -1210,7 +2253,7 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
       group.add(plantGroup);
       meshMapRef.current.set(p.id, plantGroup);
     });
-  }, [planBuildings, plantNodes, secondaryBuildings, W, H, isSceneReady]);
+  }, [planBuildings, plantNodes, secondaryBuildings, W, H, isSceneReady, isCutawayView]);
 
   // Focus Camera smoothly onto an object
   const focusCameraOnObject = (id: string) => {
@@ -1290,6 +2333,18 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
           </h2>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsCutawayView(!isCutawayView)}
+            className={`p-1.5 rounded-lg cursor-pointer transition text-xs font-bold flex items-center gap-1.5 ${
+              isCutawayView
+                ? "bg-amber-500 text-neutral-950 font-black shadow-md"
+                : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white"
+            }`}
+            title="Снять кровлю и показать внутренние комнаты и сети"
+          >
+            <Eye className="w-3.5 h-3.5" />
+            <span>{isCutawayView ? "3D Разрез активен" : "Снять крышу (3D разрез)"}</span>
+          </button>
           <button
             onClick={handleResetCamera}
             className="p-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white rounded-lg cursor-pointer transition text-xs font-bold flex items-center gap-1"
@@ -1455,6 +2510,78 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
                   </div>
                 )}
 
+                {selectedObjectType === "building" && (() => {
+                  const bObj = planBuildings.find((x) => x.id === selectedObjectId);
+                  if (!bObj) return null;
+                  const arch = bObj.architecturalStyle;
+                  const wallMat = WALL_MATERIALS.find((m) => m.id === arch?.wallMaterial)?.label || "Красный кирпич";
+                  const roofType = ROOF_TYPES.find((r) => r.id === arch?.roofType)?.label || "Двускатная";
+                  const openingsCount = arch?.openings?.length ?? 3;
+                  const roomsCount = bObj.floorPlan?.rooms?.length ?? 0;
+
+                  return (
+                    <div className="space-y-2 border-t border-neutral-800 pt-2.5">
+                      <span className="text-[9px] font-black uppercase text-amber-500 block">
+                        3D Архитектура и внутренняя планировка:
+                      </span>
+
+                      <div className="p-2.5 rounded-xl bg-neutral-900 border border-neutral-800 space-y-1.5 text-[11px]">
+                        <div className="flex items-center justify-between">
+                          <span className="text-neutral-400">Стены:</span>
+                          <span className="font-bold text-white flex items-center gap-1.5">
+                            <span
+                              className="w-2.5 h-2.5 rounded-full border border-white/20 inline-block"
+                              style={{ backgroundColor: arch?.wallColor || bObj.color || "#9a3412" }}
+                            />
+                            <span>{wallMat}</span>
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-neutral-400">Кровля:</span>
+                          <span className="font-bold text-white flex items-center gap-1.5">
+                            <span
+                              className="w-2.5 h-2.5 rounded-full border border-white/20 inline-block"
+                              style={{ backgroundColor: arch?.roofColor || "#7f1d1d" }}
+                            />
+                            <span>{roofType}</span>
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-neutral-400">Окна и двери:</span>
+                          <span className="font-mono font-bold text-sky-400">{openingsCount} конструкций</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-neutral-400">Внутренний план:</span>
+                          <span className="font-mono font-bold text-emerald-400">
+                            {roomsCount > 0 ? `${roomsCount} комнат` : "Черновик"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="space-y-1.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setCustomizingBuilding(bObj)}
+                          className="w-full py-2 px-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-neutral-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-md transition cursor-pointer"
+                        >
+                          <Home className="w-3.5 h-3.5" />
+                          <span>Настроить стены, кровлю, окна</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setFloorPlanningBuilding(bObj)}
+                          className="w-full py-2 px-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md transition cursor-pointer"
+                        >
+                          <Maximize2 className="w-3.5 h-3.5" />
+                          <span>План этажей и сети (вид сверху)</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Photo Display if uploaded! */}
                 {details.photos && details.photos.length > 0 ? (
                   <div className="space-y-2 border-t border-neutral-800 pt-2.5">
@@ -1495,6 +2622,42 @@ export const Property3DViewer: React.FC<Property3DViewerProps> = ({
           )}
         </div>
       </div>
+
+      {/* 3D Architectural Customizer Modal */}
+      {customizingBuilding && (
+        <Building3DCustomizerModal
+          buildingLabel={customizingBuilding.label}
+          wMeters={customizingBuilding.wMeters || 4}
+          hMeters={customizingBuilding.hMeters || 4}
+          subType={customizingBuilding.subType}
+          currentStyle={customizingBuilding.architecturalStyle}
+          onSave={(newStyle) => {
+            if (onUpdateBuilding) {
+              onUpdateBuilding(customizingBuilding.id, { architecturalStyle: newStyle });
+            }
+            setCustomizingBuilding(null);
+          }}
+          onClose={() => setCustomizingBuilding(null)}
+        />
+      )}
+
+      {/* Floor Plan & Engineering Modeling Modal */}
+      {floorPlanningBuilding && (
+        <FloorPlanModal
+          buildingLabel={floorPlanningBuilding.label}
+          wMeters={floorPlanningBuilding.wMeters || 4}
+          hMeters={floorPlanningBuilding.hMeters || 4}
+          subType={floorPlanningBuilding.subType}
+          initialFloorPlan={floorPlanningBuilding.floorPlan}
+          onSave={(newPlan) => {
+            if (onUpdateBuilding) {
+              onUpdateBuilding(floorPlanningBuilding.id, { floorPlan: newPlan });
+            }
+            setFloorPlanningBuilding(null);
+          }}
+          onClose={() => setFloorPlanningBuilding(null)}
+        />
+      )}
     </div>
   );
 };
