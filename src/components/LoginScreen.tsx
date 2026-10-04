@@ -1,7 +1,7 @@
 import React, { useState, useTransition, useEffect } from "react";
 import { User, UserRole } from "../types";
 import { LogIn, Shield, UserCheck, HardHat, UserPlus, Phone, Building, Fingerprint, ScanFace, Check, AlertCircle, RefreshCw, Key, Smartphone, Monitor, Scale } from "lucide-react";
-import { LegalDocumentsModal } from "./LegalAgreements";
+import { LegalDocumentsModal, saveUserLegalConsent } from "./LegalAgreements";
 
 interface LoginScreenProps {
   onLoginSuccess: (user: User) => void;
@@ -366,6 +366,7 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
       const authData = await authResponse.json();
 
       if (authResponse.ok && authData.success) {
+        saveUserLegalConsent(createdUser.id, createdUser.email, createdUser.role);
         setSuccess("Регистрация успешна! Вход...");
         startTransition(() => {
           onLoginSuccess(createdUser);
@@ -457,6 +458,10 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
         return <UserCheck className="w-5 h-5 text-sky-500" />;
       case 'specialist':
         return <HardHat className="w-5 h-5 text-amber-500" />;
+      case 'family':
+        return <UserCheck className="w-5 h-5 text-blue-500" />;
+      case 'manager':
+        return <Key className="w-5 h-5 text-amber-500" />;
     }
   };
 
@@ -468,6 +473,10 @@ export default function LoginScreen({ onLoginSuccess, usersList, currentTheme, l
         return <span className="bg-sky-500/10 text-sky-500 border border-sky-500/20 text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wide">Собственник</span>;
       case 'specialist':
         return <span className="bg-amber-500/10 text-amber-500 border border-amber-500/20 text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wide">Инженер</span>;
+      case 'family':
+        return <span className="bg-blue-500/10 text-blue-500 border border-blue-500/20 text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wide">Семья</span>;
+      case 'manager':
+        return <span className="bg-amber-500/10 text-amber-600 border border-amber-500/20 text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-wide">Управляющий</span>;
     }
   };
 

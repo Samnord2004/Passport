@@ -14,11 +14,21 @@ import {
 import { parseEquipment, parseLifeSupport, parseBuildingInfo, EquipmentRow, LifeSupportRow, StructuralRow, parseSpecs } from "./utils/specParsers";
 import ThemeSelector, { ThemeStyle } from "./components/ThemeSelector";
 import LoginScreen from "./components/LoginScreen";
-import { LegalTabContent } from "./components/LegalAgreements";
+import { 
+  LegalTabContent, 
+  checkUserNeedsLegalConsent, 
+  getUserLegalConsent, 
+  saveUserLegalConsent, 
+  getCurrentLegalDocsVersion 
+} from "./components/LegalAgreements";
+import MandatoryLegalConsentModal from "./components/MandatoryLegalConsentModal";
 import SupportTab from "./components/SupportTab";
 import EcosystemPortal from "./components/EcosystemPortal";
 import { SpecialistSkillsEditor } from "./components/SpecialistSkillsEditor";
 import { SpecialistSearchModal } from "./components/SpecialistSearchModal";
+import { TelegramLogo, VkLogo, MaxLogo, WhatsAppLogo } from "./components/MessengerLogos";
+import StatusBadge, { calculateScheduleStatus, calculateReportStatus } from "./components/StatusBadge";
+import { MaintenanceCalendarTab } from "./components/MaintenanceCalendarTab";
 import { 
   Building, 
   Calendar, 
@@ -63,7 +73,14 @@ import {
   Palette,
   Phone,
   Search,
-  User as UserIcon
+  User as UserIcon,
+  Bot,
+  Server,
+  Globe,
+  Eye,
+  EyeOff,
+  ArrowUpDown,
+  SlidersHorizontal
 } from "lucide-react";
 
 // Intercept native fetch to seamlessly append JWT Bearer tokens and handle silent token rotations (refresh tokens)
@@ -318,9 +335,17 @@ export default function App() {
   const [expandedObjs, setExpandedObjs] = useState<Record<string, boolean>>({});
   const [expandedCats, setExpandedCats] = useState<Record<string, boolean>>({});
   const [expandedSchedules, setExpandedSchedules] = useState<Record<string, boolean>>({});
+  const [expandedOutbuildings, setExpandedOutbuildings] = useState<Record<string, boolean>>({});
+  const [expandedOwnerSchedules, setExpandedOwnerSchedules] = useState<Record<string, boolean>>({});
   const [copyingCatInfo, setCopyingCatInfo] = useState<{ srcObjectId: string; category: string } | null>(null);
   const [copyTargetObjId, setCopyTargetObjId] = useState<string>("");
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; type: 'schedule' | 'user' | 'object' | 'template'; title: string } | null>(null);
+
+  // Admin Objects sorting and filtering states
+  const [objectSortBy, setObjectSortBy] = useState<'date' | 'name' | 'type'>('date');
+  const [objectSortOrder, setObjectSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [objectSearchQuery, setObjectSearchQuery] = useState<string>("");
+  const [objectFilterType, setObjectFilterType] = useState<string>("all");
 
   // Support Appeals Pop-ups & Real-time Polling State
   interface SupportNotification {
@@ -358,6 +383,10 @@ export default function App() {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 4500);
   };
+
+  // Critical Overdue Regulations Email Notifications States
+  const [checkingOverdueEmails, setCheckingOverdueEmails] = useState<boolean>(false);
+  const [overdueCheckResult, setOverdueCheckResult] = useState<any>(null);
 
   // States for Admin Profile tab
   const [adminOldPassword, setAdminOldPassword] = useState("");
@@ -441,6 +470,11 @@ export default function App() {
   const [usrMax, setUsrMax] = useState("");
   const [usrVk, setUsrVk] = useState("");
   const [usrPassword, setUsrPassword] = useState("");
+  const [showSmtpPass, setShowSmtpPass] = useState(false);
+
+  // Mandatory legal consent modal state
+  const [isLegalConsentModalOpen, setIsLegalConsentModalOpen] = useState(false);
+  const [isLegalUpdateNotice, setIsLegalUpdateNotice] = useState(false);
 
   // Object Editor modal form
   const [editingObjId, setEditingObjId] = useState<string | null>(null);
@@ -691,14 +725,22 @@ export default function App() {
     const diffTime = nextDue.getTime() - today.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-    if (diffDays < 0) {
-      return { label: `Просрочено на ${Math.abs(diffDays)} дн.`, class: "bg-rose-100 text-rose-700 border-rose-300 font-bold", overdue: true, diffDays };
+    if (diffDays < -5) {
+      return { 
+        label: `Просрочено на ${Math.abs(diffDays)} дн. (Критическая просрочка > 5 дн. — Email отправлен админам)`, 
+        class: "bg-rose-200 text-rose-800 border-rose-400 font-extrabold shadow-sm animate-pulse", 
+        overdue: true, 
+        criticalOverdue: true,
+        diffDays 
+      };
+    } else if (diffDays < 0) {
+      return { label: `Просрочено на ${Math.abs(diffDays)} дн.`, class: "bg-rose-100 text-rose-700 border-rose-300 font-bold", overdue: true, criticalOverdue: false, diffDays };
     } else if (diffDays === 0) {
-      return { label: "Требуется выполнить сегодня!", class: "bg-amber-100 text-amber-700 border-amber-300 font-bold animate-pulse", overdue: true, diffDays: 0 };
+      return { label: "Требуется выполнить сегодня!", class: "bg-amber-100 text-amber-700 border-amber-300 font-bold animate-pulse", overdue: true, criticalOverdue: false, diffDays: 0 };
     } else if (diffDays <= systemSettings.reminderDaysBefore) {
-      return { label: `Предстоит выполнить через ${diffDays} дн.`, class: "bg-amber-50 text-amber-600 border-amber-200", overdue: false, upcoming: true, diffDays };
+      return { label: `Предстоит выполнить через ${diffDays} дн.`, class: "bg-amber-50 text-amber-600 border-amber-200", overdue: false, criticalOverdue: false, upcoming: true, diffDays };
     } else {
-      return { label: `В норме (Осталось ${diffDays} дн.)`, class: "bg-emerald-50 text-emerald-700 border-emerald-200", overdue: false, upcoming: false, diffDays };
+      return { label: `В норме (Осталось ${diffDays} дн.)`, class: "bg-emerald-50 text-emerald-700 border-emerald-200", overdue: false, criticalOverdue: false, upcoming: false, diffDays };
     }
   };
 
@@ -765,6 +807,101 @@ export default function App() {
     };
   }, [currentUser, objects, schedules, systemSettings.reminderDaysBefore]);
 
+  // Define some lookups
+  const getOwnerName = (ownerId?: string) => {
+    if (!ownerId) return "Администрация";
+    const found = users.find(u => u.id === ownerId);
+    return found ? found.fullname : "Неизвестный собственник";
+  };
+
+  const getUserFullname = (userId?: string) => {
+    if (!userId) return "Свободный выбор";
+    const found = users.find(u => u.id === userId);
+    return found ? found.fullname : "Неизвестный специалист";
+  };
+
+  const getTemplateName = (tplId: string) => {
+    const found = templates.find(t => t.id === tplId);
+    return found ? found.name : "Шаблон удален или не привязан";
+  };
+
+  const getObjectName = (objId: string) => {
+    const found = objects.find(o => o.id === objId);
+    return found ? found.name : "Неизвестный объект";
+  };
+
+  const getScheduleName = (schId: string) => {
+    const found = schedules.find(s => s.id === schId);
+    return found ? found.title : "Регламентное обслуживание";
+  };
+
+  // Return friendly object type label and background styles
+  const getObjectTypeLabel = (type?: string) => {
+    switch (type) {
+      case 'house': 
+        return { label: '🏠 Дом / Коттедж', class: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20' };
+      case 'admin_building': 
+        return { label: '🏢 Административное здание', class: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20' };
+      case 'land': 
+        return { label: '🗺️ Земельный участок', class: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20' };
+      case 'dacha': 
+        return { label: '🏡 Дача / Усадьба', class: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20' };
+      default: 
+        return { label: '📦 Другое вспомогательное здание', class: 'bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-500/20' };
+    }
+  };
+
+  // Computed sorted & filtered objects for Admin Objects Tab
+  const getFilteredAndSortedObjects = () => {
+    let list = [...objects];
+
+    // 1. Text Search Filter
+    if (objectSearchQuery.trim()) {
+      const q = objectSearchQuery.toLowerCase().trim();
+      list = list.filter(obj => {
+        const name = (obj.name || "").toLowerCase();
+        const addr = (obj.address || "").toLowerCase();
+        const desc = (obj.description || "").toLowerCase();
+        const owner = (getOwnerName(obj.ownerId) || "").toLowerCase();
+        const typeLabel = (getObjectTypeLabel(obj.objectType)?.label || "").toLowerCase();
+        return name.includes(q) || addr.includes(q) || desc.includes(q) || owner.includes(q) || typeLabel.includes(q);
+      });
+    }
+
+    // 2. Type Filter
+    if (objectFilterType && objectFilterType !== "all") {
+      list = list.filter(obj => (obj.objectType || "house") === objectFilterType);
+    }
+
+    // 3. Sorting by criteria
+    list.sort((a, b) => {
+      let comparison = 0;
+      if (objectSortBy === "name") {
+        comparison = (a.name || "").localeCompare(b.name || "", "ru", { sensitivity: "base" });
+      } else if (objectSortBy === "type") {
+        const labelA = getObjectTypeLabel(a.objectType).label;
+        const labelB = getObjectTypeLabel(b.objectType).label;
+        comparison = labelA.localeCompare(labelB, "ru", { sensitivity: "base" });
+        if (comparison === 0) {
+          comparison = (a.name || "").localeCompare(b.name || "", "ru", { sensitivity: "base" });
+        }
+      } else {
+        // By creation date (createdAt)
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        comparison = dateA - dateB;
+        if (comparison === 0) {
+          comparison = (a.name || "").localeCompare(b.name || "", "ru", { sensitivity: "base" });
+        }
+      }
+      return objectSortOrder === "asc" ? comparison : -comparison;
+    });
+
+    return list;
+  };
+
+  const filteredAndSortedObjects = getFilteredAndSortedObjects();
+
   // Auto-trigger popup for Specialist on app opening if there are overdue or upcoming maintenance items
   useEffect(() => {
     if (
@@ -800,12 +937,45 @@ export default function App() {
   // Run Cron Daily schedule simulation
   const checkCronNow = async () => {
     try {
-      const response = await fetch("/api/cron-check", { method: "POST" });
+      const response = await fetch("/api/cron-check", { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referenceDate: "2026-05-24", force: true })
+      });
       const data = await response.json();
-      alert(`Планировщик ТО запущен!\nСгенерировано уведомлений: ${data.notificationsSentCount}\nУведомления направлены по установленным каналам.`);
+      alert(`Планировщик ТО запущен!\nСгенерировано уведомлений: ${data.notificationsSentCount}\nПросрочено ТО (>5 дней): ${data.overdueCount || 0}\nEmail администраторам отправлено: ${data.overdueEmailsSent || 0}\nУведомления направлены по установленным каналам.`);
       setRefreshTrigger(prev => prev + 1);
     } catch (e) {
       alert("Ошибка работы планировщика: " + (e as Error).message);
+    }
+  };
+
+  // Trigger manual check and sending of overdue regulations emails to admins (> 5 days)
+  const triggerOverdueEmailsCheck = async (force: boolean = true) => {
+    setCheckingOverdueEmails(true);
+    try {
+      const res = await fetch("/api/notifications/check-overdue-emails", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referenceDate: "2026-05-24", force })
+      });
+      const data = await res.json();
+      setOverdueCheckResult(data);
+      if (data.success) {
+        showToast(`Проверка ТО (>5 дн.) завершена! Просрочено: ${data.overdueCount}. Email отправлено: ${data.emailsSent}`, 'success');
+        // Refresh logs
+        const logsRes = await fetch("/api/notifications/logs");
+        if (logsRes.ok) {
+          setLogs(await logsRes.json());
+        }
+        setRefreshTrigger(prev => prev + 1);
+      } else {
+        showToast(`Ошибка проверки: ${data.error || data.message}`, 'error');
+      }
+    } catch (err: any) {
+      showToast(`Ошибка запроса: ${err.message}`, 'error');
+    } finally {
+      setCheckingOverdueEmails(false);
     }
   };
 
@@ -841,6 +1011,29 @@ export default function App() {
       setRefreshTrigger(prev => prev + 1);
     }
   };
+
+  // Mandatory legal consent evaluation for owner, family, manager, specialist
+  useEffect(() => {
+    const evaluateConsent = () => {
+      if (currentUser) {
+        const needsConsent = checkUserNeedsLegalConsent(currentUser);
+        if (needsConsent) {
+          const existingConsent = getUserLegalConsent(currentUser.id);
+          setIsLegalUpdateNotice(!!existingConsent);
+          setIsLegalConsentModalOpen(true);
+        } else {
+          setIsLegalConsentModalOpen(false);
+        }
+      } else {
+        setIsLegalConsentModalOpen(false);
+      }
+    };
+
+    evaluateConsent();
+
+    window.addEventListener("legal-docs-updated", evaluateConsent);
+    return () => window.removeEventListener("legal-docs-updated", evaluateConsent);
+  }, [currentUser]);
 
   const openUserProfile = () => {
     if (!currentUser) return;
@@ -1442,6 +1635,25 @@ export default function App() {
     });
   };
 
+  const handleUpdateScheduleDate = async (scheduleId: string, newDateStr: string) => {
+    try {
+      const res = await fetch(`/api/schedules/${scheduleId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scheduledDate: newDateStr })
+      });
+      if (!res.ok) {
+        throw new Error("Не удалось сохранить новую дату регламента");
+      }
+      const updated = await res.json();
+      setSchedules(prev => prev.map(s => s.id === scheduleId ? { ...s, ...updated, scheduledDate: newDateStr } : s));
+      const formatted = new Date(newDateStr).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+      showToast(`Плановая дата регламента перенесена на ${formatted}`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Ошибка обновления даты', 'error');
+    }
+  };
+
   const handleCopyCategory = async () => {
     if (!copyingCatInfo || !copyTargetObjId) return;
     try {
@@ -1964,50 +2176,6 @@ export default function App() {
       </div>
     );
   }
-
-  // Define some lookups
-  const getOwnerName = (ownerId?: string) => {
-    if (!ownerId) return "Администрация";
-    const found = users.find(u => u.id === ownerId);
-    return found ? found.fullname : "Неизвестный собственник";
-  };
-
-  const getUserFullname = (userId?: string) => {
-    if (!userId) return "Свободный выбор";
-    const found = users.find(u => u.id === userId);
-    return found ? found.fullname : "Неизвестный специалист";
-  };
-
-  const getTemplateName = (tplId: string) => {
-    const found = templates.find(t => t.id === tplId);
-    return found ? found.name : "Шаблон удален или не привязан";
-  };
-
-  const getObjectName = (objId: string) => {
-    const found = objects.find(o => o.id === objId);
-    return found ? found.name : "Неизвестный объект";
-  };
-
-  const getScheduleName = (schId: string) => {
-    const found = schedules.find(s => s.id === schId);
-    return found ? found.title : "Регламентное обслуживание";
-  };
-
-  // Return friendly object type label and background styles
-  const getObjectTypeLabel = (type?: string) => {
-    switch (type) {
-      case 'house': 
-        return { label: '🏠 Дом / Коттедж', class: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20' };
-      case 'admin_building': 
-        return { label: '🏢 Административное здание', class: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20' };
-      case 'land': 
-        return { label: '🗺️ Земельный участок', class: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20' };
-      case 'dacha': 
-        return { label: '🏡 Дача / Усадьба', class: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20' };
-      default: 
-        return { label: '📦 Другое вспомогательное здание', class: 'bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-500/20' };
-    }
-  };
 
   // Helper to lookup gardens linked with a given property ID
   const getLinkedGardens = (objId: string) => {
@@ -2544,7 +2712,7 @@ export default function App() {
 
           <div className="flex flex-wrap items-center justify-end gap-3 w-full md:w-auto">
             {/* Role-based Popup Menus */}
-            {currentUser.role === 'owner' && (
+            {(currentUser.role === 'owner' || currentUser.role === 'family' || currentUser.role === 'manager') && (
               <div className="relative">
                 <button
                   id="owner-menu-toggle-btn"
@@ -2552,7 +2720,7 @@ export default function App() {
                   className="flex items-center gap-2 px-4 py-2 text-sm font-extrabold rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-md transition-all cursor-pointer"
                 >
                   <Menu className="w-4 h-4" />
-                  <span>📂 Кабинет Владельца</span>
+                  <span>{currentUser.role === 'manager' ? '🔑 Кабинет Управляющего' : currentUser.role === 'family' ? '👨‍👩‍👧‍👦 Семейный доступ' : '📂 Кабинет Владельца'}</span>
                   <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isOwnerMenuOpen ? 'rotate-180' : ''}`} />
                 </button>
                 
@@ -2569,7 +2737,9 @@ export default function App() {
                           <div className="font-black text-sm text-neutral-900 dark:text-neutral-50 truncate max-w-[200px]" title={currentUser.fullname}>
                             {currentUser.fullname}
                           </div>
-                          <div className="text-[10px] opacity-65">Собственник объектов</div>
+                          <div className="text-[10px] opacity-65 font-bold">
+                            {currentUser.role === 'manager' ? '🔑 Управляющий объекта' : currentUser.role === 'family' ? '👨‍👩‍👧‍👦 Член семьи' : 'Собственник объектов'}
+                          </div>
                         </div>
                       </div>
                       
@@ -2751,6 +2921,16 @@ export default function App() {
                         >
                           <Calendar className="w-4 h-4" />
                           <span>📅 График ТО</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setActiveTab('calendar'); setIsAdminMenuOpen(false); }}
+                          className={`w-full text-left px-3 py-2 text-xs font-bold rounded-xl flex items-center gap-2.5 transition-all cursor-pointer ${
+                            activeTab === 'calendar' ? 'bg-indigo-600 text-white' : 'hover:bg-neutral-100 dark:hover:bg-zinc-800/40 text-neutral-700 dark:text-neutral-200'
+                          }`}
+                        >
+                          <Calendar className="w-4 h-4 text-blue-500" />
+                          <span>🗓️ Календарь обслуживания</span>
                         </button>
                         
                         <button
@@ -3045,9 +3225,16 @@ export default function App() {
                   <Calendar className="w-4.5 h-4.5 text-teal-500 group-hover:scale-110 transition-transform" />
                 </div>
                 <div className="text-3xl font-black mt-2 group-hover:text-teal-600 dark:group-hover:text-teal-400 transition-colors">{schedules.length}</div>
-                <div className="text-[10px] text-red-500 font-semibold mt-1 flex items-center justify-between gap-1">
-                  <span>{schedules.filter(s => getScheduleStatus(s).overdue).length} пунктов просрочено</span>
-                  <span className="text-teal-500 opacity-0 group-hover:opacity-100 transition-opacity font-bold">➔</span>
+                <div className="text-[10px] text-red-500 font-semibold mt-1 flex flex-col gap-0.5">
+                  <div className="flex items-center justify-between gap-1">
+                    <span>{schedules.filter(s => getScheduleStatus(s).overdue).length} пунктов просрочено</span>
+                    <span className="text-teal-500 opacity-0 group-hover:opacity-100 transition-opacity font-bold">➔</span>
+                  </div>
+                  {schedules.filter(s => (getScheduleStatus(s) as any).diffDays < -5).length > 0 && (
+                    <span className="text-[9px] text-rose-600 font-extrabold flex items-center gap-1 animate-pulse">
+                      🚨 {schedules.filter(s => (getScheduleStatus(s) as any).diffDays < -5).length} просрочено &gt; 5 дн. (Email отправлен)
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -3095,6 +3282,54 @@ export default function App() {
               </div>
             </div>
 
+            {/* Critical Overdue Regulations Alert Banner for Administrators */}
+            {schedules.filter(s => (getScheduleStatus(s) as any).diffDays < -5).length > 0 && (
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-rose-500/15 via-red-500/10 to-amber-500/15 border-2 border-rose-500/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center text-lg font-black shrink-0 shadow-sm animate-pulse">
+                    🚨
+                  </div>
+                  <div>
+                    <div className="font-extrabold text-xs sm:text-sm text-neutral-900 dark:text-neutral-100 flex flex-wrap items-center gap-2">
+                      <span>Критическое предупреждение ТО: {schedules.filter(s => (getScheduleStatus(s) as any).diffDays < -5).length} {schedules.filter(s => (getScheduleStatus(s) as any).diffDays < -5).length === 1 ? 'регламент просрочен' : 'регламентов просрочено'} более чем на 5 дней!</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-600 text-white uppercase tracking-wider">
+                        Автоматический email
+                      </span>
+                    </div>
+                    <div className="text-[11px] sm:text-xs text-neutral-600 dark:text-zinc-300 mt-0.5 leading-snug">
+                      Система автоматического мониторинга направила официальные email-уведомления администраторам. Требуется внеплановый выезд инженера и устранение риска аварийной остановки.
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 self-stretch sm:self-center shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => triggerOverdueEmailsCheck(true)}
+                    disabled={checkingOverdueEmails}
+                    className="px-3.5 py-2 text-xs font-bold rounded-xl bg-rose-600 hover:bg-rose-700 text-white shadow-sm flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-[0.98] disabled:opacity-50"
+                  >
+                    {checkingOverdueEmails ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <span>Отправка...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>📧 Отправить повторный email</span>
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('schedule')}
+                    className="px-3 py-2 text-xs font-bold rounded-xl border border-rose-300 dark:border-rose-800 bg-white/80 dark:bg-zinc-900/80 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-700 dark:text-rose-300 shadow-sm cursor-pointer transition-all"
+                  >
+                    График ТО ➔
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Sync Feedback Console Log */}
             <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl text-[11px] font-mono text-cyan-400">
               <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">[Терминал синхронизации на Яндекс.Диск]</span>
@@ -3138,6 +3373,12 @@ export default function App() {
                 className={`py-2 px-4 rounded-lg font-bold text-xs transition-colors cursor-pointer ${activeTab === 'schedule' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-200/50 opacity-80'}`}
               >
                 📅 График ТО / Регламент ({schedules.length})
+              </button>
+              <button 
+                onClick={() => setActiveTab('calendar')}
+                className={`py-2 px-4 rounded-lg font-bold text-xs transition-colors cursor-pointer ${activeTab === 'calendar' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-200/50 opacity-80'}`}
+              >
+                🗓️ Календарь обслуживания
               </button>
               <button 
                 onClick={() => setActiveTab('templates')}
@@ -3191,6 +3432,7 @@ export default function App() {
                 objects={objects}
                 schedules={schedules}
                 reports={reports}
+                users={users}
                 onNavigateToObjects={() => {
                   if (currentUser?.role === 'owner') {
                     setOwnerActiveTab('characteristics');
@@ -3213,6 +3455,7 @@ export default function App() {
                   }
                 }}
                 currentTheme={theme}
+                onOpenSpecialistSearch={() => setIsSpecialistSearchModalOpen(true)}
               />
             )}
 
@@ -3224,44 +3467,269 @@ export default function App() {
                 <div className="lg:col-span-2 space-y-4">
                   <div className={getCardStyle()}>
                     <div className={getSubHeaderStyle()}>
-                      <h3 className="font-bold text-base">Список подконтрольных объектов недвижимости</h3>
-                      <p className="text-xs opacity-60">Папки синхронизируются в автоматическом режиме с Яндекс.Диска</p>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <h3 className="font-bold text-base flex items-center gap-2">
+                            <span>Список подконтрольных объектов недвижимости</span>
+                            <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 font-extrabold border border-blue-500/20">
+                              {filteredAndSortedObjects.length} {filteredAndSortedObjects.length !== objects.length && `из ${objects.length}`}
+                            </span>
+                          </h3>
+                          <p className="text-xs opacity-60">Папки синхронизируются в автоматическом режиме с Яндекс.Диска</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* SEARCH & SORT TOOLBAR */}
+                    <div className="p-3.5 bg-neutral-100/50 dark:bg-zinc-800/40 border border-neutral-300/15 rounded-xl space-y-3 mb-4">
+                      {/* Search Bar */}
+                      <div className="relative">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+                        <input
+                          type="text"
+                          value={objectSearchQuery}
+                          onChange={(e) => setObjectSearchQuery(e.target.value)}
+                          placeholder="Поиск по названию, адресу, описанию, собственнику или типу..."
+                          className="w-full pl-9 pr-8 py-2 text-xs rounded-lg border border-neutral-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-neutral-800 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-all font-medium shadow-sm"
+                        />
+                        {objectSearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setObjectSearchQuery("")}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 rounded cursor-pointer"
+                            title="Очистить поиск"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Sorting & Filter Controls */}
+                      <div className="flex flex-wrap items-center justify-between gap-2.5 text-xs pt-0.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[11px] font-bold text-neutral-500 dark:text-zinc-400 uppercase tracking-wider flex items-center gap-1">
+                            <SlidersHorizontal className="w-3.5 h-3.5 text-blue-500" />
+                            <span>Сортировка:</span>
+                          </span>
+
+                          <div className="inline-flex rounded-lg border border-neutral-200 dark:border-zinc-700 bg-white/70 dark:bg-zinc-900/70 p-0.5 shadow-sm">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (objectSortBy === 'date') {
+                                  setObjectSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                                } else {
+                                  setObjectSortBy('date');
+                                  setObjectSortOrder('desc'); // Default new first
+                                }
+                              }}
+                              className={`px-2.5 py-1 rounded-md font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1.5 ${
+                                objectSortBy === 'date'
+                                  ? 'bg-blue-600 text-white shadow-sm'
+                                  : 'text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-zinc-800'
+                              }`}
+                              title="Сортировать по дате добавления"
+                            >
+                              <Clock className="w-3 h-3" />
+                              <span>По дате создания</span>
+                              {objectSortBy === 'date' && (
+                                <span className="text-[9px] font-mono opacity-90 ml-0.5">
+                                  {objectSortOrder === 'desc' ? '↓' : '↑'}
+                                </span>
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (objectSortBy === 'name') {
+                                  setObjectSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                                } else {
+                                  setObjectSortBy('name');
+                                  setObjectSortOrder('asc'); // Default A-Z
+                                }
+                              }}
+                              className={`px-2.5 py-1 rounded-md font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1.5 ${
+                                objectSortBy === 'name'
+                                  ? 'bg-blue-600 text-white shadow-sm'
+                                  : 'text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-zinc-800'
+                              }`}
+                              title="Сортировать по наименованию объекта"
+                            >
+                              <span>🔤 По имени</span>
+                              {objectSortBy === 'name' && (
+                                <span className="text-[9px] font-mono opacity-90 ml-0.5">
+                                  {objectSortOrder === 'asc' ? 'А-Я ↓' : 'Я-А ↑'}
+                                </span>
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (objectSortBy === 'type') {
+                                  setObjectSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                                } else {
+                                  setObjectSortBy('type');
+                                  setObjectSortOrder('asc');
+                                }
+                              }}
+                              className={`px-2.5 py-1 rounded-md font-bold text-[11px] transition-all cursor-pointer flex items-center gap-1.5 ${
+                                objectSortBy === 'type'
+                                  ? 'bg-blue-600 text-white shadow-sm'
+                                  : 'text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-zinc-800'
+                              }`}
+                              title="Сортировать по категории/типу недвижимости"
+                            >
+                              <span>🏷️ По типу объекта</span>
+                              {objectSortBy === 'type' && (
+                                <span className="text-[9px] font-mono opacity-90 ml-0.5">
+                                  {objectSortOrder === 'asc' ? '↓' : '↑'}
+                                </span>
+                              )}
+                            </button>
+                          </div>
+
+                          {/* Direction toggle button */}
+                          <button
+                            type="button"
+                            onClick={() => setObjectSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                            className="px-2.5 py-1 rounded-lg border border-neutral-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-zinc-800 font-semibold text-[11px] flex items-center gap-1 shadow-sm cursor-pointer transition-colors"
+                            title={objectSortOrder === 'asc' ? 'Переключить на убывание' : 'Переключить на возрастание'}
+                          >
+                            <ArrowUpDown className="w-3 h-3 text-blue-500" />
+                            <span>
+                              {objectSortBy === 'date' 
+                                ? (objectSortOrder === 'desc' ? 'Сначала новые' : 'Сначала старые')
+                                : (objectSortOrder === 'asc' ? 'А → Я' : 'Я → А')}
+                            </span>
+                          </button>
+                        </div>
+
+                        {/* Filter by Type Selector */}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-[11px] font-bold text-neutral-500 dark:text-zinc-400 uppercase tracking-wider">
+                            Тип:
+                          </span>
+                          <select
+                            value={objectFilterType}
+                            onChange={(e) => setObjectFilterType(e.target.value)}
+                            className="px-2.5 py-1 rounded-lg border border-neutral-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-neutral-800 dark:text-neutral-100 font-semibold text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer shadow-sm"
+                          >
+                            <option value="all">Все типы ({objects.length})</option>
+                            <option value="house">🏠 Дома ({objects.filter(o => o.objectType === 'house').length})</option>
+                            <option value="admin_building">🏢 Адм. здания ({objects.filter(o => o.objectType === 'admin_building').length})</option>
+                            <option value="land">🗺️ Участки ({objects.filter(o => o.objectType === 'land').length})</option>
+                            <option value="dacha">🏡 Дачи ({objects.filter(o => o.objectType === 'dacha').length})</option>
+                            <option value="other">📦 Прочее ({objects.filter(o => !o.objectType || o.objectType === 'other').length})</option>
+                          </select>
+
+                          {(objectSearchQuery || objectFilterType !== "all" || objectSortBy !== 'date' || objectSortOrder !== 'desc') && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setObjectSearchQuery("");
+                                setObjectFilterType("all");
+                                setObjectSortBy("date");
+                                setObjectSortOrder("desc");
+                              }}
+                              className="text-[10px] text-rose-500 hover:text-rose-600 font-bold ml-1 hover:underline cursor-pointer"
+                              title="Сбросить все фильтры и вернуть сортировку по умолчанию"
+                            >
+                              Сброс
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </div>
 
                     <div className="space-y-3">
-                      {objects.map(obj => (
-                        <div key={obj.id} className="p-4 rounded-xl border border-neutral-300/15 bg-neutral-100/5 hover:bg-neutral-100/10 transition-colors flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <Building className="w-4 h-4 text-blue-500" />
-                              <span className="font-extrabold text-sm">{obj.name}</span>
-                            </div>
-                            <p className="text-xs opacity-85">{obj.address}</p>
-                            <p className="text-[11px] text-zinc-500 italic">{obj.description}</p>
-                            <div className="flex items-center gap-4 pt-1 text-[10px]">
-                              <span className="bg-blue-500/10 text-blue-500 px-1.5 py-0.5 rounded font-medium">Собственник: {getOwnerName(obj.ownerId)}</span>
-                              <span className="bg-slate-500/10 text-slate-500 px-1.5 py-0.5 rounded font-mono select-all">Диск: {obj.yandexDiskPath}</span>
-                            </div>
-                          </div>
-
-                          <div className="flex gap-2">
-                            <button 
-                              onClick={() => startEditObject(obj)}
-                              className="bg-amber-50 hover:bg-amber-100 text-amber-600 p-1.5 rounded-lg border border-amber-200"
-                              title="Редактировать объект"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
-                            <button 
-                              onClick={() => deleteObject(obj.id)}
-                              className={getRedBtn()}
-                              title="Удалить"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                      {filteredAndSortedObjects.length === 0 ? (
+                        <div className="p-8 text-center border border-dashed border-neutral-300 dark:border-zinc-800 rounded-2xl bg-neutral-50/50 dark:bg-zinc-900/30 space-y-2">
+                          <p className="text-sm font-bold text-neutral-600 dark:text-neutral-300">
+                            Объекты не найдены
+                          </p>
+                          <p className="text-xs text-neutral-400">
+                            По заданным параметрам поиска или фильтрации нет подходящих объектов недвижимости.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setObjectSearchQuery("");
+                              setObjectFilterType("all");
+                            }}
+                            className="mt-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                          >
+                            Сбросить критерии
+                          </button>
                         </div>
-                      ))}
+                      ) : (
+                        filteredAndSortedObjects.map(obj => {
+                          const typeMeta = getObjectTypeLabel(obj.objectType);
+                          const matchingSchCount = schedules.filter(s => s.objectId === obj.id).length;
+                          const specCount = obj.allowedSpecialistIds?.length || 0;
+                          const createdDateStr = obj.createdAt 
+                            ? new Date(obj.createdAt).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+                            : null;
+                          return (
+                            <div key={obj.id} className="p-4 rounded-xl border border-neutral-300/15 bg-neutral-100/5 hover:bg-neutral-100/10 transition-colors flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                              <div className="space-y-1.5 flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <Building className="w-4 h-4 text-blue-500 shrink-0" />
+                                  <span className="font-extrabold text-sm text-neutral-900 dark:text-white">{obj.name}</span>
+                                  <span className={`px-2 py-0.5 text-[9px] font-bold rounded-full border ${typeMeta.class}`}>
+                                    {typeMeta.label}
+                                  </span>
+                                  <span className="text-[10px] text-zinc-400 font-mono">ID: {obj.id}</span>
+                                </div>
+                                <p className="text-xs opacity-85 text-neutral-700 dark:text-zinc-300">{obj.address}</p>
+                                {obj.description && (
+                                  <p className="text-[11px] text-zinc-500 italic line-clamp-2">{obj.description}</p>
+                                )}
+                                <div className="flex flex-wrap items-center gap-2 pt-1 text-[10px]">
+                                  {createdDateStr && (
+                                    <span className="bg-neutral-500/10 text-neutral-600 dark:text-neutral-400 px-1.5 py-0.5 rounded font-mono flex items-center gap-1" title="Дата регистрации объекта">
+                                      <Clock className="w-3 h-3 text-neutral-400" />
+                                      <span>Создан: {createdDateStr}</span>
+                                    </span>
+                                  )}
+                                  <span className="bg-blue-500/10 text-blue-500 px-1.5 py-0.5 rounded font-medium">
+                                    Собственник: {getOwnerName(obj.ownerId)}
+                                  </span>
+                                  <span className="bg-sky-500/10 text-sky-600 dark:text-sky-400 px-1.5 py-0.5 rounded font-medium">
+                                    📋 Регламентов: {matchingSchCount}
+                                  </span>
+                                  {specCount > 0 && (
+                                    <span className="bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-medium">
+                                      👷 Инженеров: {specCount}
+                                    </span>
+                                  )}
+                                  <span className="bg-slate-500/10 text-slate-500 px-1.5 py-0.5 rounded font-mono select-all truncate max-w-xs" title={obj.yandexDiskPath}>
+                                    Диск: {obj.yandexDiskPath}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="flex gap-2 shrink-0 self-end md:self-center">
+                                <button 
+                                  onClick={() => startEditObject(obj)}
+                                  className="bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/30 dark:hover:bg-amber-900/50 text-amber-600 dark:text-amber-400 p-2 rounded-lg border border-amber-200 dark:border-amber-800/40 transition-colors cursor-pointer"
+                                  title="Редактировать объект"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                <button 
+                                  onClick={() => deleteObject(obj.id)}
+                                  className={getRedBtn()}
+                                  title="Удалить объект"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
                     </div>
                   </div>
                 </div>
@@ -3590,6 +4058,23 @@ export default function App() {
               </div>
             )}
 
+            {/* TAB: MAINTENANCE CALENDAR */}
+            {activeTab === 'calendar' && (
+              <MaintenanceCalendarTab
+                schedules={schedules}
+                objects={objects}
+                users={users}
+                templates={templates}
+                getScheduleStatus={getScheduleStatus}
+                onUpdateScheduleDate={handleUpdateScheduleDate}
+                onNavigateToScheduleTab={() => setActiveTab('schedule')}
+                currentUser={currentUser}
+                cardStyle={getCardStyle()}
+                inputStyle={getInputStyle()}
+                referenceDate="2026-05-24"
+              />
+            )}
+
             {/* TAB: SCHEDULE */}
             {activeTab === 'schedule' && (
               <>
@@ -3665,11 +4150,22 @@ export default function App() {
                 {/* Schedule list */}
                 <div className="lg:col-span-2 space-y-4">
                   <div className={getCardStyle()}>
-                    <div className={getSubHeaderStyle()}>
-                      <h3 className="font-bold text-base">📅 Календарный график и регламенты ТО</h3>
-                      <p className="text-xs opacity-60">
-                        Контролирует соблюдение интервалов обслуживания по объектам эксплуатации с раскрывающимся списком регламентных вопросов и элементов Чек-листов
-                      </p>
+                    <div className={`${getSubHeaderStyle()} flex flex-col sm:flex-row sm:items-center justify-between gap-3`}>
+                      <div>
+                        <h3 className="font-bold text-base">📅 Календарный график и регламенты ТО</h3>
+                        <p className="text-xs opacity-60">
+                          Контролирует соблюдение интервалов обслуживания по объектам эксплуатации с раскрывающимся списком регламентных вопросов и элементов Чек-листов
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('calendar')}
+                        className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5 cursor-pointer shrink-0 self-start sm:self-center"
+                        title="Открыть интерактивную сетку календаря с возможностью Drag & Drop"
+                      >
+                        <Calendar className="w-4 h-4" />
+                        <span>🗓️ Календарь обслуживания</span>
+                      </button>
                     </div>
 
                     <div className="space-y-4">
@@ -3841,9 +4337,7 @@ export default function App() {
                                                     <div className="flex items-start justify-between gap-3 text-xs w-full pb-3 border-b border-neutral-100 dark:border-zinc-800/50">
                                                       <div className="min-w-0 flex-1">
                                                         <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
-                                                          <span className={`px-1.5 py-0.5 rounded text-[8px] border font-black uppercase tracking-wider leading-none ${status.class}`}>
-                                                            {status.label}
-                                                          </span>
+                                                          <StatusBadge schedule={sch} reminderDaysBefore={systemSettings.reminderDaysBefore} size="xs" />
                                                           {sch.category && (
                                                             <span className="text-[8px] bg-neutral-100 dark:bg-zinc-800/60 text-neutral-500 dark:text-neutral-400 px-1.5 py-0.5 rounded uppercase tracking-wider font-bold leading-none">
                                                               {sch.category}
@@ -4467,7 +4961,7 @@ export default function App() {
                                 <span className="text-[10px] text-sky-500 font-bold tracking-wider uppercase block">АКТ {rep.id}</span>
                                 <span className="text-[11px] opacity-60">{new Date(rep.dateDone).toLocaleString('ru-RU')}</span>
                               </div>
-                              <span className="bg-emerald-500/10 text-emerald-500 text-[10px] font-extrabold px-2 py-1 rounded-full uppercase">Выполнено</span>
+                              <StatusBadge report={rep} size="xs" variant="pill" />
                             </div>
 
                             <div className="space-y-1">
@@ -4951,329 +5445,663 @@ export default function App() {
 
             {/* TAB: SETTINGS & GLOBAL TELEMETRY LOGS */}
             {activeTab === 'settings' && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 max-w-4xl mx-auto w-full">
+              <div className="w-full max-w-5xl mx-auto space-y-6 animate-fadeIn">
                 
                 {/* Global Notification config settings */}
-                <div className={getCardStyle()}>
-                  <div className={getSubHeaderStyle()}>
-                    <h3 className="font-bold text-base">🔧 Интеграция шины мессенджеров и Telegram / MAX Ботов</h3>
-                    <p className="text-xs opacity-60">Управление каналами связи для мгновенной рассылки инженерам и собственникам о регламентных ТО</p>
+                <div className={`${getCardStyle()} p-4 sm:p-6 md:p-8 space-y-6`}>
+                  
+                  {/* Card Header */}
+                  <div className={`${getSubHeaderStyle()} flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 mb-2`}>
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xl sm:text-2xl">🔧</span>
+                        <h3 className="font-extrabold text-base sm:text-lg lg:text-xl text-neutral-900 dark:text-neutral-50 tracking-tight">
+                          Интеграция шины мессенджеров и Telegram / MAX Ботов
+                        </h3>
+                      </div>
+                      <p className="text-xs sm:text-sm text-neutral-500 dark:text-neutral-400 leading-relaxed max-w-2xl">
+                        Управление каналами связи для мгновенной рассылки инженерам и собственникам о регламентных ТО
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        Шина активна
+                      </span>
+                    </div>
                   </div>
 
-                  <form onSubmit={saveSettingsSubmit} className="space-y-4 text-xs">
-                    <div className="space-y-1.5 p-3 rounded-xl border border-blue-500/20 bg-blue-500/[0.02]">
-                      <span className="font-bold text-blue-500 uppercase">1. Провайдеры связи и шины отчетов (подключенные боты):</span>
+                  <form onSubmit={saveSettingsSubmit} className="space-y-6 text-xs sm:text-sm">
+                    
+                    {/* 1. Connected Bot Providers Bento Grid */}
+                    <div className="space-y-3 p-4 sm:p-5 rounded-2xl border border-blue-500/20 bg-blue-500/[0.03] dark:bg-blue-500/[0.05]">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                        <span className="font-extrabold text-xs sm:text-sm text-blue-600 dark:text-blue-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <Server className="w-4 h-4" />
+                          <span>1. Провайдеры связи и шины отчетов (подключенные боты)</span>
+                        </span>
+                        <span className="text-[11px] text-neutral-400 font-medium">4 активных протокола в реальном времени</span>
+                      </div>
                       
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-neutral-600 font-bold">Telegram Bot API (python-telegram-bot):</span>
-                          <span className="text-emerald-500 font-bold mt-1">● АКТИВЕН (Реальный BOT_TOKEN через .env)</span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+                        {/* Telegram */}
+                        <div className="p-3.5 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white/70 dark:bg-zinc-900/60 shadow-xs flex flex-col justify-between gap-2.5 hover:border-sky-500/40 transition-all">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0">
+                                <TelegramLogo className="w-6 h-6" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-extrabold text-xs text-neutral-800 dark:text-neutral-100 truncate">Telegram Bot API</div>
+                                <div className="text-[10px] text-neutral-400 truncate">python-telegram-bot</div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full w-fit">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            <span>АКТИВЕН (.env)</span>
+                          </div>
                         </div>
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-neutral-600 font-bold">VK_API Сервер сообщений:</span>
-                          <span className="text-emerald-500 font-bold mt-1">● АКТИВЕН (Связан с Группой)</span>
+
+                        {/* VK */}
+                        <div className="p-3.5 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white/70 dark:bg-zinc-900/60 shadow-xs flex flex-col justify-between gap-2.5 hover:border-blue-500/40 transition-all">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0">
+                                <VkLogo className="w-6 h-6" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-extrabold text-xs text-neutral-800 dark:text-neutral-100 truncate">VK_API Сообщения</div>
+                                <div className="text-[10px] text-neutral-400 truncate">Связан с Группой</div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full w-fit">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            <span>АКТИВЕН (Группа)</span>
+                          </div>
                         </div>
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-neutral-600 font-bold">MAX-BOTAPI Клиент (MasterBot):</span>
-                          <span className="text-emerald-500 font-bold mt-1">● АКТИВЕН (Реальный API через .env)</span>
+
+                        {/* MAX */}
+                        <div className="p-3.5 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white/70 dark:bg-zinc-900/60 shadow-xs flex flex-col justify-between gap-2.5 hover:border-indigo-500/40 transition-all">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0">
+                                <MaxLogo className="w-6 h-6" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-extrabold text-xs text-neutral-800 dark:text-neutral-100 truncate">MAX-BOTAPI</div>
+                                <div className="text-[10px] text-neutral-400 truncate">MasterBot Client</div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full w-fit">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            <span>АКТИВЕН (.env)</span>
+                          </div>
                         </div>
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-neutral-600 font-bold">SMTP Почтовый сервер (.env):</span>
-                          <span className="text-emerald-500 font-bold mt-1">● АКТИВЕН (С шифрованием SSL)</span>
+
+                        {/* SMTP */}
+                        <div className="p-3.5 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white/70 dark:bg-zinc-900/60 shadow-xs flex flex-col justify-between gap-2.5 hover:border-amber-500/40 transition-all">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-500 flex items-center justify-center font-bold text-xs shrink-0">
+                                <Mail className="w-3.5 h-3.5" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-extrabold text-xs text-neutral-800 dark:text-neutral-100 truncate">SMTP Почта</div>
+                                <div className="text-[10px] text-neutral-400 truncate">Шифрование SSL/TLS</div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full w-fit">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            <span>АКТИВЕН (SSL)</span>
+                          </div>
                         </div>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* Admin Matrix */}
-                      <div className="space-y-2 border p-3 rounded-lg">
-                        <span className="font-bold text-slate-800 uppercase text-[11px] block">Уведомления Администратору:</span>
-                        <div className="space-y-1">
-                          <label className="flex items-center gap-2">
-                            <input 
-                              type="checkbox" 
-                              checked={systemSettings.notificationChannels.admin.telegram} 
-                              onChange={(e) => setSystemSettings({
-                                ...systemSettings,
-                                notificationChannels: {
-                                  ...systemSettings.notificationChannels,
-                                  admin: { ...systemSettings.notificationChannels.admin, telegram: e.target.checked }
-                                }
-                              })}
-                            /> Telegram
-                          </label>
-                          <label className="flex items-center gap-2">
-                            <input 
-                              type="checkbox" 
-                              checked={systemSettings.notificationChannels.admin.max} 
-                              onChange={(e) => setSystemSettings({
-                                ...systemSettings,
-                                notificationChannels: {
-                                  ...systemSettings.notificationChannels,
-                                  admin: { ...systemSettings.notificationChannels.admin, max: e.target.checked }
-                                }
-                              })}
-                            /> MAX
-                          </label>
-                          <label className="flex items-center gap-2">
-                            <input 
-                              type="checkbox" 
-                              checked={systemSettings.notificationChannels.admin.vk} 
-                              onChange={(e) => setSystemSettings({
-                                ...systemSettings,
-                                notificationChannels: {
-                                  ...systemSettings.notificationChannels,
-                                  admin: { ...systemSettings.notificationChannels.admin, vk: e.target.checked }
-                                }
-                              })}
-                            /> ВКонтакте
-                          </label>
-                          <label className="flex items-center gap-2">
-                            <input 
-                              type="checkbox" 
-                              checked={systemSettings.notificationChannels.admin.email} 
-                              onChange={(e) => setSystemSettings({
-                                ...systemSettings,
-                                notificationChannels: {
-                                  ...systemSettings.notificationChannels,
-                                  admin: { ...systemSettings.notificationChannels.admin, email: e.target.checked }
-                                }
-                              })}
-                            /> Email по регламенту
-                          </label>
+                    {/* 2. Notification Channels Matrix */}
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 text-xs sm:text-sm font-extrabold uppercase tracking-wider text-neutral-700 dark:text-zinc-300">
+                        <Bell className="w-4 h-4 text-amber-500" />
+                        <span>2. Матрица рассылки уведомлений по ролям пользователей</span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
+                        {/* Admin Matrix */}
+                        <div className="p-4 sm:p-5 rounded-2xl border border-neutral-200 dark:border-zinc-800 bg-neutral-50/50 dark:bg-zinc-900/40 space-y-3.5">
+                          <div className="flex items-center justify-between pb-2 border-b border-neutral-200/60 dark:border-zinc-800">
+                            <div>
+                              <h4 className="font-extrabold text-xs sm:text-sm text-neutral-850 dark:text-neutral-100 flex items-center gap-1.5">
+                                <Shield className="w-4 h-4 text-emerald-500" />
+                                <span>Уведомления Администраторам</span>
+                              </h4>
+                              <p className="text-[10px] sm:text-[11px] text-neutral-400">Каналы доставки сводок и аварийных сигналов</p>
+                            </div>
+                            <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500">
+                              Admin
+                            </span>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="flex items-center justify-between p-2.5 sm:p-3 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-500/40 cursor-pointer transition-all active:scale-[0.99]">
+                              <div className="flex items-center gap-3">
+                                <TelegramLogo className="w-5 h-5 shrink-0" />
+                                <div>
+                                  <div className="font-bold text-xs sm:text-sm text-neutral-800 dark:text-neutral-100">Telegram бот</div>
+                                  <div className="text-[10px] sm:text-[11px] text-neutral-400">Мгновенный пуш в чат администратора</div>
+                                </div>
+                              </div>
+                              <input 
+                                type="checkbox" 
+                                checked={systemSettings.notificationChannels.admin.telegram} 
+                                onChange={(e) => setSystemSettings({
+                                  ...systemSettings,
+                                  notificationChannels: {
+                                    ...systemSettings.notificationChannels,
+                                    admin: { ...systemSettings.notificationChannels.admin, telegram: e.target.checked }
+                                  }
+                                })}
+                                className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </label>
+
+                            <label className="flex items-center justify-between p-2.5 sm:p-3 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-500/40 cursor-pointer transition-all active:scale-[0.99]">
+                              <div className="flex items-center gap-3">
+                                <MaxLogo className="w-5 h-5 shrink-0" />
+                                <div>
+                                  <div className="font-bold text-xs sm:text-sm text-neutral-800 dark:text-neutral-100">Мессенджер MAX</div>
+                                  <div className="text-[10px] sm:text-[11px] text-neutral-400">Корпоративный шлюз MasterBot</div>
+                                </div>
+                              </div>
+                              <input 
+                                type="checkbox" 
+                                checked={systemSettings.notificationChannels.admin.max} 
+                                onChange={(e) => setSystemSettings({
+                                  ...systemSettings,
+                                  notificationChannels: {
+                                    ...systemSettings.notificationChannels,
+                                    admin: { ...systemSettings.notificationChannels.admin, max: e.target.checked }
+                                  }
+                                })}
+                                className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </label>
+
+                            <label className="flex items-center justify-between p-2.5 sm:p-3 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-500/40 cursor-pointer transition-all active:scale-[0.99]">
+                              <div className="flex items-center gap-3">
+                                <VkLogo className="w-5 h-5 shrink-0" />
+                                <div>
+                                  <div className="font-bold text-xs sm:text-sm text-neutral-800 dark:text-neutral-100">ВКонтакте</div>
+                                  <div className="text-[10px] sm:text-[11px] text-neutral-400">Личные сообщения через сообщество</div>
+                                </div>
+                              </div>
+                              <input 
+                                type="checkbox" 
+                                checked={systemSettings.notificationChannels.admin.vk} 
+                                onChange={(e) => setSystemSettings({
+                                  ...systemSettings,
+                                  notificationChannels: {
+                                    ...systemSettings.notificationChannels,
+                                    admin: { ...systemSettings.notificationChannels.admin, vk: e.target.checked }
+                                  }
+                                })}
+                                className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </label>
+
+                            <label className="flex items-center justify-between p-2.5 sm:p-3 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-500/40 cursor-pointer transition-all active:scale-[0.99]">
+                              <div className="flex items-center gap-3">
+                                <span className="text-base sm:text-lg">📧</span>
+                                <div>
+                                  <div className="font-bold text-xs sm:text-sm text-neutral-800 dark:text-neutral-100">Email по регламенту</div>
+                                  <div className="text-[10px] sm:text-[11px] text-neutral-400">Официальные акты и протоколы ТО</div>
+                                </div>
+                              </div>
+                              <input 
+                                type="checkbox" 
+                                checked={systemSettings.notificationChannels.admin.email} 
+                                onChange={(e) => setSystemSettings({
+                                  ...systemSettings,
+                                  notificationChannels: {
+                                    ...systemSettings.notificationChannels,
+                                    admin: { ...systemSettings.notificationChannels.admin, email: e.target.checked }
+                                  }
+                                })}
+                                className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Owner Matrix */}
+                        <div className="p-4 sm:p-5 rounded-2xl border border-neutral-200 dark:border-zinc-800 bg-neutral-50/50 dark:bg-zinc-900/40 space-y-3.5">
+                          <div className="flex items-center justify-between pb-2 border-b border-neutral-200/60 dark:border-zinc-800">
+                            <div>
+                              <h4 className="font-extrabold text-xs sm:text-sm text-neutral-850 dark:text-neutral-100 flex items-center gap-1.5">
+                                <UserCheck className="w-4 h-4 text-sky-500" />
+                                <span>Уведомления Собственникам</span>
+                              </h4>
+                              <p className="text-[10px] sm:text-[11px] text-neutral-400">Информирование о статусе визитов специалистов</p>
+                            </div>
+                            <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-sky-500/10 text-sky-500">
+                              Owner
+                            </span>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="flex items-center justify-between p-2.5 sm:p-3 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-500/40 cursor-pointer transition-all active:scale-[0.99]">
+                              <div className="flex items-center gap-3">
+                                <TelegramLogo className="w-5 h-5 shrink-0" />
+                                <div>
+                                  <div className="font-bold text-xs sm:text-sm text-neutral-800 dark:text-neutral-100">Telegram бот</div>
+                                  <div className="text-[10px] sm:text-[11px] text-neutral-400">Личный бот-ассистент собственника</div>
+                                </div>
+                              </div>
+                              <input 
+                                type="checkbox" 
+                                checked={systemSettings.notificationChannels.owner.telegram} 
+                                onChange={(e) => setSystemSettings({
+                                  ...systemSettings,
+                                  notificationChannels: {
+                                    ...systemSettings.notificationChannels,
+                                    owner: { ...systemSettings.notificationChannels.owner, telegram: e.target.checked }
+                                  }
+                                })}
+                                className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </label>
+
+                            <label className="flex items-center justify-between p-2.5 sm:p-3 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-500/40 cursor-pointer transition-all active:scale-[0.99]">
+                              <div className="flex items-center gap-3">
+                                <MaxLogo className="w-5 h-5 shrink-0" />
+                                <div>
+                                  <div className="font-bold text-xs sm:text-sm text-neutral-800 dark:text-neutral-100">Мессенджер MAX</div>
+                                  <div className="text-[10px] sm:text-[11px] text-neutral-400">Уведомления в приложении MAX</div>
+                                </div>
+                              </div>
+                              <input 
+                                type="checkbox" 
+                                checked={systemSettings.notificationChannels.owner.max} 
+                                onChange={(e) => setSystemSettings({
+                                  ...systemSettings,
+                                  notificationChannels: {
+                                    ...systemSettings.notificationChannels,
+                                    owner: { ...systemSettings.notificationChannels.owner, max: e.target.checked }
+                                  }
+                                })}
+                                className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </label>
+
+                            <label className="flex items-center justify-between p-2.5 sm:p-3 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-500/40 cursor-pointer transition-all active:scale-[0.99]">
+                              <div className="flex items-center gap-3">
+                                <VkLogo className="w-5 h-5 shrink-0" />
+                                <div>
+                                  <div className="font-bold text-xs sm:text-sm text-neutral-800 dark:text-neutral-100">ВКонтакте</div>
+                                  <div className="text-[10px] sm:text-[11px] text-neutral-400">Оповещения в диалоге с сообществом</div>
+                                </div>
+                              </div>
+                              <input 
+                                type="checkbox" 
+                                checked={systemSettings.notificationChannels.owner.vk} 
+                                onChange={(e) => setSystemSettings({
+                                  ...systemSettings,
+                                  notificationChannels: {
+                                    ...systemSettings.notificationChannels,
+                                    owner: { ...systemSettings.notificationChannels.owner, vk: e.target.checked }
+                                  }
+                                })}
+                                className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </label>
+
+                            <label className="flex items-center justify-between p-2.5 sm:p-3 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-blue-500/40 cursor-pointer transition-all active:scale-[0.99]">
+                              <div className="flex items-center gap-3">
+                                <span className="text-base sm:text-lg">📧</span>
+                                <div>
+                                  <div className="font-bold text-xs sm:text-sm text-neutral-800 dark:text-neutral-100">Email по регламенту</div>
+                                  <div className="text-[10px] sm:text-[11px] text-neutral-400">Отправка копии акта и фотоотчета</div>
+                                </div>
+                              </div>
+                              <input 
+                                type="checkbox" 
+                                checked={systemSettings.notificationChannels.owner.email} 
+                                onChange={(e) => setSystemSettings({
+                                  ...systemSettings,
+                                  notificationChannels: {
+                                    ...systemSettings.notificationChannels,
+                                    owner: { ...systemSettings.notificationChannels.owner, email: e.target.checked }
+                                  }
+                                })}
+                                className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Critical Overdue Regulations Email Notifications (> 5 Days) */}
+                    <div className="p-4 sm:p-5 rounded-2xl border-2 border-rose-500/40 bg-rose-50/40 dark:bg-rose-950/20 space-y-3.5 shadow-sm">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-rose-200/60 dark:border-rose-900/40">
+                        <div>
+                          <h4 className="font-extrabold text-xs sm:text-sm text-neutral-850 dark:text-neutral-100 flex items-center gap-2">
+                            <span className="p-1 rounded-lg bg-rose-600 text-white text-xs">🚨</span>
+                            <span>Автоматические email-уведомления при просрочке ТО более чем на 5 дней</span>
+                          </h4>
+                          <p className="text-[10px] sm:text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5 leading-relaxed">
+                            Критический мониторинг: если регламент техобслуживания просрочен более чем на 5 дней, система незамедлительно формирует и отправляет официальное email-уведомление администраторам с полным паспортом проблемы и перечнем рисков.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
+                          <span className={`text-[10px] uppercase font-black px-2.5 py-1 rounded-full ${
+                            (systemSettings.autoAdminEmailOnOverdue5Days !== false) 
+                              ? 'bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30' 
+                              : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'
+                          }`}>
+                            {(systemSettings.autoAdminEmailOnOverdue5Days !== false) ? '● АКТИВНО' : 'ОТКЛЮЧЕНО'}
+                          </span>
                         </div>
                       </div>
 
-                      {/* Owner Matrix */}
-                      <div className="space-y-2 border p-3 rounded-lg">
-                        <span className="font-bold text-slate-800 uppercase text-[11px] block">Уведомления Собственнику:</span>
-                        <div className="space-y-1">
-                          <label className="flex items-center gap-2">
-                            <input 
-                              type="checkbox" 
-                              checked={systemSettings.notificationChannels.owner.telegram} 
-                              onChange={(e) => setSystemSettings({
-                                ...systemSettings,
-                                notificationChannels: {
-                                  ...systemSettings.notificationChannels,
-                                  owner: { ...systemSettings.notificationChannels.owner, telegram: e.target.checked }
-                                }
-                              })}
-                            /> Telegram
-                          </label>
-                          <label className="flex items-center gap-2">
-                            <input 
-                              type="checkbox" 
-                              checked={systemSettings.notificationChannels.owner.max} 
-                              onChange={(e) => setSystemSettings({
-                                ...systemSettings,
-                                notificationChannels: {
-                                  ...systemSettings.notificationChannels,
-                                  owner: { ...systemSettings.notificationChannels.owner, max: e.target.checked }
-                                }
-                              })}
-                            /> MAX (мессенджер)
-                          </label>
-                          <label className="flex items-center gap-2">
-                            <input 
-                              type="checkbox" 
-                              checked={systemSettings.notificationChannels.owner.vk} 
-                              onChange={(e) => setSystemSettings({
-                                ...systemSettings,
-                                notificationChannels: {
-                                  ...systemSettings.notificationChannels,
-                                  owner: { ...systemSettings.notificationChannels.owner, vk: e.target.checked }
-                                }
-                              })}
-                            /> ВКонтакте
-                          </label>
-                          <label className="flex items-center gap-2">
-                            <input 
-                              type="checkbox" 
-                              checked={systemSettings.notificationChannels.owner.email} 
-                              onChange={(e) => setSystemSettings({
-                                ...systemSettings,
-                                notificationChannels: {
-                                  ...systemSettings.notificationChannels,
-                                  owner: { ...systemSettings.notificationChannels.owner, email: e.target.checked }
-                                }
-                              })}
-                            /> Email по регламенту
-                          </label>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-zinc-900 p-3.5 rounded-xl border border-rose-200/80 dark:border-rose-900/30">
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input 
+                            type="checkbox"
+                            checked={systemSettings.autoAdminEmailOnOverdue5Days !== false}
+                            onChange={(e) => setSystemSettings({
+                              ...systemSettings,
+                              autoAdminEmailOnOverdue5Days: e.target.checked
+                            })}
+                            className="w-5 h-5 rounded text-rose-600 focus:ring-rose-500 cursor-pointer"
+                          />
+                          <div>
+                            <div className="font-bold text-xs sm:text-sm text-neutral-800 dark:text-neutral-100">
+                              Включить автоматическую email-рассылку администраторам
+                            </div>
+                            <div className="text-[10px] sm:text-[11px] text-neutral-400">
+                              Фоновый планировщик сервера производит мониторинг и отправку писем каждые 30 минут
+                            </div>
+                          </div>
+                        </label>
+
+                        <button
+                          type="button"
+                          onClick={() => triggerOverdueEmailsCheck(true)}
+                          disabled={checkingOverdueEmails}
+                          className="px-3.5 py-2 text-xs font-bold rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 text-white shadow-sm flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-[0.98] disabled:opacity-50 shrink-0"
+                        >
+                          {checkingOverdueEmails ? (
+                            <>
+                              <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              <span>Проверка...</span>
+                            </>
+                          ) : (
+                            <>
+                              <span>⚡ Проверить и отправить email сейчас</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {overdueCheckResult && (
+                        <div className="p-3 bg-neutral-100/90 dark:bg-zinc-850 rounded-xl text-xs space-y-1.5 border border-neutral-200 dark:border-zinc-700">
+                          <div className="font-bold text-neutral-800 dark:text-neutral-200 flex items-center justify-between">
+                            <span>Результат ручной проверки:</span>
+                            <span className="text-[10px] font-mono text-neutral-400">{new Date().toLocaleTimeString('ru-RU')}</span>
+                          </div>
+                          <div className="text-neutral-600 dark:text-neutral-300">
+                            Просроченных регламентов (&gt;5 дней): <strong className="text-rose-600 font-black">{overdueCheckResult.overdueCount}</strong>.
+                            {' '}Отправлено email-уведомлений администраторам: <strong className="text-emerald-600 font-black">{overdueCheckResult.emailsSent}</strong>.
+                          </div>
+                          {overdueCheckResult.dispatchedItems && overdueCheckResult.dispatchedItems.length > 0 && (
+                            <div className="mt-2 space-y-1 pt-1.5 border-t border-neutral-200 dark:border-zinc-700">
+                              <div className="text-[11px] font-semibold text-neutral-500">Оповещения направлены по регламентам:</div>
+                              {overdueCheckResult.dispatchedItems.map((item: any, idx: number) => (
+                                <div key={idx} className="text-[11px] flex items-center justify-between text-neutral-700 dark:text-zinc-300 bg-white/70 dark:bg-zinc-900/70 px-2 py-1 rounded">
+                                  <span>• <strong>{item.objectName}</strong>: {item.scheduleTitle}</span>
+                                  <span className="text-rose-600 font-bold ml-2">просрочено на {item.daysOverdue} дн.</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
+                      )}
+                    </div>
+
+                    {/* 3. Schedule Reminders & Cloud Storage */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="p-4 sm:p-5 rounded-2xl border border-neutral-200 dark:border-zinc-800 bg-neutral-50/50 dark:bg-zinc-900/40 space-y-2">
+                        <label className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-neutral-700 dark:text-zinc-300">
+                          <Clock className="w-4 h-4 text-blue-500" />
+                          <span>Оповещать о предстоящем ТО (дней до срока) *</span>
+                        </label>
+                        <input 
+                          type="number" 
+                          min={1}
+                          max={90}
+                          required
+                          value={systemSettings.reminderDaysBefore}
+                          onChange={(e) => setSystemSettings({ ...systemSettings, reminderDaysBefore: Number(e.target.value) })}
+                          className={`w-full ${getInputStyle()}`}
+                        />
+                        <span className="text-[10px] sm:text-[11px] text-neutral-400 block leading-tight">
+                          Планировщик Reminders daily проверяет графики в автоматическом цикле и рассылает уведомления
+                        </span>
+                      </div>
+
+                      <div className="p-4 sm:p-5 rounded-2xl border border-neutral-200 dark:border-zinc-800 bg-neutral-50/50 dark:bg-zinc-900/40 space-y-2">
+                        <label className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-neutral-700 dark:text-zinc-300">
+                          <Layers className="w-4 h-4 text-amber-500" />
+                          <span>Яндекс Диск API Авторизация (Токен доступа)</span>
+                        </label>
+                        <input 
+                          type="password" 
+                          value={systemSettings.yandexDiskToken || ""}
+                          onChange={(e) => setSystemSettings({ ...systemSettings, yandexDiskToken: e.target.value, yandexDiskConnected: !!e.target.value })}
+                          placeholder="YA_TOKEN_OAUTH_EXAMPLE..."
+                          className={`w-full font-mono ${getInputStyle()}`}
+                        />
+                        <span className="text-[10px] sm:text-[11px] text-neutral-400 block leading-tight">
+                          Служебный токен OAuth с правами на сохранение отчетов и резервных копий документов
+                        </span>
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-1">
-                      <label className="font-bold uppercase">Оповещать о предстоящем ТО (дней до срока) *</label>
-                      <input 
-                        type="number" 
-                        required
-                        value={systemSettings.reminderDaysBefore}
-                        onChange={(e) => setSystemSettings({ ...systemSettings, reminderDaysBefore: Number(e.target.value) })}
-                        className={getInputStyle()}
-                      />
-                      <span className="text-[10px] opacity-60 mt-0.5">Планировщик Reminders daily проверяет графики в автоматическом цикле</span>
-                    </div>
-
-                    <div className="flex flex-col gap-1">
-                      <label className="font-bold uppercase">Яндекс Диск API Авторизация (Токен доступа)</label>
-                      <input 
-                        type="password" 
-                        value={systemSettings.yandexDiskToken}
-                        onChange={(e) => setSystemSettings({ ...systemSettings, yandexDiskToken: e.target.value, yandexDiskConnected: !!e.target.value })}
-                        placeholder="YA_TOKEN_OAUTH_EXAMPLE..."
-                        className={getInputStyle()}
-                      />
-                      <span className="text-[10px] opacity-60 mt-0.5">Служебный токен с правами на сохранение отчетов</span>
-                    </div>
-
-                    {/* SMTP Mail Configuration Panel */}
-                    <div className="space-y-4 p-4 rounded-xl border border-neutral-200 dark:border-zinc-800 bg-white/45 dark:bg-zinc-900/40">
-                      <span className="font-bold text-neutral-700 dark:text-zinc-300 uppercase tracking-wider block text-[10px]">📧 Настройка SMTP-сервера для отправки писем:</span>
+                    {/* 4. SMTP Mail Configuration Panel */}
+                    <div className="space-y-4 p-4 sm:p-5 rounded-2xl border border-neutral-200 dark:border-zinc-800 bg-neutral-50/50 dark:bg-zinc-900/40">
+                      <div>
+                        <div className="flex items-center gap-2 text-xs sm:text-sm font-extrabold uppercase tracking-wider text-neutral-700 dark:text-zinc-300">
+                          <Mail className="w-4 h-4 text-rose-500" />
+                          <span>4. Настройка SMTP-сервера для отправки писем</span>
+                        </div>
+                        <p className="text-[11px] text-neutral-400 mt-0.5">
+                          Используется для рассылки PDF-актов выполненного ТО, уведомлений и сервисных протоколов
+                        </p>
+                      </div>
                       
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 sm:gap-4">
                         <div className="flex flex-col gap-1.5">
-                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">SMTP Host (сервер исходящей почты):</label>
+                          <label className="font-semibold text-xs text-neutral-600 dark:text-zinc-300">SMTP Host (сервер почты):</label>
                           <input 
                             type="text" 
                             placeholder="smtp.yandex.ru или smtp.gmail.com"
                             value={systemSettings.smtpHost || ""}
                             onChange={(e) => setSystemSettings({ ...systemSettings, smtpHost: e.target.value })}
-                            className={getInputStyle()}
+                            className={`w-full ${getInputStyle()}`}
                           />
                         </div>
 
                         <div className="flex flex-col gap-1.5">
-                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">SMTP Port (исходящий порт):</label>
+                          <label className="font-semibold text-xs text-neutral-600 dark:text-zinc-300">SMTP Port (исходящий порт):</label>
                           <input 
                             type="number" 
                             placeholder="465 или 587"
                             value={systemSettings.smtpPort || ""}
                             onChange={(e) => setSystemSettings({ ...systemSettings, smtpPort: e.target.value ? Number(e.target.value) : undefined })}
-                            className={getInputStyle()}
+                            className={`w-full ${getInputStyle()}`}
                           />
                         </div>
 
                         <div className="flex flex-col gap-1.5">
-                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">SMTP User (логин/почта отправителя):</label>
+                          <label className="font-semibold text-xs text-neutral-600 dark:text-zinc-300">SMTP User (логин отправителя):</label>
                           <input 
                             type="text" 
                             placeholder="notify-bot@commercial-passport.ru"
                             value={systemSettings.smtpUser || ""}
                             onChange={(e) => setSystemSettings({ ...systemSettings, smtpUser: e.target.value })}
-                            className={getInputStyle()}
+                            className={`w-full ${getInputStyle()}`}
                           />
                         </div>
 
                         <div className="flex flex-col gap-1.5">
-                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">SMTP Password (пароль приложения):</label>
-                          <input 
-                            type="password" 
-                            placeholder="Ваш пароль или токен приложения"
-                            value={systemSettings.smtpPass || ""}
-                            onChange={(e) => setSystemSettings({ ...systemSettings, smtpPass: e.target.value })}
-                            className={getInputStyle()}
-                          />
+                          <label className="font-semibold text-xs text-neutral-600 dark:text-zinc-300">SMTP Password (пароль приложения):</label>
+                          <div className="relative">
+                            <input 
+                              type={showSmtpPass ? "text" : "password"} 
+                              placeholder="Пароль приложения"
+                              value={systemSettings.smtpPass || ""}
+                              onChange={(e) => setSystemSettings({ ...systemSettings, smtpPass: e.target.value })}
+                              className={`w-full pr-10 ${getInputStyle()}`}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowSmtpPass(!showSmtpPass)}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 cursor-pointer p-1"
+                              title={showSmtpPass ? "Скрыть пароль" : "Показать пароль"}
+                            >
+                              {showSmtpPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
                         </div>
 
-                        <div className="flex flex-col gap-1.5 md:col-span-2">
-                          <label className="font-semibold text-neutral-600 dark:text-zinc-350 flex items-center gap-2">
+                        <div className="flex flex-col gap-1.5 sm:col-span-2">
+                          <label className="font-semibold text-xs text-neutral-600 dark:text-zinc-300">Email робота-отправителя (from):</label>
+                          <input 
+                            type="text" 
+                            placeholder="notify-bot@commercial-passport.ru"
+                            value={systemSettings.emailBotAddress || ""}
+                            onChange={(e) => setSystemSettings({ ...systemSettings, emailBotAddress: e.target.value })}
+                            className={`w-full ${getInputStyle()}`}
+                          />
+                          <span className="text-[10px] text-neutral-400 leading-tight">
+                            Этот адрес будет отображаться в поле "От кого" у получателей
+                          </span>
+                        </div>
+
+                        <div className="sm:col-span-2 lg:col-span-3 pt-1">
+                          <label className="flex items-center gap-2.5 p-3 rounded-xl border border-neutral-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 cursor-pointer hover:bg-neutral-50 dark:hover:bg-zinc-850 transition-colors">
                             <input 
-                              type="checkbox"
+                              type="checkbox" 
                               checked={systemSettings.smtpSecure !== undefined ? systemSettings.smtpSecure : true}
                               onChange={(e) => setSystemSettings({ ...systemSettings, smtpSecure: e.target.checked })}
-                              className="rounded border-zinc-300 text-blue-600 focus:ring-blue-500"
+                              className="w-4 h-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                             />
-                            Использовать SSL/TLS шифрование (secure соединение)
+                            <span className="text-xs font-semibold text-neutral-700 dark:text-zinc-200">
+                              Использовать защищенное SSL/TLS шифрование (порт 465 SSL / 587 STARTTLS)
+                            </span>
                           </label>
                         </div>
                       </div>
-
-                      <div className="flex flex-col gap-1.5">
-                        <label className="font-semibold text-neutral-600 dark:text-zinc-350">Адрес почты робота-отправителя (emailBotAddress):</label>
-                        <input 
-                          type="text" 
-                          placeholder="notify-bot@commercial-passport.ru"
-                          value={systemSettings.emailBotAddress || ""}
-                          onChange={(e) => setSystemSettings({ ...systemSettings, emailBotAddress: e.target.value })}
-                          className={getInputStyle()}
-                        />
-                        <span className="text-[10px] opacity-70 block leading-tight">
-                          Этот адрес будет отображаться в поле "Отправитель" в отправленных письмах (from).
-                        </span>
-                      </div>
                     </div>
 
-                    {/* 📞 Контактные данные службы техподдержки перенесены в Каналы связи */}
-                    <div className="space-y-4 p-4 rounded-xl border border-neutral-200 dark:border-zinc-800 bg-white/45 dark:bg-zinc-900/40">
-                      <span className="font-bold text-neutral-700 dark:text-zinc-300 uppercase tracking-wider block text-[10px]">📞 Контактные данные службы техподдержки:</span>
+                    {/* 5. Support Contacts Panel */}
+                    <div className="space-y-4 p-4 sm:p-5 rounded-2xl border border-neutral-200 dark:border-zinc-800 bg-neutral-50/50 dark:bg-zinc-900/40">
+                      <div>
+                        <div className="flex items-center gap-2 text-xs sm:text-sm font-extrabold uppercase tracking-wider text-neutral-700 dark:text-zinc-300">
+                          <Phone className="w-4 h-4 text-emerald-500" />
+                          <span>5. Контактные данные службы техподдержки</span>
+                        </div>
+                        <p className="text-[11px] text-neutral-400 mt-0.5">
+                          Эти данные автоматически транслируются во вкладку «Поддержка» для специалистов и собственников жилья
+                        </p>
+                      </div>
                       
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 sm:gap-4">
                         <div className="flex flex-col gap-1.5">
-                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">Горячая линия (телефон):</label>
+                          <label className="font-semibold text-xs text-neutral-600 dark:text-zinc-300">Горячая линия (телефон):</label>
                           <input 
                             type="text" 
                             placeholder="+7 (800) 555-35-35"
                             value={systemSettings.supportPhone || ""}
                             onChange={(e) => setSystemSettings({ ...systemSettings, supportPhone: e.target.value })}
-                            className={getInputStyle()}
+                            className={`w-full ${getInputStyle()}`}
                           />
                         </div>
 
                         <div className="flex flex-col gap-1.5">
-                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">Email техподдержки:</label>
+                          <label className="font-semibold text-xs text-neutral-600 dark:text-zinc-300">Email техподдержки:</label>
                           <input 
                             type="email" 
                             placeholder="support@commercial-passport.ru"
                             value={systemSettings.supportEmail || ""}
                             onChange={(e) => setSystemSettings({ ...systemSettings, supportEmail: e.target.value })}
-                            className={getInputStyle()}
+                            className={`w-full ${getInputStyle()}`}
                           />
                         </div>
 
                         <div className="flex flex-col gap-1.5">
-                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">Телеграм чат-бот:</label>
+                          <label className="font-semibold text-xs text-neutral-600 dark:text-zinc-300 flex items-center gap-1.5">
+                            <TelegramLogo className="w-3.5 h-3.5 shrink-0" />
+                            <span>Телеграм чат-бот:</span>
+                          </label>
                           <input 
                             type="text" 
                             placeholder="cp_support_bot"
                             value={systemSettings.supportTelegram || ""}
                             onChange={(e) => setSystemSettings({ ...systemSettings, supportTelegram: e.target.value })}
-                            className={getInputStyle()}
+                            className={`w-full ${getInputStyle()}`}
                           />
                         </div>
 
                         <div className="flex flex-col gap-1.5">
-                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">WhatsApp (телефон/ссылка):</label>
+                          <label className="font-semibold text-xs text-neutral-600 dark:text-zinc-300 flex items-center gap-1.5">
+                            <WhatsAppLogo className="w-3.5 h-3.5 shrink-0" />
+                            <span>WhatsApp (телефон/ссылка):</span>
+                          </label>
                           <input 
                             type="text" 
                             placeholder="+79234567890"
                             value={systemSettings.supportWhatsapp || ""}
                             onChange={(e) => setSystemSettings({ ...systemSettings, supportWhatsapp: e.target.value })}
-                            className={getInputStyle()}
+                            className={`w-full ${getInputStyle()}`}
                           />
                         </div>
 
-                        <div className="flex flex-col gap-1.5 md:col-span-2">
-                          <label className="font-semibold text-neutral-600 dark:text-zinc-350">Мессенджер MAX (ID чата или ссылка):</label>
+                        <div className="flex flex-col gap-1.5 sm:col-span-2">
+                          <label className="font-semibold text-xs text-neutral-600 dark:text-zinc-300 flex items-center gap-1.5">
+                            <MaxLogo className="w-3.5 h-3.5 shrink-0" />
+                            <span>Мессенджер MAX (ID чата или ссылка):</span>
+                          </label>
                           <input 
                             type="text" 
                             placeholder="@PassportTechSupportBot"
                             value={systemSettings.supportMax || ""}
                             onChange={(e) => setSystemSettings({ ...systemSettings, supportMax: e.target.value })}
-                            className={getInputStyle()}
+                            className={`w-full ${getInputStyle()}`}
                           />
                         </div>
                       </div>
-                      
-                      <span className="text-[10px] opacity-70 block leading-tight mt-1">
-                        Эти контактные данные будут отображаться во вкладке «Поддержка» для специалистов и собственников жилья.
-                      </span>
                     </div>
 
-                    <button type="submit" className={`w-full ${getAccentBtn()}`}>
-                      Сохранить настройки
-                    </button>
+                    {/* Form Action Buttons Bar */}
+                    <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <div className="text-xs text-neutral-400 flex items-center gap-1.5 order-2 sm:order-1">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                        <span>Изменения вступают в силу мгновенно для всех ботов</span>
+                      </div>
+                      <button 
+                        type="submit" 
+                        className="w-full sm:w-auto px-8 py-3 bg-blue-600 hover:bg-blue-700 active:scale-98 text-white font-extrabold text-xs sm:text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer order-1 sm:order-2"
+                      >
+                        <Check className="w-4 h-4" />
+                        <span>Сохранить настройки каналов связи</span>
+                      </button>
+                    </div>
+
                   </form>
                 </div>
               </div>
@@ -5889,7 +6717,7 @@ export default function App() {
         )}
 
         {/* ======================= ROLE 2: OWNER FACILITY MONITOR ======================= */}
-        {currentUser.role === 'owner' && (
+        {(currentUser.role === 'owner' || currentUser.role === 'family' || currentUser.role === 'manager') && (
           <div className="space-y-6">
             
             {ownerActiveTab === 'ecosystem' && (
@@ -5898,6 +6726,7 @@ export default function App() {
                 objects={objects}
                 schedules={schedules}
                 reports={reports}
+                users={users}
                 onNavigateToObjects={() => {
                   setOwnerActiveTab('characteristics');
                 }}
@@ -5917,12 +6746,21 @@ export default function App() {
               <div className="space-y-4 animate-fadeIn max-w-4xl mx-auto w-full">
                 <div className={getCardStyle()}>
                 <div className={getSubHeaderStyle()}>
-                  <h3 className="font-bold text-base flex items-center gap-2">🏢 Мои объекты (Личный кабинет Собственника)</h3>
+                  <h3 className="font-bold text-base flex items-center gap-2">
+                    {currentUser.role === 'manager' ? '🔑 Доступные объекты (Кабинет Управляющего)' : currentUser.role === 'family' ? '👨‍👩‍👧‍👦 Объекты семьи' : '🏢 Мои объекты (Личный кабинет Собственника)'}
+                  </h3>
                   <p className="text-xs opacity-60">Просмотр технических паспортов в режиме чтения, проверка календарных графиков ТО и загрузка архива Актов. Кликните на объект, чтобы скрыть или показать его данные.</p>
                 </div>
 
                 <div className="space-y-4">
-                  {objects.filter(o => o.ownerId === currentUser.id).map(obj => {
+                  {objects.filter(o => 
+                    o.ownerId === currentUser.id || 
+                    (o.familyAccessList && o.familyAccessList.some(f => 
+                      (f.email && currentUser.email && f.email.toLowerCase() === currentUser.email.toLowerCase()) || 
+                      f.id === currentUser.id || 
+                      f.userId === currentUser.id
+                    ))
+                  ).map(obj => {
                   const matchingSchedules = schedules.filter(s => s.objectId === obj.id);
                   const matchingReports = reports.filter(r => r.objectId === obj.id);
                   
@@ -6646,119 +7484,153 @@ export default function App() {
                           {(() => {
                             const linkedOuts = getLinkedOutbuildings(obj.id);
                             if (linkedOuts.length === 0) return null;
+                            const isOutbuildingsOpen = expandedOutbuildings[obj.id] !== false; // expanded by default
                             return (
-                              <div className="p-4 bg-blue-500/5 dark:bg-blue-950/20 border border-blue-500/15 rounded-xl space-y-2">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-blue-600 dark:text-blue-400">🛖</span>
-                                  <h5 className="font-extrabold text-xs text-neutral-800 dark:text-zinc-100 uppercase tracking-wide">
-                                    Привязанные строения и постройки ({linkedOuts.length})
-                                  </h5>
+                              <div className="bg-blue-500/5 dark:bg-blue-950/20 border border-blue-500/15 rounded-xl overflow-hidden transition-all duration-200">
+                                <div 
+                                  onClick={() => setExpandedOutbuildings(prev => ({ ...prev, [obj.id]: !isOutbuildingsOpen }))}
+                                  className="w-full text-left p-3.5 px-4 flex items-center justify-between gap-3 hover:bg-blue-500/10 dark:hover:bg-blue-900/30 transition-colors cursor-pointer select-none"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-blue-600 dark:text-blue-400 text-sm">🛖</span>
+                                    <h5 className="font-extrabold text-xs text-neutral-800 dark:text-zinc-100 uppercase tracking-wide">
+                                      Привязанные строения и постройки ({linkedOuts.length})
+                                    </h5>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[11px] font-bold text-blue-600 dark:text-blue-400">
+                                      {isOutbuildingsOpen ? "Свернуть ▲" : "Развернуть ▼"}
+                                    </span>
+                                    <ChevronDown className={`w-4 h-4 text-blue-600 dark:text-blue-400 transition-transform duration-200 ${isOutbuildingsOpen ? 'rotate-180' : ''}`} />
+                                  </div>
                                 </div>
-                                <div className="flex flex-wrap gap-2 text-xs">
-                                  {linkedOuts.map((b: any) => (
-                                    <div key={b.id} className="p-2.5 px-4 bg-white dark:bg-zinc-900 rounded-lg border border-neutral-200 dark:border-zinc-800 flex items-center gap-2 shadow-sm">
-                                      <span className="text-base" style={{ filter: `drop-shadow(0 0 5px ${b.color})` }}>🏠</span>
-                                      <div>
-                                        <div className="font-bold text-neutral-900 dark:text-neutral-50">{b.label}</div>
-                                        <div className="text-[10px] text-zinc-400 font-mono">Размер: {b.width}x{b.height}% • План-координаты: {b.x}%, {b.y}%</div>
-                                      </div>
+                                {isOutbuildingsOpen && (
+                                  <div className="px-4 pb-4 pt-1 animate-slideDown">
+                                    <div className="flex flex-wrap gap-2 text-xs">
+                                      {linkedOuts.map((b: any) => (
+                                        <div key={b.id} className="p-2.5 px-4 bg-white dark:bg-zinc-900 rounded-lg border border-neutral-200 dark:border-zinc-800 flex items-center gap-2 shadow-sm">
+                                          <span className="text-base" style={{ filter: `drop-shadow(0 0 5px ${b.color})` }}>🏠</span>
+                                          <div>
+                                            <div className="font-bold text-neutral-900 dark:text-neutral-50">{b.label}</div>
+                                            <div className="text-[10px] text-zinc-400 font-mono">Размер: {b.width}x{b.height}% • План-координаты: {b.x}%, {b.y}%</div>
+                                          </div>
+                                        </div>
+                                      ))}
                                     </div>
-                                  ))}
-                                </div>
+                                  </div>
+                                )}
                               </div>
                             );
                           })()}
 
-                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             {/* Schedule item readings */}
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-black uppercase text-zinc-400">График обслуживания оборудования:</span>
-                                <button 
-                                  onClick={() => {
-                                    handleAddNewScheduleForObject(obj.id);
-                                    setIsOwnerSchModalOpen(true);
-                                  }}
-                                  className="text-[11px] font-extrabold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-0.5 cursor-pointer"
-                                >
-                                  <span>➕ Добавить регламент</span>
-                                </button>
-                              </div>
-                              {matchingSchedules.length === 0 ? (
-                                <p className="text-xs italic text-[11px] opacity-50">График не назначен. Нажмите кнопку выше, чтобы составить первый регламент.</p>
-                              ) : (
-                                <div className="space-y-1.5">
-                                  {matchingSchedules.map(sch => {
-                                    const status = getScheduleStatus(sch);
-                                    return (
-                                      <div key={sch.id} className="p-3 border rounded-lg flex flex-col gap-2 text-xs text-neutral-600 dark:text-zinc-300 bg-white dark:bg-zinc-950 shadow-sm border-neutral-300/20">
-                                        <div className="min-w-0 space-y-1">
-                                          <div className="font-bold text-slate-800 dark:text-slate-100 break-words">{sch.title}</div>
-                                          <div className="text-[10px] opacity-65 flex flex-wrap gap-x-2 gap-y-1 items-center mt-0.5">
-                                            <span>Категория: <strong>{sch.category}</strong></span>
-                                            <span className="opacity-40">•</span>
-                                            <span>Интервал: {sch.intervalDays} дн.</span>
-                                            <span className="opacity-40">•</span>
-                                            <span>Чек-лист: {getTemplateName(sch.checklistTemplateId)}</span>
-                                          </div>
-                                          <div className="pt-1.5 flex items-center justify-between gap-2">
-                                            <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold border uppercase tracking-wider ${status.class}`}>
-                                              {status.label}
-                                            </span>
-                                            <div className="flex items-center gap-1.5">
-                                              <button 
-                                                onClick={() => setQrModalSchedule(sch)}
-                                                className="flex items-center gap-1 px-2 py-1 bg-sky-500/10 hover:bg-sky-500/20 text-sky-600 dark:text-sky-400 border border-sky-300/20 rounded-md font-bold text-[9px] cursor-pointer transition-all uppercase"
-                                                title="Показать QR-код обслуживания"
-                                              >
-                                                <span>📲 QR-код</span>
-                                              </button>
-                                              <button 
-                                                onClick={() => {
-                                                  startEditSchedule(sch);
-                                                  setIsOwnerSchModalOpen(true);
-                                                }}
-                                                className="flex items-center gap-1 px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-300/20 rounded-md font-bold text-[9px] cursor-pointer transition-all uppercase"
-                                                title="Редактировать регламент"
-                                              >
-                                                <span>✏️</span>
-                                              </button>
-                                              <button 
-                                                onClick={() => deleteSchedule(sch.id)}
-                                                className="flex items-center gap-1 px-2 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 border border-red-300/20 rounded-md font-bold text-[9px] cursor-pointer transition-all uppercase"
-                                                title="Удалить регламент"
-                                              >
-                                                <span>❌</span>
-                                              </button>
+                            {(() => {
+                              const isSchedulesOpen = expandedOwnerSchedules[obj.id] !== false; // expanded by default
+                              return (
+                                <div className="space-y-2 p-3.5 bg-neutral-500/5 dark:bg-zinc-900/40 rounded-xl border border-neutral-200/60 dark:border-zinc-800/80 transition-all duration-200">
+                                  <div className="flex items-center justify-between gap-2 flex-wrap pb-1">
+                                    <div 
+                                      onClick={() => setExpandedOwnerSchedules(prev => ({ ...prev, [obj.id]: !isSchedulesOpen }))}
+                                      className="flex items-center gap-2 cursor-pointer select-none group"
+                                      title="Нажмите, чтобы скрыть или показать график"
+                                    >
+                                      <span className="text-[10px] font-black uppercase text-neutral-700 dark:text-zinc-300 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors flex items-center gap-1.5">
+                                        <span>🗓️</span>
+                                        <span>График обслуживания оборудования ({matchingSchedules.length}):</span>
+                                      </span>
+                                      <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 flex items-center gap-0.5">
+                                        <span>{isSchedulesOpen ? "Свернуть ▲" : "Развернуть ▼"}</span>
+                                        <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isSchedulesOpen ? 'rotate-180' : ''}`} />
+                                      </span>
+                                    </div>
+                                    <button 
+                                      onClick={() => {
+                                        handleAddNewScheduleForObject(obj.id);
+                                        setIsOwnerSchModalOpen(true);
+                                      }}
+                                      className="text-[11px] font-extrabold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-0.5 cursor-pointer shrink-0"
+                                    >
+                                      <span>➕ Добавить регламент</span>
+                                    </button>
+                                  </div>
+
+                                  {isSchedulesOpen && (
+                                    <div className="space-y-1.5 animate-slideDown pt-1">
+                                      {matchingSchedules.length === 0 ? (
+                                        <p className="text-xs italic text-[11px] opacity-50 py-1">График не назначен. Нажмите кнопку выше, чтобы составить первый регламент.</p>
+                                      ) : (
+                                        matchingSchedules.map(sch => {
+                                          const status = getScheduleStatus(sch);
+                                          return (
+                                            <div key={sch.id} className="p-3 border rounded-lg flex flex-col gap-2 text-xs text-neutral-600 dark:text-zinc-300 bg-white dark:bg-zinc-950 shadow-sm border-neutral-300/20">
+                                              <div className="min-w-0 space-y-1">
+                                                <div className="font-bold text-slate-800 dark:text-slate-100 break-words">{sch.title}</div>
+                                                <div className="text-[10px] opacity-65 flex flex-wrap gap-x-2 gap-y-1 items-center mt-0.5">
+                                                  <span>Категория: <strong>{sch.category}</strong></span>
+                                                  <span className="opacity-40">•</span>
+                                                  <span>Интервал: {sch.intervalDays} дн.</span>
+                                                  <span className="opacity-40">•</span>
+                                                  <span>Чек-лист: {getTemplateName(sch.checklistTemplateId)}</span>
+                                                </div>
+                                                <div className="pt-1.5 flex items-center justify-between gap-2">
+                                                  <StatusBadge schedule={sch} reminderDaysBefore={systemSettings.reminderDaysBefore} size="xs" />
+                                                  <div className="flex items-center gap-1.5">
+                                                    <button 
+                                                      onClick={() => setQrModalSchedule(sch)}
+                                                      className="flex items-center gap-1 px-2 py-1 bg-sky-500/10 hover:bg-sky-500/20 text-sky-600 dark:text-sky-400 border border-sky-300/20 rounded-md font-bold text-[9px] cursor-pointer transition-all uppercase"
+                                                      title="Показать QR-код обслуживания"
+                                                    >
+                                                      <span>📲 QR-код</span>
+                                                    </button>
+                                                    <button 
+                                                      onClick={() => {
+                                                        startEditSchedule(sch);
+                                                        setIsOwnerSchModalOpen(true);
+                                                      }}
+                                                      className="flex items-center gap-1 px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-300/20 rounded-md font-bold text-[9px] cursor-pointer transition-all uppercase"
+                                                      title="Редактировать регламент"
+                                                    >
+                                                      <span>✏️</span>
+                                                    </button>
+                                                    <button 
+                                                      onClick={() => deleteSchedule(sch.id)}
+                                                      className="flex items-center gap-1 px-2 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 border border-red-300/20 rounded-md font-bold text-[9px] cursor-pointer transition-all uppercase"
+                                                      title="Удалить регламент"
+                                                    >
+                                                      <span>❌</span>
+                                                    </button>
+                                                  </div>
+                                                </div>
+                                              </div>
                                             </div>
-                                          </div>
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
+                                          );
+                                        })
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
-                              )}
-                            </div>
+                              );
+                            })()}
 
                             {/* Completed Acts for this owner facility */}
-                            <div className="space-y-2">
-                              <span className="text-[10px] font-black uppercase text-zinc-400">Всего подтверждено выездов ({matchingReports.length}):</span>
+                            <div className="space-y-2 p-3.5 bg-neutral-500/5 dark:bg-zinc-900/40 rounded-xl border border-neutral-200/60 dark:border-zinc-800/80 transition-all duration-200">
+                              <span className="text-[10px] font-black uppercase text-neutral-600 dark:text-zinc-400 flex items-center gap-1.5 pb-1">
+                                <span>📋</span>
+                                <span>Всего подтверждено выездов ({matchingReports.length}):</span>
+                              </span>
                               {matchingReports.length === 0 ? (
-                                <p className="text-xs italic text-[11px] opacity-50">Акты пока отсутствуют</p>
+                                <p className="text-xs italic text-[11px] opacity-50 py-1">Акты пока отсутствуют</p>
                               ) : (
-                                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                                <div className="space-y-1.5 max-h-56 overflow-y-auto">
                                   {matchingReports.map(rep => {
                                     const isApproved = !!rep.approvedByOwner;
                                     return (
-                                      <div key={rep.id} className="p-2 bg-neutral-50 dark:bg-zinc-800 rounded-lg flex flex-col justify-between gap-2 text-[11px]">
+                                      <div key={rep.id} className="p-2 bg-white dark:bg-zinc-950 border border-neutral-200/60 dark:border-zinc-800 rounded-lg flex flex-col justify-between gap-2 text-[11px] shadow-sm">
                                         <div className="p-2 pb-0">
-                                          <div className="font-bold text-slate-800 flex items-center justify-between gap-1">
+                                          <div className="font-bold text-slate-800 dark:text-slate-100 flex items-center justify-between gap-1">
                                             <span>Акт {rep.id} от {new Date(rep.dateDone).toLocaleDateString('ru-RU')}</span>
-                                            {isApproved ? (
-                                              <span className="bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-400 px-1 py-0.5 rounded text-[8px] font-bold uppercase tracking-wide">Утвержден</span>
-                                            ) : (
-                                              <span className="bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-400 px-1 py-0.5 rounded text-[8px] font-bold uppercase tracking-wide">Ожидает</span>
-                                            )}
+                                            <StatusBadge status={isApproved ? "approved" : "pending"} label={isApproved ? "Утвержден" : "Ожидает"} size="xs" variant="pill" />
                                           </div>
                                           {isApproved && rep.ownerRating && (
                                             <div className="flex items-center gap-1 mt-1 text-amber-500 font-bold">
@@ -6766,7 +7638,7 @@ export default function App() {
                                             </div>
                                           )}
                                         </div>
-                                        <div className="flex items-center justify-between gap-2 p-2 pt-0 border-t border-neutral-100 dark:border-zinc-700/50 mt-1">
+                                        <div className="flex items-center justify-between gap-2 p-2 pt-0 border-t border-neutral-100 dark:border-zinc-800/80 mt-1">
                                           {!isApproved ? (
                                             <button
                                               onClick={() => {
@@ -6873,7 +7745,7 @@ export default function App() {
                         <div className="space-y-1">
                           <div className="flex justify-between items-start">
                             <span className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 text-[9px] px-2 py-0.5 rounded font-black uppercase tracking-wider inline-block">Инженер</span>
-                            {(currentUser.role === 'owner' || currentUser.role === 'admin') && (
+                            {(currentUser.role === 'owner' || currentUser.role === 'family' || currentUser.role === 'manager' || currentUser.role === 'admin') && (
                               <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <button 
                                   onClick={() => startEditSpecialist(spec)}
@@ -6952,8 +7824,8 @@ export default function App() {
                 )}
               </div>
 
-              {/* Specialist Profile Form (only visible to Owners & Admins) */}
-              {(currentUser.role === 'owner' || currentUser.role === 'admin') && (
+              {/* Specialist Profile Form (only visible to Owners, Family, Managers & Admins) */}
+              {(currentUser.role === 'owner' || currentUser.role === 'family' || currentUser.role === 'manager' || currentUser.role === 'admin') && (
                 <div className="mt-8 pt-6 border-t border-dashed border-zinc-200 dark:border-zinc-800 p-4 rounded-xl bg-neutral-100/5 dark:bg-zinc-800/10 space-y-3">
                   <h4 className="font-bold text-xs text-amber-600 dark:text-amber-500 flex items-center gap-1">
                     {editingSpecialistId ? "✏️ Редактирование профиля инженера" : "➕ Регистрация нового инженера"}
@@ -7399,11 +8271,7 @@ export default function App() {
                                 <span className="text-[10px] text-sky-500 font-bold tracking-wider uppercase block">АКТ {rep.id}</span>
                                 <span className="text-[11px] opacity-60">{new Date(rep.dateDone).toLocaleDateString('ru-RU')}</span>
                               </div>
-                              {isApproved ? (
-                                <span className="bg-emerald-500/10 text-emerald-500 text-[10px] font-extrabold px-2.5 py-1 rounded-full uppercase">Утвержден</span>
-                              ) : (
-                                <span className="bg-amber-500/10 text-amber-500 text-[10px] font-extrabold px-2.5 py-1 rounded-full uppercase animate-pulse">Ожидает</span>
-                              )}
+                              <StatusBadge status={isApproved ? "approved" : "pending"} label={isApproved ? "Утвержден" : "Ожидает утверждения"} size="xs" variant="pill" />
                             </div>
 
                             <div className="space-y-1">
@@ -8141,9 +9009,7 @@ export default function App() {
                                           <td className="py-2.5 font-mono">{sch.intervalDays} дн.</td>
                                           <td className="py-2.5 font-mono opacity-80">{sch.lastDoneDate || "Не проводилось"}</td>
                                           <td className="py-2.5">
-                                            <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${status.class}`}>
-                                              {status.label}
-                                            </span>
+                                            <StatusBadge schedule={sch} reminderDaysBefore={systemSettings.reminderDaysBefore} size="xs" variant="pill" />
                                           </td>
                                         </tr>
                                       );
@@ -8509,7 +9375,7 @@ export default function App() {
                                 <span className="text-[10px] text-sky-500 font-bold tracking-wider uppercase block">АКТ {rep.id}</span>
                                 <span className="text-[11px] opacity-60">{new Date(rep.dateDone).toLocaleString('ru-RU')}</span>
                               </div>
-                              <span className="bg-emerald-500/10 text-emerald-500 text-[10px] font-extrabold px-2 py-1 rounded-full uppercase">Выполнено</span>
+                              <StatusBadge report={rep} size="xs" variant="pill" />
                             </div>
 
                             <div className="space-y-1">
@@ -10074,6 +10940,19 @@ export default function App() {
           }
         }}
       />
+
+      {/* Mandatory Legal Consent Modal (1st login & on documents update) */}
+      {currentUser && (
+        <MandatoryLegalConsentModal
+          isOpen={isLegalConsentModalOpen}
+          currentUser={currentUser}
+          isUpdateNotice={isLegalUpdateNotice}
+          onConsentConfirmed={() => {
+            setIsLegalConsentModalOpen(false);
+          }}
+          onLogout={handleLogout}
+        />
+      )}
 
     </div>
   );

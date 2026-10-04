@@ -15,6 +15,7 @@ import {
   MessageCircle,
   FolderOpen
 } from 'lucide-react';
+import { TelegramLogo, VkLogo, MaxLogo, WhatsAppLogo } from './MessengerLogos';
 import { SupportTicket, SystemSettings, User as UserType } from '../types';
 
 interface SupportTabProps {
@@ -262,8 +263,8 @@ export default function SupportTab({
 
               {/* Telegram Link */}
               <div className="flex items-start gap-3">
-                <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-500">
-                  <MessageCircle className="w-4 h-4" />
+                <div className="p-1 rounded-xl flex items-center justify-center shrink-0">
+                  <TelegramLogo className="w-7 h-7" />
                 </div>
                 <div>
                   <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest leading-none mb-1">Телеграм чат-бот</div>
@@ -281,8 +282,8 @@ export default function SupportTab({
 
               {/* WhatsApp Link */}
               <div className="flex items-start gap-3">
-                <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-500">
-                  <MessageSquare className="w-4 h-4" />
+                <div className="p-1 rounded-xl flex items-center justify-center shrink-0">
+                  <WhatsAppLogo className="w-7 h-7" />
                 </div>
                 <div>
                   <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest leading-none mb-1">WhatsApp оператор</div>
@@ -301,8 +302,8 @@ export default function SupportTab({
               {/* MAX Link */}
               {supportMax && (
                 <div className="flex items-start gap-3">
-                  <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-500">
-                    <MessageSquare className="w-4 h-4" />
+                  <div className="p-1 rounded-xl flex items-center justify-center shrink-0">
+                    <MaxLogo className="w-7 h-7" />
                   </div>
                   <div>
                     <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest leading-none mb-1">Чат в MAX</div>

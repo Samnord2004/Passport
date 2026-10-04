@@ -1,5 +1,5 @@
 import { DataStore } from "./data-store.ts";
-import type { User, NotificationLog } from "../src/types.ts";
+import type { User, NotificationLog, ScheduleItem, BuildingObject } from "../src/types.ts";
 import nodemailer from "nodemailer";
 
 interface NotificationTask {
@@ -7,6 +7,9 @@ interface NotificationTask {
   type: 'incoming_report' | 'reminder_upcoming' | 'reminder_overdue';
   recipientUser: User;
   message: string;
+  subject?: string;
+  html?: string;
+  forceEmailOnly?: boolean;
 }
 
 class NotificationQueue {
@@ -41,6 +44,136 @@ class NotificationQueue {
     return taskId;
   }
 
+  /**
+   * Enqueues a critical overdue (> 5 days) regulation email specifically to administrators.
+   * Guarantees email channel delivery with structured alert and HTML formatting.
+   */
+  public enqueueOverdueAdminEmail(
+    adminUser: User,
+    schedule: ScheduleItem,
+    buildingObject: BuildingObject | undefined,
+    daysOverdue: number,
+    specialistName?: string
+  ): string {
+    const taskId = "nt_crit_overdue_" + Math.random().toString(36).substring(2, 11);
+    const objName = buildingObject?.name || "Неизвестный объект";
+    const objAddress = buildingObject?.address || "Адрес не указан";
+    
+    // Calculate lastDoneDate or note
+    const lastDoneStr = schedule.lastDoneDate 
+      ? new Date(schedule.lastDoneDate).toLocaleDateString('ru-RU') 
+      : 'Ни разу не проводилось';
+    
+    // Calculate due date
+    let dueDateFormatted = 'Не определена';
+    if (schedule.lastDoneDate) {
+      const d = new Date(schedule.lastDoneDate);
+      d.setDate(d.getDate() + schedule.intervalDays);
+      dueDateFormatted = d.toLocaleDateString('ru-RU');
+    }
+
+    const subject = `🚨 [КРИТИЧЕСКАЯ ПРОСРОЧКА >5 ДНЕЙ] Регламент ТО: "${schedule.title}" (${objName})`;
+
+    const textMessage = `🚨 КРИТИЧЕСКОЕ ОПОВЕЩЕНИЕ СЛУЖБЫ ЭКСПЛУАТАЦИИ\n\n` +
+      `Внимание! Регламент технического обслуживания просрочен более чем на 5 дней!\n\n` +
+      `Параметры объекта и регламента:\n` +
+      `• Объект: ${objName} (${objAddress})\n` +
+      `• Регламент ТО: "${schedule.title}"\n` +
+      `• Категория оборудования: ${schedule.category}\n` +
+      `• Установленный интервал: каждые ${schedule.intervalDays} дн.\n` +
+      `• Дата последнего выполнения: ${lastDoneStr}\n` +
+      `• Плановый срок проведения: ${dueDateFormatted}\n` +
+      `• Текущая просрочка: ${daysOverdue} дн. (превышен критический порог > 5 дней!)\n` +
+      `• Назначенный специалист: ${specialistName || 'Не назначен (требуется выбор)'}\n` +
+      (schedule.notes ? `• Примечания к регламенту: ${schedule.notes}\n` : '') +
+      `\n⚠️ ТРЕБУЕТСЯ ДЕЙСТВИЕ АДМИНИСТРАТОРА: Срочно свяжитесь со специалистом или назначьте внеплановый выезд сервисной бригады для предотвращения аварийного выхода оборудования из строя.\n\n` +
+      `Система «Цифровой паспорт объекта» — автоматический мониторинг ТО.`;
+
+    const htmlMessage = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 620px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.08);">
+        <div style="background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); padding: 24px; color: #ffffff;">
+          <div style="display: inline-block; background: rgba(255,255,255,0.2); padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px;">
+            🚨 Критический сигнал безопасности
+          </div>
+          <h1 style="margin: 0; font-size: 20px; font-weight: 800; line-height: 1.3;">Регламент ТО просрочен более чем на 5 дней!</h1>
+          <p style="margin: 6px 0 0 0; opacity: 0.9; font-size: 13px;">Автоматическое email-уведомление администратора службы эксплуатации</p>
+        </div>
+        
+        <div style="padding: 24px; color: #1e293b;">
+          <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+            <div style="font-size: 12px; color: #991b1b; font-weight: 700; text-transform: uppercase; margin-bottom: 4px;">Степень просрочки:</div>
+            <div style="font-size: 26px; font-weight: 900; color: #b91c1c;">
+              ${daysOverdue} дн. просрочки
+            </div>
+            <div style="font-size: 12px; color: #b91c1c; margin-top: 4px; line-height: 1.4;">
+              Критический лимит (5 дней) превышен. Эксплуатация оборудования без подтвержденного ТО повышает риск аварийной остановки.
+            </div>
+          </div>
+
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
+            <tbody>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 10px 0; color: #64748b; font-weight: 600; width: 38%;">Объект:</td>
+                <td style="padding: 10px 0; color: #0f172a; font-weight: 700;">${objName}</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 10px 0; color: #64748b; font-weight: 600;">Адрес:</td>
+                <td style="padding: 10px 0; color: #334155;">${objAddress}</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 10px 0; color: #64748b; font-weight: 600;">Регламент ТО:</td>
+                <td style="padding: 10px 0; color: #0f172a; font-weight: 700;">${schedule.title}</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 10px 0; color: #64748b; font-weight: 600;">Категория:</td>
+                <td style="padding: 10px 0; color: #334155;">${schedule.category}</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 10px 0; color: #64748b; font-weight: 600;">Периодичность:</td>
+                <td style="padding: 10px 0; color: #334155;">Каждые ${schedule.intervalDays} дн.</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 10px 0; color: #64748b; font-weight: 600;">Последнее ТО:</td>
+                <td style="padding: 10px 0; color: #334155;">${lastDoneStr}</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 10px 0; color: #64748b; font-weight: 600;">Плановый срок:</td>
+                <td style="padding: 10px 0; color: #dc2626; font-weight: 700;">${dueDateFormatted}</td>
+              </tr>
+              <tr>
+                <td style="padding: 10px 0; color: #64748b; font-weight: 600;">Исполнитель:</td>
+                <td style="padding: 10px 0; color: #334155;">${specialistName || 'Не назначен'}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div style="background: #fffbeb; border-left: 4px solid #f59e0b; padding: 12px 16px; border-radius: 0 8px 8px 0; margin-bottom: 24px; font-size: 13px; color: #78350f;">
+            <strong>Действие администратора:</strong> Свяжитесь со специалистом или назначьте внеплановый выезд в системе.
+          </div>
+        </div>
+
+        <div style="background: #f8fafc; padding: 16px 24px; font-size: 11px; color: #64748b; border-top: 1px solid #e2e8f0; text-align: center;">
+          «Цифровой паспорт объекта» — Автоматизированная система контроля регламентов ТО
+        </div>
+      </div>
+    `;
+
+    const task: NotificationTask = {
+      id: taskId,
+      type: 'reminder_overdue',
+      recipientUser: adminUser,
+      message: textMessage,
+      subject,
+      html: htmlMessage,
+      forceEmailOnly: true
+    };
+
+    this.queue.push(task);
+    console.log(`[NotificationQueue] [Enqueued] Overdue (>5 days) critical email task ${taskId} added for admin: ${adminUser.fullname} (${adminUser.email}).`);
+    setImmediate(() => this.processNext());
+    return taskId;
+  }
+
   private async processNext() {
     if (this.isProcessing) return;
     if (this.queue.length === 0) return;
@@ -66,10 +199,14 @@ class NotificationQueue {
     const rolePrefs = settings.notificationChannels[receiverRole] || { telegram: true, max: false, vk: false, email: true };
 
     const methods: ('telegram' | 'max' | 'vk' | 'email')[] = [];
-    if (rolePrefs.telegram) methods.push('telegram');
-    if (rolePrefs.max) methods.push('max');
-    if (rolePrefs.vk) methods.push('vk');
-    if (rolePrefs.email) methods.push('email');
+    if (task.forceEmailOnly) {
+      methods.push('email');
+    } else {
+      if (rolePrefs.telegram) methods.push('telegram');
+      if (rolePrefs.max) methods.push('max');
+      if (rolePrefs.vk) methods.push('vk');
+      if (rolePrefs.email) methods.push('email');
+    }
 
     console.log(`[NotificationQueue] [Processing] Task ${task.id} starting dispatch across [${methods.join(', ')}] channels.`);
 
@@ -203,8 +340,9 @@ class NotificationQueue {
               await transporter.sendMail({
                 from: `"${botEmail}" <${smtpUser}>`,
                 to: rec,
-                subject: "Цифровой Паспорт Объекта - Оповещение безопасности",
+                subject: task.subject || "Цифровой Паспорт Объекта - Оповещение безопасности",
                 text: message,
+                ...(task.html ? { html: task.html } : {})
               });
 
               isRealSent = true;

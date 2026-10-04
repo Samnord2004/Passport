@@ -20,6 +20,10 @@ import {
   Hammer,
   Share2,
   Eye,
+  EyeOff,
+  Key,
+  Copy,
+  Dices,
   Settings,
   Users,
   Search,
@@ -32,8 +36,9 @@ import {
   AlertTriangle
 } from "lucide-react";
 import { User as UserType, BuildingObject, ScheduleItem, CompletedChecklist, FamilyMemberAccess } from "../types";
+import { TelegramLogo, VkLogo, WhatsAppLogo } from "./MessengerLogos";
+import StatusBadge from "./StatusBadge";
 import { parseEquipment, parseLifeSupport, parseBuildingInfo, parseSpecs } from "../utils/specParsers";
-import { Property3DViewer } from "./Property3DViewer";
 import { 
   BuildingShapeType, 
   CutCornerOrientation, 
@@ -49,11 +54,10 @@ import {
   getFenceHeight
 } from "../utils/shapeUtils";
 import { 
-  Building3DStyle, 
   BuildingFloorPlan 
 } from "../types/architecturalTypes";
-import { Building3DCustomizerModal } from "./Building3DCustomizerModal";
 import { FloorPlanModal } from "./FloorPlanModal";
+import { SpecialistSearchModal } from "./SpecialistSearchModal";
 
 function mapPlanSubtypeToSecondaryType(subType?: string): "banya" | "shed" | "gazebo" | "bonfire" | "bbq" | "playground" | "garage" | "security_house" | "guest_house" | "observatory" | "admin_building" | "boiler_room" | "other" {
   switch (subType) {
@@ -145,6 +149,7 @@ interface EcosystemPortalProps {
   currentTheme?: string;
   onRefreshData?: () => void;
   onOpenSpecialistSearch?: () => void;
+  users?: UserType[];
 }
 
 // Sub-interfaces for extended features
@@ -218,7 +223,6 @@ interface PlanogramBuilding {
   fenceMaterial?: FenceMaterialType;
   gateType?: GateType;
   gateMaterial?: FenceMaterialType;
-  architecturalStyle?: Building3DStyle;
   floorPlan?: BuildingFloorPlan;
 }
 
@@ -305,8 +309,28 @@ export default function EcosystemPortal({
   onNavigateToSchedules,
   currentTheme,
   onRefreshData,
-  onOpenSpecialistSearch
+  onOpenSpecialistSearch,
+  users = []
 }: EcosystemPortalProps) {
+  // Modal state for smart specialist search & selection
+  const [isLocalSpecialistSearchOpen, setIsLocalSpecialistSearchOpen] = useState(false);
+  const [availableUsers, setAvailableUsers] = useState<UserType[]>(users || []);
+
+  useEffect(() => {
+    if (users && users.length > 0) {
+      setAvailableUsers(users);
+    } else {
+      fetch("/api/users")
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data) && data.length > 0) {
+            setAvailableUsers(data);
+          }
+        })
+        .catch(err => console.error("Error loading users for EcosystemPortal:", err));
+    }
+  }, [users]);
+
   // Ordered by user request: "История & Хроники" is now FIRST
   const [activeSubApp, setActiveSubApp] = useState<"chronicles" | "passport" | "garden" | "buildings">("chronicles");
 
@@ -383,8 +407,7 @@ export default function EcosystemPortal({
   const [selectedCanvasItemId, setSelectedCanvasItemId] = useState<string | null>(null);
   const [selectedCanvasItemType, setSelectedCanvasItemType] = useState<"building" | "plant" | null>(null);
 
-  // 3D Architectural Customization & Floor Planning Modals
-  const [editing3DBuilding, setEditing3DBuilding] = useState<PlanogramBuilding | null>(null);
+  // Floor Planning Modal
   const [editingFloorPlanBuilding, setEditingFloorPlanBuilding] = useState<PlanogramBuilding | null>(null);
 
   // Buildings drawn on plot planogram
@@ -1130,12 +1153,71 @@ export default function EcosystemPortal({
   const [familyMemberName, setFamilyMemberName] = useState<string>("");
   const [familyMemberEmail, setFamilyMemberEmail] = useState<string>("");
   const [familyMemberPhone, setFamilyMemberPhone] = useState<string>("");
+  const [familyMemberPassword, setFamilyMemberPassword] = useState<string>("");
+  const [showFamilyPassword, setShowFamilyPassword] = useState<boolean>(false);
   const [familyMemberRole, setFamilyMemberRole] = useState<"family" | "manager">("family");
   const [familyShareContacts, setFamilyShareContacts] = useState<boolean>(false);
+  const [editingMemberPasswordId, setEditingMemberPasswordId] = useState<string | null>(null);
+  const [newMemberPassword, setNewMemberPassword] = useState<string>("");
+  const [showNewMemberPassword, setShowNewMemberPassword] = useState<boolean>(false);
+  const [familyCredentialsAlert, setFamilyCredentialsAlert] = useState<{ name: string; email: string; pass: string; role: string } | null>(null);
+  const [copyFeedback, setCopyFeedback] = useState<string>("");
 
-  const handleAddFamilyMember = (e: React.FormEvent) => {
+  useEffect(() => {
+    if (!isFamilyModalOpen && !isTransferModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setIsFamilyModalOpen(false);
+        setIsTransferModalOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isFamilyModalOpen, isTransferModalOpen]);
+
+  const handleGenerateRandomPassword = () => {
+    const prefixes = ["Estate", "Dacha", "Dom", "Sad", "Kedr", "Park", "Banya", "Gorki"];
+    const numbers = Math.floor(100 + Math.random() * 900);
+    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+    setFamilyMemberPassword(`${prefix}-${numbers}!`);
+    setShowFamilyPassword(true);
+  };
+
+  const handleAddFamilyMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!familyMemberName.trim() || !activeObject) return;
+    if (!familyMemberEmail.trim()) {
+      alert("Пожалуйста, укажите email адрес для входа в приложение.");
+      return;
+    }
+    if (!familyMemberPassword.trim() || familyMemberPassword.trim().length < 4) {
+      alert("Пожалуйста, задайте пароль длиной не менее 4 символов.");
+      return;
+    }
+
+    const pwd = familyMemberPassword.trim();
+    let createdUserId: string | undefined = undefined;
+
+    // Register / update user in the database so they can log in immediately
+    try {
+      const userRes = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullname: familyMemberName.trim(),
+          email: familyMemberEmail.trim(),
+          phone: familyMemberPhone.trim() || undefined,
+          role: familyMemberRole,
+          password: pwd
+        })
+      });
+      if (userRes.ok) {
+        const u = await userRes.json();
+        createdUserId = u.id;
+      }
+    } catch (err) {
+      console.warn("Could not register user via API, proceeding with local access list", err);
+    }
 
     const newMember: FamilyMemberAccess = {
       id: "fam_" + Date.now(),
@@ -1145,7 +1227,9 @@ export default function EcosystemPortal({
       phone: familyMemberPhone.trim(),
       role: familyMemberRole,
       addedAt: new Date().toISOString().split("T")[0],
-      shareContactsWithSpecialist: familyMemberRole === 'manager' ? true : familyShareContacts
+      shareContactsWithSpecialist: familyMemberRole === 'manager' ? true : familyShareContacts,
+      userId: createdUserId,
+      initialPassword: pwd
     };
 
     const currentList = activeObject.familyAccessList || [];
@@ -1174,11 +1258,70 @@ export default function EcosystemPortal({
       onRefreshData();
     }
 
+    setFamilyCredentialsAlert({
+      name: newMember.name || newMember.fullname,
+      email: newMember.email || "",
+      pass: pwd,
+      role: familyMemberRole === 'manager' ? 'Управляющий' : 'Член семьи'
+    });
+
     setFamilyMemberName("");
     setFamilyMemberEmail("");
     setFamilyMemberPhone("");
+    setFamilyMemberPassword("");
     setFamilyShareContacts(false);
-    alert(`Доступ для ${familyMemberRole === 'manager' ? 'управляющего' : 'члена семьи'} "${newMember.name}" успешно предоставлен!`);
+  };
+
+  const handleSaveMemberNewPassword = async (member: FamilyMemberAccess) => {
+    if (!newMemberPassword.trim() || newMemberPassword.trim().length < 4) {
+      alert("Пароль должен содержать минимум 4 символа.");
+      return;
+    }
+    const pwd = newMemberPassword.trim();
+    try {
+      await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullname: member.name || member.fullname,
+          email: member.email,
+          phone: member.phone || undefined,
+          role: member.role,
+          password: pwd
+        })
+      });
+
+      if (activeObject) {
+        const updatedList = (activeObject.familyAccessList || []).map(m =>
+          m.id === member.id ? { ...m, initialPassword: pwd } : m
+        );
+        activeObject.familyAccessList = updatedList;
+        await fetch(`/api/objects/${activeObject.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...activeObject, familyAccessList: updatedList })
+        });
+      }
+
+      setEditingMemberPasswordId(null);
+      setNewMemberPassword("");
+      onRefreshData?.();
+      alert(`Пароль для "${member.name || member.fullname}" успешно обновлен!\nНовый пароль: ${pwd}`);
+    } catch (e) {
+      console.error("Ошибка обновления пароля", e);
+      alert("Произошла ошибка при сохранении пароля.");
+    }
+  };
+
+  const handleCopyCredentials = (member: FamilyMemberAccess) => {
+    const text = `Реквизиты доступа к объекту «${activeObject?.name || "Цифровой дом"}»:\n` +
+      `🌐 Вход в приложение: ${window.location.origin}\n` +
+      `👤 Роль: ${member.role === 'manager' ? '🔑 Управляющий' : '👨‍👩‍👧‍👦 Член семьи'}\n` +
+      `📧 Логин (Email): ${member.email || "Не указан"}\n` +
+      `🔑 Пароль: ${member.initialPassword || "Задан собственником"}`;
+    navigator.clipboard.writeText(text);
+    setCopyFeedback(member.id);
+    setTimeout(() => setCopyFeedback(""), 3000);
   };
 
   const handleToggleFamilyShareContacts = (memberId: string) => {
@@ -1265,7 +1408,7 @@ export default function EcosystemPortal({
   };
 
   // Sub-tabs for the garden app section
-  const [gardenSubTab, setGardenSubTab] = useState<"planogram" | "gardens" | "services" | "branding" | "support" | "seeds" | "3d_plot">("planogram");
+  const [gardenSubTab, setGardenSubTab] = useState<"planogram" | "gardens" | "services" | "branding" | "support" | "seeds">("planogram");
 
   // Drawing Canvas Tools
   const [canvasTool, setCanvasTool] = useState<"select" | "boundary" | "building" | "plant">("select");
@@ -3244,10 +3387,13 @@ export default function EcosystemPortal({
                             </div>
 
                             {/* Render signed checkmark */}
-                            <div className="flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-550/20 text-emerald-650 px-2.5 py-1.5 rounded-lg text-[10px] font-black shrink-0 self-start">
-                              <span>✓</span>
-                              <span>ПОДПИСАНО В БАЗЕ</span>
-                            </div>
+                            <StatusBadge 
+                              report={r} 
+                              label="Подписано в базе" 
+                              size="xs" 
+                              variant="badge" 
+                              className="shrink-0 self-start"
+                            />
                           </div>
                         );
                       })}
@@ -3560,13 +3706,6 @@ export default function EcosystemPortal({
                       </p>
                     </div>
                     <div className="flex items-center gap-2.5 shrink-0 flex-wrap sm:flex-nowrap">
-                      <button
-                        type="button"
-                        onClick={() => setGardenSubTab("3d_plot")}
-                        className="px-4 py-2 text-xs font-black rounded-lg shadow-sm bg-purple-600 hover:bg-purple-700 text-white transition-all flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Eye className="w-4 h-4" /> 👁️ 3D-модель участка
-                      </button>
                       <button
                         type="button"
                         onClick={() => {
@@ -5146,34 +5285,24 @@ export default function EcosystemPortal({
                           </div>
                         </div>
 
-                        {/* 🏛️ 3D Фасады, кровля и планировка этажей */}
-                        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-2">
+                        {/* 📐 Поэтажный план помещений и инженерных сетей */}
+                        <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/30 space-y-2">
                           <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
-                              🏛️ 3D Архитектура и планировка
+                            <span className="text-[10px] font-black uppercase text-sky-600 dark:text-sky-400">
+                              📐 Поэтажный план и сети (вид сверху)
                             </span>
                             <span className="text-[9px] font-mono text-zinc-400">
                               {b.floorPlan?.rooms?.length ? `${b.floorPlan.rooms.length} комнат` : "Черновик"}
                             </span>
                           </div>
 
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setEditing3DBuilding(b)}
-                              className="py-2 px-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-neutral-950 font-black text-[11px] flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer"
-                            >
-                              <span>🏛️ 3D Фасад, кровля, окна</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => setEditingFloorPlanBuilding(b)}
-                              className="py-2 px-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-extrabold text-[11px] flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer"
-                            >
-                              <span>📐 План этажей и сети</span>
-                            </button>
-                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setEditingFloorPlanBuilding(b)}
+                            className="w-full py-2.5 px-3 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer"
+                          >
+                            <span>📐 Открыть поэтажный план (комнаты, мебель, розетки, сети)</span>
+                          </button>
                         </div>
 
                         {/* Coping & Duplicating items quickly */}
@@ -5783,7 +5912,13 @@ export default function EcosystemPortal({
 
                 <button
                   type="button"
-                  onClick={() => onOpenSpecialistSearch?.()}
+                  onClick={() => {
+                    if (onOpenSpecialistSearch) {
+                      onOpenSpecialistSearch();
+                    } else {
+                      setIsLocalSpecialistSearchOpen(true);
+                    }
+                  }}
                   className="px-4 py-3 bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs rounded-xl cursor-pointer flex items-center justify-center gap-2 transition-all shadow-lg shrink-0 transform active:scale-95"
                 >
                   <Search className="w-4 h-4 text-neutral-950" />
@@ -6481,41 +6616,6 @@ export default function EcosystemPortal({
             </div>
           )}
 
-          {gardenSubTab === "3d_plot" && (() => {
-            const currentPlotDim = getPlotDimForObject(selectedObjectId || "1");
-            const W = currentPlotDim.width;
-            const H = currentPlotDim.height;
-            const activeBuildings = planBuildings.filter(b => b.linkedObjectId === (selectedObjectId || "1"));
-            const activePlants = plantNodes.filter(p => p.linkedObjectId === (selectedObjectId || "1"));
-
-            return (
-              <div className="space-y-4 animate-fadeIn">
-                <Property3DViewer
-                  planBuildings={activeBuildings}
-                  secondaryBuildings={secondaryBuildings}
-                  plantNodes={activePlants}
-                  boundaryLines={boundaryLines}
-                  globalFenceMaterial={globalFenceMaterial}
-                  plotWidth={W}
-                  plotHeight={H}
-                  plotCorners={getPlotCorners(selectedObjectId || "1", W, H)}
-                  onUpdateBuilding={(id, updates) => {
-                    setPlanBuildings((prev) => {
-                      const updated = prev.map((b) => (b.id === id ? { ...b, ...updates } : b));
-                      try {
-                        localStorage.setItem("eco_plan_buildings", JSON.stringify(updated));
-                      } catch (e) {
-                        console.error("Storage error", e);
-                      }
-                      return updated;
-                    });
-                  }}
-                  onClose={() => setGardenSubTab("planogram")}
-                />
-              </div>
-            );
-          })()}
-
         </div>
       )}
 
@@ -7083,21 +7183,24 @@ export default function EcosystemPortal({
               <div className="flex gap-1.5">
                 <button 
                   onClick={() => alert("Симулирована отправка поста в Telegram канал садоводов!")}
-                  className="flex-1 py-1 px-2 border rounded font-bold hover:bg-neutral-50 hover:text-blue-500 text-[10px]"
+                  className="flex-1 py-1.5 px-2 border border-neutral-200 dark:border-zinc-700 rounded-lg font-bold hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-700 dark:text-neutral-200 text-[10px] inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                 >
-                  Telegram
+                  <TelegramLogo className="w-3.5 h-3.5 shrink-0" />
+                  <span>Telegram</span>
                 </button>
                 <button 
                   onClick={() => alert("Симулирован экспорт карточки на стену ВКонтакте!")}
-                  className="flex-1 py-1 px-2 border rounded font-bold hover:bg-neutral-50 hover:text-blue-600 text-[10px]"
+                  className="flex-1 py-1.5 px-2 border border-neutral-200 dark:border-zinc-700 rounded-lg font-bold hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-700 dark:text-neutral-200 text-[10px] inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                 >
-                  ВКонтакте
+                  <VkLogo className="w-3.5 h-3.5 shrink-0" />
+                  <span>ВКонтакте</span>
                 </button>
                 <button 
                   onClick={() => alert("Сформировано красивое сообщение с QR-кодом для WhatsApp!")}
-                  className="flex-1 py-1 px-2 border rounded font-bold hover:bg-neutral-50 hover:text-green-500 text-[10px]"
+                  className="flex-1 py-1.5 px-2 border border-neutral-200 dark:border-zinc-700 rounded-lg font-bold hover:bg-neutral-50 dark:hover:bg-zinc-800 text-neutral-700 dark:text-neutral-200 text-[10px] inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                 >
-                  WhatsApp
+                  <WhatsAppLogo className="w-3.5 h-3.5 shrink-0" />
+                  <span>WhatsApp</span>
                 </button>
               </div>
             </div>
@@ -7443,81 +7546,93 @@ export default function EcosystemPortal({
       {/* ======================================================= */}
       {/* HANDOVER PASSPORT MODAL (Property sale handover tool) */}
       {isTransferModalOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-md w-full border shadow-2xl p-6 text-neutral-850 dark:text-neutral-50 space-y-4 animate-scaleUp">
+        <div 
+          className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-sm flex justify-center items-start sm:items-center p-2 sm:p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setIsTransferModalOpen(false);
+              setTransferSuccess(false);
+            }
+          }}
+        >
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-md w-full border border-neutral-200 dark:border-zinc-800 shadow-2xl text-neutral-850 dark:text-neutral-50 animate-scaleUp my-auto flex flex-col max-h-[90vh] overflow-hidden">
             
-            <div className="flex items-center justify-between border-b pb-3 border-neutral-100 dark:border-neutral-850">
+            <div className="flex items-center justify-between border-b px-5 py-4 border-neutral-100 dark:border-neutral-800 shrink-0 bg-white dark:bg-zinc-900 z-10">
               <h3 className="font-extrabold text-sm text-amber-600 uppercase tracking-wider flex items-center gap-1.5">
                 <Share2 className="w-4 h-4" />
                 <span>Передача Цифрового Паспорта</span>
               </h3>
               <button 
+                type="button"
                 onClick={() => { setIsTransferModalOpen(false); setTransferSuccess(false); }}
                 className="p-1 hover:bg-neutral-100 dark:hover:bg-zinc-800 rounded text-zinc-400 cursor-pointer"
+                title="Закрыть окно"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <p className="text-xs text-zinc-500 leading-relaxed">
-              <strong>Сделка купли-продажи недвижимости:</strong> Вы можете полностью передать все накопленные данные — журнал сервисного оборудования, спецификации установленных котлов, хроники высадки пихт, чертежи бани и личную цифровую летопись усадьбы новому собственнику.
-            </p>
+            <div className="p-5 overflow-y-auto space-y-4 flex-1 overscroll-contain text-xs">
+              <p className="text-zinc-500 leading-relaxed">
+                <strong>Сделка купли-продажи недвижимости:</strong> Вы можете полностью передать все накопленные данные — журнал сервисного оборудования, спецификации установленных котлов, хроники высадки пихт, чертежи бани и личную цифровую летопись усадьбы новому собственнику.
+              </p>
 
-            {transferSuccess ? (
-              <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-xl space-y-2 text-xs">
-                <h4 className="font-black flex items-center gap-1">
-                  <CheckCircle className="w-4.5 h-4.5 text-emerald-500" />
-                  <span>Пакет передачи сформирован успешно!</span>
-                </h4>
-                <p className="leading-relaxed text-[11px] opacity-90">
-                  Информационный зашифрованный архив усадьбы передан на почтовый шлюз. На электронный адрес <strong>{transferEmail}</strong> отправлено приглашение с защищенным кодом активации усадьбы. При логине права на объект будут делегированы новому Владельцу.
-                </p>
-              </div>
-            ) : (
-              <form onSubmit={handleTransferSubmit} className="space-y-4 text-xs">
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-zinc-400 mb-1">E-mail адрес нового Владельца</label>
-                  <input
-                    type="email" required placeholder="new-owner@estate.ru"
-                    value={transferEmail}
-                    onChange={(e) => setTransferEmail(e.target.value)}
-                    className="w-full p-2.5 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
-                  />
+              {transferSuccess ? (
+                <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-xl space-y-2 text-xs">
+                  <h4 className="font-black flex items-center gap-1">
+                    <CheckCircle className="w-4.5 h-4.5 text-emerald-500" />
+                    <span>Пакет передачи сформирован успешно!</span>
+                  </h4>
+                  <p className="leading-relaxed text-[11px] opacity-90">
+                    Информационный зашифрованный архив усадьбы передан на почтовый шлюз. На электронный адрес <strong>{transferEmail}</strong> отправлено приглашение с защищенным кодом активации усадьбы. При логине права на объект будут делегированы новому Владельцу.
+                  </p>
                 </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase text-zinc-400 mb-1">Дата вступления в права на объект</label>
-                  <input
-                    type="date" required
-                    value={transferDate}
-                    onChange={(e) => setTransferDate(e.target.value)}
-                    className="w-full p-2.5 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
-                  />
-                </div>
-
-                <div className="p-3.5 bg-neutral-50 dark:bg-black/20 rounded-lg border space-y-2 text-[11px] opacity-90">
-                  <div className="flex items-center gap-2">
-                    <input type="checkbox" required defaultChecked id="transfer_p" className="w-3.5 h-3.5 text-amber-600" />
-                    <label htmlFor="transfer_p" className="font-semibold text-neutral-800 dark:text-zinc-200">Передать полную Хронологию & Летопись</label>
+              ) : (
+                <form onSubmit={handleTransferSubmit} className="space-y-4 text-xs">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-zinc-400 mb-1">E-mail адрес нового Владельца</label>
+                    <input
+                      type="email" required placeholder="new-owner@estate.ru"
+                      value={transferEmail}
+                      onChange={(e) => setTransferEmail(e.target.value)}
+                      className="w-full p-2.5 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
+                    />
                   </div>
-                  <div className="flex items-center gap-2">
-                    <input type="checkbox" required defaultChecked id="transfer_g" className="w-3.5 h-3.5 text-amber-600" />
-                    <label htmlFor="transfer_g" className="font-semibold text-neutral-800 dark:text-zinc-200">Передать чертеж и саженцы схемы участка</label>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input type="checkbox" required defaultChecked id="transfer_e" className="w-3.5 h-3.5 text-amber-600" />
-                    <label htmlFor="transfer_e" className="font-semibold text-neutral-800 dark:text-zinc-200">Передать все инвентарные постройки и акты</label>
-                  </div>
-                </div>
 
-                <button
-                  type="submit"
-                  className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-black font-extrabold rounded-lg shadow cursor-pointer transition-colors"
-                >
-                  Сформировать и отправить пакет передачи прав
-                </button>
-              </form>
-            )}
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-zinc-400 mb-1">Дата вступления в права на объект</label>
+                    <input
+                      type="date" required
+                      value={transferDate}
+                      onChange={(e) => setTransferDate(e.target.value)}
+                      className="w-full p-2.5 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
+                    />
+                  </div>
+
+                  <div className="p-3.5 bg-neutral-50 dark:bg-black/20 rounded-lg border space-y-2 text-[11px] opacity-90">
+                    <div className="flex items-center gap-2">
+                      <input type="checkbox" required defaultChecked id="transfer_p" className="w-3.5 h-3.5 text-amber-600" />
+                      <label htmlFor="transfer_p" className="font-semibold text-neutral-800 dark:text-zinc-200">Передать полную Хронологию & Летопись</label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input type="checkbox" required defaultChecked id="transfer_g" className="w-3.5 h-3.5 text-amber-600" />
+                      <label htmlFor="transfer_g" className="font-semibold text-neutral-800 dark:text-zinc-200">Передать чертеж и саженцы схемы участка</label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input type="checkbox" required defaultChecked id="transfer_e" className="w-3.5 h-3.5 text-amber-600" />
+                      <label htmlFor="transfer_e" className="font-semibold text-neutral-800 dark:text-zinc-200">Передать все инвентарные постройки и акты</label>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-black font-extrabold rounded-lg shadow cursor-pointer transition-colors"
+                  >
+                    Сформировать и отправить пакет передачи прав
+                  </button>
+                </form>
+              )}
+            </div>
 
           </div>
         </div>
@@ -7526,175 +7641,378 @@ export default function EcosystemPortal({
       {/* ======================================================= */}
       {/* FAMILY & MANAGER ACCESS MANAGEMENT MODAL */}
       {isFamilyModalOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-lg w-full border shadow-2xl p-6 text-neutral-850 dark:text-neutral-50 space-y-4 animate-scaleUp">
+        <div 
+          className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-sm flex justify-center items-start sm:items-center p-2 sm:p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsFamilyModalOpen(false);
+          }}
+        >
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl max-w-xl w-full border border-neutral-200 dark:border-zinc-800 shadow-2xl text-neutral-850 dark:text-neutral-50 animate-scaleUp my-auto flex flex-col max-h-[90vh] overflow-hidden">
             
-            <div className="flex items-center justify-between border-b pb-3 border-neutral-100 dark:border-neutral-800">
+            {/* Modal Header: Pinned to top, will NEVER be hidden or cut off */}
+            <div className="flex items-center justify-between border-b px-5 py-4 border-neutral-100 dark:border-neutral-800 shrink-0 bg-white dark:bg-zinc-900 z-10">
               <h3 className="font-extrabold text-sm text-blue-600 dark:text-blue-400 uppercase tracking-wider flex items-center gap-1.5">
                 <Users className="w-4 h-4" />
                 <span>Семейный доступ и Управляющий объекта</span>
               </h3>
               <button 
+                type="button"
                 onClick={() => setIsFamilyModalOpen(false)}
-                className="p-1 hover:bg-neutral-100 dark:hover:bg-zinc-800 rounded text-zinc-400 cursor-pointer"
+                className="p-1.5 hover:bg-neutral-100 dark:hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 cursor-pointer transition-colors"
+                title="Закрыть окно (Esc)"
               >
-                <X className="w-4 h-4" />
+                <X className="w-5 h-5" />
               </button>
             </div>
 
-            <p className="text-xs text-zinc-500 leading-relaxed">
-              Вы можете предоставить доступ к объекту <strong>«{activeObject?.name}»</strong> членам своей семьи или управляющему. Пользователи смогут просматривать объект и вносить записи от своего имени. 
-              <br/><span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold mt-1 block">🔒 Передача объекта новому собственнику доступна исключительно вам как Владельцу.</span>
-            </p>
+            {/* Scrollable Modal Content */}
+            <div className="p-5 overflow-y-auto space-y-4 flex-1 overscroll-contain">
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                Вы можете предоставить доступ к объекту <strong>«{activeObject?.name}»</strong> членам своей семьи или управляющему. Пользователи смогут просматривать объект и вносить записи от своего имени. 
+                <br/><span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold mt-1 block">🔒 Передача объекта новому собственнику доступна исключительно вам как Владельцу.</span>
+              </p>
 
-            {/* List of current members */}
-            <div className="space-y-2">
-              <h4 className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">
-                Предоставленный доступ ({(activeObject?.familyAccessList || []).length}):
-              </h4>
-              
-              {(!activeObject?.familyAccessList || activeObject.familyAccessList.length === 0) ? (
-                <div className="p-3 rounded-xl border border-dashed border-neutral-300 dark:border-zinc-800 text-center text-xs text-zinc-400">
-                  Доступ пока никому не предоставлен. Заполните форму ниже, чтобы добавить члена семьи или управляющего.
+              {/* Credentials Success Banner */}
+              {familyCredentialsAlert && (
+                <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 space-y-2 animate-fadeIn">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 font-black text-xs text-emerald-700 dark:text-emerald-400 uppercase tracking-wide">
+                      <span>🎉 Учетная запись создана и доступ открыт!</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setFamilyCredentialsAlert(null)}
+                      className="text-emerald-600 hover:text-emerald-800 dark:text-emerald-400 p-0.5 text-xs font-bold cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="bg-white/80 dark:bg-black/40 p-3 rounded-lg border border-emerald-200 dark:border-emerald-900 font-mono text-xs space-y-1 select-all">
+                    <div><strong>Пользователь:</strong> {familyCredentialsAlert.name} ({familyCredentialsAlert.role})</div>
+                    <div><strong>Логин (Email):</strong> {familyCredentialsAlert.email}</div>
+                    <div><strong>Пароль:</strong> <span className="bg-amber-100 dark:bg-amber-900/60 px-1.5 py-0.5 rounded font-black text-amber-900 dark:text-amber-200">{familyCredentialsAlert.pass}</span></div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const text = `Реквизиты доступа к объекту «${activeObject?.name || "Цифровой дом"}»:\n` +
+                        `🌐 Вход в приложение: ${window.location.origin}\n` +
+                        `👤 Роль: ${familyCredentialsAlert.role}\n` +
+                        `📧 Логин (Email): ${familyCredentialsAlert.email}\n` +
+                        `🔑 Пароль: ${familyCredentialsAlert.pass}`;
+                      navigator.clipboard.writeText(text);
+                      setCopyFeedback("copied_alert");
+                      setTimeout(() => setCopyFeedback(""), 3000);
+                    }}
+                    className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>{copyFeedback === "copied_alert" ? "✓ Скопировано в буфер обмена!" : "Скопировать реквизиты для отправки"}</span>
+                  </button>
                 </div>
-              ) : (
-                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                  {activeObject.familyAccessList.map((member) => (
-                    <div key={member.id} className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-800/60 border border-slate-200 dark:border-zinc-700 flex items-center justify-between text-xs gap-2">
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-extrabold text-slate-800 dark:text-zinc-100">{member.name || member.fullname}</span>
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold ${
-                            member.role === 'manager' 
-                              ? 'bg-amber-500/10 text-amber-600 border border-amber-500/20' 
-                              : 'bg-blue-500/10 text-blue-600 border border-blue-500/20'
-                          }`}>
-                            {member.role === 'manager' ? '🔑 Управляющий' : '👨‍👩‍👧‍👦 Член семьи'}
-                          </span>
+              )}
 
-                          {member.role === 'family' && (
+              {/* List of current members */}
+              <div className="space-y-2">
+                <h4 className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">
+                  Предоставленный доступ ({(activeObject?.familyAccessList || []).length}):
+                </h4>
+                
+                {(!activeObject?.familyAccessList || activeObject.familyAccessList.length === 0) ? (
+                  <div className="p-3 rounded-xl border border-dashed border-neutral-300 dark:border-zinc-800 text-center text-xs text-zinc-400">
+                    Доступ пока никому не предоставлен. Заполните форму ниже, чтобы добавить члена семьи или управляющего.
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+                    {activeObject.familyAccessList.map((member) => (
+                      <div key={member.id} className="p-3 rounded-xl bg-slate-50 dark:bg-zinc-800/60 border border-slate-200 dark:border-zinc-700 text-xs space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-extrabold text-slate-800 dark:text-zinc-100">{member.name || member.fullname}</span>
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold ${
+                                member.role === 'manager' 
+                                  ? 'bg-amber-500/10 text-amber-600 border border-amber-500/20' 
+                                  : 'bg-blue-500/10 text-blue-600 border border-blue-500/20'
+                              }`}>
+                                {member.role === 'manager' ? '🔑 Управляющий' : '👨‍👩‍👧‍👦 Член семьи'}
+                              </span>
+
+                              {member.role === 'family' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleFamilyShareContacts(member.id)}
+                                  className={`px-2 py-0.5 rounded text-[9px] font-bold border transition-colors cursor-pointer ${
+                                    member.shareContactsWithSpecialist
+                                      ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/20"
+                                      : "bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/20"
+                                  }`}
+                                  title="Нажмите для изменения видимости контактов для специалиста"
+                                >
+                                  {member.shareContactsWithSpecialist ? "🔓 Контакты видит специалист" : "🔒 Контакты скрыты от специалиста"}
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="text-[10px] text-zinc-500 flex flex-wrap gap-2 items-center">
+                              {member.email && <span>📧 {member.email}</span>}
+                              {member.phone && <span>📞 {member.phone}</span>}
+                              {member.initialPassword && (
+                                <span className="font-mono text-zinc-600 dark:text-zinc-400 bg-neutral-200/60 dark:bg-zinc-700/60 px-1 rounded">
+                                  🔑 Пароль: {member.initialPassword}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
                             <button
                               type="button"
-                              onClick={() => handleToggleFamilyShareContacts(member.id)}
-                              className={`px-2 py-0.5 rounded text-[9px] font-bold border transition-colors cursor-pointer ${
-                                member.shareContactsWithSpecialist
-                                  ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/20"
-                                  : "bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/20"
-                              }`}
-                              title="Нажмите для изменения видимости контактов для специалиста"
+                              onClick={() => handleCopyCredentials(member)}
+                              className="p-1.5 text-zinc-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded-lg cursor-pointer transition-colors"
+                              title="Скопировать реквизиты доступа"
                             >
-                              {member.shareContactsWithSpecialist ? "🔓 Контакты видит специалист" : "🔒 Контакты скрыты от специалиста"}
+                              <Copy className="w-3.5 h-3.5" />
                             </button>
-                          )}
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (editingMemberPasswordId === member.id) {
+                                  setEditingMemberPasswordId(null);
+                                  setNewMemberPassword("");
+                                } else {
+                                  setEditingMemberPasswordId(member.id);
+                                  setNewMemberPassword("");
+                                }
+                              }}
+                              className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-lg cursor-pointer transition-colors"
+                              title="Задать новый пароль"
+                            >
+                              <Key className="w-3.5 h-3.5" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveFamilyMember(member.id)}
+                              className="p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg cursor-pointer transition-colors"
+                              title="Отозвать доступ"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
-                        <div className="text-[10px] text-zinc-500 flex flex-wrap gap-2">
-                          {member.email && <span>📧 {member.email}</span>}
-                          {member.phone && <span>📞 {member.phone}</span>}
-                          {member.addedAt && <span className="opacity-60">Добавлен: {member.addedAt}</span>}
-                        </div>
+
+                        {/* Inline password editor for this member */}
+                        {editingMemberPasswordId === member.id && (
+                          <div className="p-2.5 rounded-lg bg-amber-50/70 dark:bg-amber-950/30 border border-amber-300/40 space-y-2 animate-fadeIn">
+                            <div className="flex items-center justify-between text-[11px] font-bold text-amber-800 dark:text-amber-400">
+                              <span>🔑 Задать новый пароль для {member.name || member.fullname}:</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const prefixes = ["Estate", "Dacha", "Dom", "Sad", "Kedr", "Park"];
+                                  const num = Math.floor(100 + Math.random() * 900);
+                                  setNewMemberPassword(`${prefixes[Math.floor(Math.random() * prefixes.length)]}-${num}!`);
+                                }}
+                                className="text-[10px] text-blue-600 dark:text-sky-400 hover:underline flex items-center gap-1 cursor-pointer"
+                              >
+                                <Dices className="w-3 h-3" />
+                                <span>Сгенерировать</span>
+                              </button>
+                            </div>
+                            
+                            <div className="flex gap-1.5">
+                              <div className="relative flex-1">
+                                <input
+                                  type={showNewMemberPassword ? "text" : "password"}
+                                  value={newMemberPassword}
+                                  onChange={(e) => setNewMemberPassword(e.target.value)}
+                                  placeholder="Новый пароль (мин. 4 симв.)"
+                                  className="w-full p-1.5 pr-7 rounded bg-white dark:bg-black/40 text-xs border border-amber-300 focus:outline-hidden"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setShowNewMemberPassword(!showNewMemberPassword)}
+                                  className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 cursor-pointer"
+                                >
+                                  {showNewMemberPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveMemberNewPassword(member)}
+                                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs rounded cursor-pointer transition-colors shadow-xs"
+                              >
+                                Сохранить
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingMemberPasswordId(null);
+                                  setNewMemberPassword("");
+                                }}
+                                className="px-2 py-1.5 border border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 text-xs rounded hover:bg-neutral-100 dark:hover:bg-zinc-800 cursor-pointer"
+                              >
+                                Отмена
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {copyFeedback === member.id && (
+                          <div className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 animate-fadeIn">
+                            ✓ Реквизиты и пароль скопированы в буфер обмена!
+                          </div>
+                        )}
                       </div>
-                      <button
-                        onClick={() => handleRemoveFamilyMember(member.id)}
-                        className="p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-lg cursor-pointer transition-colors"
-                        title="Отозвать доступ"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Owner Contact Privacy Settings */}
-            <div className="p-3 bg-slate-100 dark:bg-zinc-800/80 rounded-xl border border-slate-200 dark:border-zinc-700/80 space-y-1.5">
-              <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 dark:text-amber-400 block">
-                🔒 Настройка приватности контактов собственника
-              </span>
-              <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700 dark:text-zinc-200">
-                <input
-                  type="checkbox"
-                  checked={Boolean(activeObject?.hideOwnerContactsFromSpecialists)}
-                  onChange={handleToggleHideOwnerContacts}
-                  className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500 cursor-pointer"
-                />
-                <span>Скрыть мои контакты (телефон и email) от специалистов ТО для данного объекта</span>
-              </label>
-              <p className="text-[10px] text-zinc-400 leading-snug">
-                Если галочка установлена, специалист выездного ТО не сможет видеть ваш телефон и e-mail в карточке объекта.
-              </p>
-            </div>
-
-            {/* Form to add a new member */}
-            <form onSubmit={handleAddFamilyMember} className="space-y-3 pt-2 border-t border-neutral-100 dark:border-neutral-800 text-xs">
-              <h4 className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">
-                Предоставить новый доступ:
-              </h4>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[10px] font-bold text-zinc-400 mb-1">ФИО / Имя *</label>
-                  <input
-                    type="text" required placeholder="Елена Иванова"
-                    value={familyMemberName}
-                    onChange={(e) => setFamilyMemberName(e.target.value)}
-                    className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-zinc-400 mb-1">Роль доступа *</label>
-                  <select
-                    value={familyMemberRole}
-                    onChange={(e) => setFamilyMemberRole(e.target.value as any)}
-                    className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
-                  >
-                    <option value="family">👨‍👩‍👧‍👦 Член семьи</option>
-                    <option value="manager">🔑 Управляющий</option>
-                  </select>
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[10px] font-bold text-zinc-400 mb-1">E-mail адрес</label>
-                  <input
-                    type="email" placeholder="family@estate.ru"
-                    value={familyMemberEmail}
-                    onChange={(e) => setFamilyMemberEmail(e.target.value)}
-                    className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-zinc-400 mb-1">Телефон</label>
-                  <input
-                    type="text" placeholder="+7 (999) 000-00-00"
-                    value={familyMemberPhone}
-                    onChange={(e) => setFamilyMemberPhone(e.target.value)}
-                    className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
-                  />
-                </div>
-              </div>
-
-              {familyMemberRole === 'family' && (
-                <label className="flex items-center gap-2 cursor-pointer p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-semibold text-slate-800 dark:text-zinc-200">
+              {/* Owner Contact Privacy Settings */}
+              <div className="p-3 bg-slate-100 dark:bg-zinc-800/80 rounded-xl border border-slate-200 dark:border-zinc-700/80 space-y-1.5">
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 dark:text-amber-400 block">
+                  🔒 Настройка приватности контактов собственника
+                </span>
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700 dark:text-zinc-200">
                   <input
                     type="checkbox"
-                    checked={familyShareContacts}
-                    onChange={(e) => setFamilyShareContacts(e.target.checked)}
-                    className="w-4 h-4 text-amber-600 rounded border-amber-300 focus:ring-amber-500 cursor-pointer"
+                    checked={Boolean(activeObject?.hideOwnerContactsFromSpecialists)}
+                    onChange={handleToggleHideOwnerContacts}
+                    className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500 cursor-pointer"
                   />
-                  <span>🔓 Открыть доступ к контактам (телефон/email) для специалистов ТО</span>
+                  <span>Скрыть мои контакты (телефон и email) от специалистов ТО для данного объекта</span>
                 </label>
-              )}
+                <p className="text-[10px] text-zinc-400 leading-snug">
+                  Если галочка установлена, специалист выездного ТО не сможет видеть ваш телефон и e-mail в карточке объекта.
+                </p>
+              </div>
 
+              {/* Form to add a new member */}
+              <form onSubmit={handleAddFamilyMember} className="space-y-3 pt-2 border-t border-neutral-100 dark:border-neutral-800 text-xs">
+                <h4 className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">
+                  Предоставить новый доступ:
+                </h4>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 mb-1">ФИО / Имя *</label>
+                    <input
+                      type="text" required placeholder="Елена Иванова"
+                      value={familyMemberName}
+                      onChange={(e) => setFamilyMemberName(e.target.value)}
+                      className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 mb-1">Роль доступа *</label>
+                    <select
+                      value={familyMemberRole}
+                      onChange={(e) => setFamilyMemberRole(e.target.value as any)}
+                      className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
+                    >
+                      <option value="family">👨‍👩‍👧‍👦 Член семьи</option>
+                      <option value="manager">🔑 Управляющий</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 mb-1">E-mail адрес (логин) *</label>
+                    <input
+                      type="email" required placeholder="family@estate.ru"
+                      value={familyMemberEmail}
+                      onChange={(e) => setFamilyMemberEmail(e.target.value)}
+                      className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 mb-1">Телефон</label>
+                    <input
+                      type="text" placeholder="+7 (999) 000-00-00"
+                      value={familyMemberPhone}
+                      onChange={(e) => setFamilyMemberPhone(e.target.value)}
+                      className="w-full p-2 rounded bg-neutral-50 dark:bg-black/35 text-xs border"
+                    />
+                  </div>
+                </div>
+
+                {/* Password field set by the owner */}
+                <div className="p-3 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200/60 dark:border-blue-800/40 rounded-xl space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-[10px] font-black uppercase text-blue-700 dark:text-blue-400">
+                      🔑 Пароль для входа в приложение * (мин. 4 симв.)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleGenerateRandomPassword}
+                      className="text-[10px] font-bold text-blue-600 dark:text-sky-400 hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <Dices className="w-3 h-3" />
+                      <span>Сгенерировать надежный</span>
+                    </button>
+                  </div>
+                  
+                  <div className="relative">
+                    <input
+                      type={showFamilyPassword ? "text" : "password"}
+                      required
+                      placeholder="Например: Estate-521! или собственный пароль"
+                      value={familyMemberPassword}
+                      onChange={(e) => setFamilyMemberPassword(e.target.value)}
+                      className="w-full p-2 pr-8 rounded bg-white dark:bg-black/45 text-xs border border-blue-300 dark:border-blue-700 font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowFamilyPassword(!showFamilyPassword)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 cursor-pointer"
+                    >
+                      {showFamilyPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-zinc-500 leading-snug">
+                    Собственник задает пароль вручную. С этим паролем и указанным Email пользователь сможет сразу войти в систему.
+                  </p>
+                </div>
+
+                {familyMemberRole === 'family' && (
+                  <label className="flex items-center gap-2 cursor-pointer p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-semibold text-slate-800 dark:text-zinc-200">
+                    <input
+                      type="checkbox"
+                      checked={familyShareContacts}
+                      onChange={(e) => setFamilyShareContacts(e.target.checked)}
+                      className="w-4 h-4 text-amber-600 rounded border-amber-300 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <span>🔓 Открыть доступ к контактам (телефон/email) для специалистов ТО</span>
+                  </label>
+                )}
+
+                <button
+                  type="submit"
+                  className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-lg shadow cursor-pointer transition-colors text-xs flex items-center justify-center gap-1.5 active:scale-98"
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Зарегистрировать и предоставить доступ</span>
+                </button>
+              </form>
+            </div>
+
+            {/* Modal Footer: Fixed at bottom with explicit close button */}
+            <div className="border-t border-neutral-100 dark:border-neutral-800 px-5 py-3 bg-neutral-50 dark:bg-zinc-900/80 shrink-0 flex items-center justify-between">
+              <span className="text-[11px] text-zinc-400">
+                🔒 Доступ регулируется владельцем объекта
+              </span>
               <button
-                type="submit"
-                className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-lg shadow cursor-pointer transition-colors text-xs flex items-center justify-center gap-1.5"
+                type="button"
+                onClick={() => setIsFamilyModalOpen(false)}
+                className="px-4 py-2 bg-neutral-200 hover:bg-neutral-300 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-neutral-700 dark:text-neutral-200 text-xs font-bold rounded-lg cursor-pointer transition-colors"
               >
-                <Users className="w-3.5 h-3.5" />
-                <span>Предоставить доступ</span>
+                Закрыть окно
               </button>
-            </form>
+            </div>
 
           </div>
         </div>
@@ -8612,32 +8930,6 @@ export default function EcosystemPortal({
         );
       })()}
 
-      {/* 3D Architectural Customizer Modal from Planogram */}
-      {editing3DBuilding && (
-        <Building3DCustomizerModal
-          buildingLabel={editing3DBuilding.label}
-          wMeters={editing3DBuilding.wMeters || 4}
-          hMeters={editing3DBuilding.hMeters || 4}
-          subType={editing3DBuilding.subType}
-          currentStyle={editing3DBuilding.architecturalStyle}
-          onSave={(newStyle) => {
-            setPlanBuildings((prev) => {
-              const updated = prev.map((b) =>
-                b.id === editing3DBuilding.id ? { ...b, architecturalStyle: newStyle } : b
-              );
-              try {
-                localStorage.setItem("eco_plan_buildings", JSON.stringify(updated));
-              } catch (e) {
-                console.error("Storage error", e);
-              }
-              return updated;
-            });
-            setEditing3DBuilding(null);
-          }}
-          onClose={() => setEditing3DBuilding(null)}
-        />
-      )}
-
       {/* Floor Plan & Engineering Modeling Modal from Planogram */}
       {editingFloorPlanBuilding && (
         <FloorPlanModal
@@ -8663,6 +8955,35 @@ export default function EcosystemPortal({
           onClose={() => setEditingFloorPlanBuilding(null)}
         />
       )}
+
+      {/* Specialist Search & Selection Modal */}
+      <SpecialistSearchModal
+        isOpen={isLocalSpecialistSearchOpen}
+        onClose={() => setIsLocalSpecialistSearchOpen(false)}
+        users={availableUsers}
+        reports={reports}
+        objects={objects}
+        currentUser={currentUser}
+        schedules={schedules}
+        onAssignSpecialistToObject={async (specialistId, objectId) => {
+          const targetObj = objects.find(o => o.id === objectId);
+          if (!targetObj) return;
+          const currentAllowed = targetObj.allowedSpecialistIds || [];
+          if (currentAllowed.includes(specialistId)) return;
+          const newAllowed = [...currentAllowed, specialistId];
+          const updatedObj = { ...targetObj, allowedSpecialistIds: newAllowed };
+          try {
+            await fetch(`/api/objects/${objectId}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(updatedObj)
+            });
+            onRefreshData?.();
+          } catch (err) {
+            console.error("Failed to assign specialist to object:", err);
+          }
+        }}
+      />
 
     </div>
   );

@@ -234,7 +234,8 @@ const resetPasswordValidators = [
 const userValidators = [
   body("email").trim().isEmail().withMessage("Введите корректный email адрес"),
   body("fullname").trim().notEmpty().withMessage("ФИО является обязательным"),
-  body("phone").trim().notEmpty().withMessage("Номер телефона обязателен"),
+  body("phone").optional({ checkFalsy: true }).trim(),
+  body("password").optional({ checkFalsy: true }).isLength({ min: 4 }).withMessage("Пароль должен содержать минимум 4 символа"),
   validateRequest
 ];
 
@@ -756,8 +757,8 @@ app.get("/api/users", async (req, res) => {
   res.json(await dbStore.getUsers());
 });
 
-app.post("/api/users", userValidators, async (req, res) => {
-  const currentUserId = (req.session as any).userId;
+app.post("/api/users", userValidators, async (req: any, res) => {
+  const currentUserId = (req.session as any)?.userId || req.userId;
   let currentUser = null;
   if (currentUserId) {
     currentUser = await dbStore.getUserById(currentUserId);
@@ -766,14 +767,39 @@ app.post("/api/users", userValidators, async (req, res) => {
   const requestedRole = req.body.role;
   let role = requestedRole || 'specialist';
 
-  // Only specialists can register by themselves; owners must be registered by an admin.
-  if (!currentUser || currentUser.role !== 'admin') {
-    role = 'specialist';
+  // Allow admin and owners to register family members, managers, or owners
+  if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'owner')) {
+    role = requestedRole || 'family';
+  } else if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'owner')) {
+    if (requestedRole === 'family' || requestedRole === 'manager') {
+      role = requestedRole;
+    } else {
+      role = 'specialist';
+    }
+  }
+
+  const email = (req.body.email || "").trim().toLowerCase();
+  const existingUsers = await dbStore.getUsers();
+  const existingUser = existingUsers.find(u => u.email.trim().toLowerCase() === email);
+
+  if (existingUser) {
+    // If user already exists, update their profile, password (if provided) and role
+    const updatePayload: any = {
+      fullname: req.body.fullname || existingUser.fullname,
+      phone: req.body.phone !== undefined ? req.body.phone : existingUser.phone,
+      role: role || existingUser.role
+    };
+    if (req.body.password) {
+      updatePayload.password = req.body.password;
+    }
+    const updated = await dbStore.updateUser(existingUser.id, updatePayload);
+    return res.status(200).json(updated);
   }
 
   const newUser = {
     id: "usr_" + Math.random().toString(36).substr(2, 9),
     ...req.body,
+    email,
     role
   };
   await dbStore.addUser(newUser);
@@ -811,7 +837,9 @@ app.post("/api/objects", objectValidators, async (req, res) => {
     ownerId: req.body.ownerId || "",
     yandexDiskPath: yPath,
     yandexDiskUrl: req.body.yandexDiskUrl || "",
-    allowedSpecialistIds: req.body.allowedSpecialistIds || []
+    allowedSpecialistIds: req.body.allowedSpecialistIds || [],
+    objectType: req.body.objectType || "other",
+    createdAt: req.body.createdAt || new Date().toISOString()
   };
   await dbStore.addObject(newObj);
 
@@ -1326,14 +1354,121 @@ app.put("/api/support/tickets/:id", async (req, res) => {
 });
 
 
-// ---------------- DAILY SCHEDULER CHECK ----------------
+// ---------------- DAILY SCHEDULER CHECK & OVERDUE NOTIFIER ----------------
 
-async function runDailySchedulerTask() {
+export async function checkAndSendOverdueRegulationsEmails(options?: { referenceDate?: string; force?: boolean }) {
   const allObjects = await dbStore.getObjects();
   const allSchedules = await dbStore.getSchedules();
   const allUsers = await dbStore.getUsers();
   const settings = await dbStore.getSettings();
-  const today = new Date();
+
+  // If feature is explicitly disabled in settings, skip (default enabled: true)
+  if (settings.autoAdminEmailOnOverdue5Days === false && !options?.force) {
+    console.log("[OverdueNotifier] Auto email on overdue >5 days is disabled in settings. Skipping.");
+    return { success: true, overdueCount: 0, emailsSent: 0, message: "Отключено в настройках" };
+  }
+
+  // Calculate current date or reference simulation date
+  const today = options?.referenceDate ? new Date(options.referenceDate) : new Date();
+  const todayStr = today.toISOString().split('T')[0];
+
+  const adminUsers = allUsers.filter(u => u.role === 'admin' && u.email && u.email.trim() !== "");
+  if (adminUsers.length === 0) {
+    console.warn("[OverdueNotifier] No admin users with email found to receive overdue alerts.");
+  }
+
+  const overdueRegulations: Array<{
+    sch: ScheduleItem;
+    obj: BuildingObject | undefined;
+    daysOverdue: number;
+    specialistName: string;
+  }> = [];
+
+  for (const sch of allSchedules) {
+    let diffDays: number;
+    if (sch.lastDoneDate) {
+      const lastDone = new Date(sch.lastDoneDate);
+      const nextDue = new Date(lastDone);
+      nextDue.setDate(lastDone.getDate() + sch.intervalDays);
+      const diffTime = nextDue.getTime() - today.getTime();
+      diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    } else if (sch.commissioningDate) {
+      const commDate = new Date(sch.commissioningDate);
+      const nextDue = new Date(commDate);
+      nextDue.setDate(commDate.getDate() + sch.intervalDays);
+      const diffTime = nextDue.getTime() - today.getTime();
+      diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    } else {
+      diffDays = -999;
+    }
+
+    // Check if overdue by MORE THAN 5 days (i.e. diffDays < -5 => daysOverdue > 5)
+    if (diffDays < -5) {
+      const daysOverdue = Math.abs(diffDays);
+      const obj = allObjects.find(o => o.id === sch.objectId);
+      const spec = sch.responsibleUserId ? allUsers.find(u => u.id === sch.responsibleUserId) : undefined;
+      const specialistName = spec ? `${spec.fullname} (${spec.company || spec.email})` : "Не назначен";
+
+      overdueRegulations.push({
+        sch,
+        obj,
+        daysOverdue,
+        specialistName
+      });
+    }
+  }
+
+  let totalEmailsSent = 0;
+  const dispatchedItems: any[] = [];
+
+  for (const item of overdueRegulations) {
+    const { sch, obj, daysOverdue, specialistName } = item;
+
+    // Check if we already sent notification for this schedule item today (unless force=true)
+    if (!options?.force && sch.lastOverdueAdminEmailDate === todayStr) {
+      console.log(`[OverdueNotifier] Schedule "${sch.title}" already alerted admins today (${todayStr}). Skipping.`);
+      continue;
+    }
+
+    for (const admin of adminUsers) {
+      notificationQueue.enqueueOverdueAdminEmail(
+        admin,
+        sch,
+        obj,
+        daysOverdue,
+        specialistName
+      );
+      totalEmailsSent++;
+    }
+
+    // Update schedule with last overdue admin email date
+    await dbStore.updateSchedule(sch.id, { lastOverdueAdminEmailDate: todayStr });
+    dispatchedItems.push({
+      scheduleId: sch.id,
+      scheduleTitle: sch.title,
+      objectId: sch.objectId,
+      objectName: obj?.name || 'Неизвестный объект',
+      daysOverdue
+    });
+  }
+
+  console.log(`[OverdueNotifier] Processed ${overdueRegulations.length} overdue regulations (>5 days). Enqueued ${totalEmailsSent} emails to admins.`);
+
+  return {
+    success: true,
+    overdueCount: overdueRegulations.length,
+    emailsSent: totalEmailsSent,
+    dispatchedItems,
+    referenceDate: todayStr
+  };
+}
+
+async function runDailySchedulerTask(referenceDateStr?: string) {
+  const allObjects = await dbStore.getObjects();
+  const allSchedules = await dbStore.getSchedules();
+  const allUsers = await dbStore.getUsers();
+  const settings = await dbStore.getSettings();
+  const today = referenceDateStr ? new Date(referenceDateStr) : new Date();
   const todayStr = today.toISOString().split('T')[0];
   
   let totalLogsCreated = 0;
@@ -1419,10 +1554,82 @@ async function runDailySchedulerTask() {
 
 app.post("/api/cron-check", async (req, res) => {
   try {
-    const count = await runDailySchedulerTask();
-    res.json({ success: true, notificationsSentCount: count });
+    const referenceDate = req.body?.referenceDate;
+    const count = await runDailySchedulerTask(referenceDate);
+    const overdueResult = await checkAndSendOverdueRegulationsEmails({ referenceDate, force: req.body?.force });
+    res.json({ 
+      success: true, 
+      notificationsSentCount: count,
+      overdueEmailsSent: overdueResult.emailsSent,
+      overdueCount: overdueResult.overdueCount,
+      overdueDetails: overdueResult.dispatchedItems
+    });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Dedicated endpoint to trigger and check overdue email notifications to admins
+app.post("/api/notifications/check-overdue-emails", async (req, res) => {
+  try {
+    const { referenceDate, force } = req.body || {};
+    const result = await checkAndSendOverdueRegulationsEmails({ referenceDate, force });
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Endpoint to list regulations overdue by > 5 days
+app.get("/api/notifications/overdue-regulations", async (req, res) => {
+  try {
+    const referenceDate = req.query.referenceDate ? String(req.query.referenceDate) : undefined;
+    const today = referenceDate ? new Date(referenceDate) : new Date();
+    
+    const allObjects = await dbStore.getObjects();
+    const allSchedules = await dbStore.getSchedules();
+    const allUsers = await dbStore.getUsers();
+    const settings = await dbStore.getSettings();
+
+    const overdueList = [];
+    for (const sch of allSchedules) {
+      let diffDays = 0;
+      if (sch.lastDoneDate) {
+        const lastDone = new Date(sch.lastDoneDate);
+        const nextDue = new Date(lastDone);
+        nextDue.setDate(lastDone.getDate() + sch.intervalDays);
+        diffDays = Math.ceil((nextDue.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      } else if (sch.commissioningDate) {
+        const commDate = new Date(sch.commissioningDate);
+        const nextDue = new Date(commDate);
+        nextDue.setDate(commDate.getDate() + sch.intervalDays);
+        diffDays = Math.ceil((nextDue.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      } else {
+        diffDays = -999;
+      }
+
+      if (diffDays < -5) {
+        const obj = allObjects.find(o => o.id === sch.objectId);
+        const spec = sch.responsibleUserId ? allUsers.find(u => u.id === sch.responsibleUserId) : undefined;
+        overdueList.push({
+          schedule: sch,
+          object: obj,
+          daysOverdue: Math.abs(diffDays),
+          specialist: spec,
+          lastAdminEmailDate: sch.lastOverdueAdminEmailDate || null
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      autoEnabled: settings.autoAdminEmailOnOverdue5Days !== false,
+      count: overdueList.length,
+      overdueList,
+      referenceDate: today.toISOString().split('T')[0]
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -1791,5 +1998,19 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[Technical Maintenance Server] listening on http://0.0.0.0:${PORT}`);
+
+    // Automatic check on server launch (runs after 5 seconds to ensure DB is initialized)
+    setTimeout(() => {
+      checkAndSendOverdueRegulationsEmails().catch(err => {
+        console.error("[OverdueNotifier] Initial server launch check failed:", err);
+      });
+    }, 5000);
+
+    // Periodic automatic background check every 30 minutes
+    setInterval(() => {
+      checkAndSendOverdueRegulationsEmails().catch(err => {
+        console.error("[OverdueNotifier] Periodic interval check failed:", err);
+      });
+    }, 30 * 60 * 1000);
   });
 }

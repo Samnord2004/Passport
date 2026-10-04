@@ -71,6 +71,84 @@ export const LEGAL_DOCS: Record<string, LegalDoc> = {
   }
 };
 
+export const DEFAULT_LEGAL_DOCS_VERSION = "2026-05-21_v1";
+
+export function getCurrentLegalDocsVersion(): string {
+  return localStorage.getItem("legal_docs_version") || DEFAULT_LEGAL_DOCS_VERSION;
+}
+
+export function getCustomLegalDocs(): Record<string, LegalDoc> {
+  const saved = localStorage.getItem("custom_legal_docs");
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch (e) {
+      // fallback
+    }
+  }
+  return LEGAL_DOCS;
+}
+
+export function getUserLegalConsent(userId: string): {
+  userId: string;
+  userEmail: string;
+  role: string;
+  acceptedAt: string;
+  docVersion: string;
+} | null {
+  if (!userId) return null;
+  const saved = localStorage.getItem(`legal_consent_${userId}`);
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function saveUserLegalConsent(userId: string, userEmail: string, role: string, docVersion?: string) {
+  const version = docVersion || getCurrentLegalDocsVersion();
+  const record = {
+    userId,
+    userEmail,
+    role,
+    acceptedAt: new Date().toISOString(),
+    docVersion: version,
+    agreedDocs: {
+      user_agreement: true,
+      privacy_policy: true,
+      data_consent: true,
+      public_offer: true
+    }
+  };
+  localStorage.setItem(`legal_consent_${userId}`, JSON.stringify(record));
+  return record;
+}
+
+export function checkUserNeedsLegalConsent(user: { id: string; role: string } | null): boolean {
+  if (!user) return false;
+  // Applicable roles: owner, family, manager, specialist
+  const requiredRoles = ['owner', 'family', 'manager', 'specialist'];
+  if (!requiredRoles.includes(user.role)) return false;
+  
+  const consent = getUserLegalConsent(user.id);
+  const currentVersion = getCurrentLegalDocsVersion();
+  
+  if (!consent) {
+    // First login, never accepted
+    return true;
+  }
+  
+  if (consent.docVersion !== currentVersion) {
+    // Documents were modified / updated since acceptance
+    return true;
+  }
+  
+  return false;
+}
+
 interface LegalDocumentsModalProps {
   docType: 'user_agreement' | 'privacy_policy' | 'data_consent' | 'public_offer';
   onClose: () => void;
@@ -185,8 +263,13 @@ export function LegalTabContent({ currentTheme, isAdmin }: LegalTabContentProps)
     };
     setDocs(updatedDocs);
     localStorage.setItem("custom_legal_docs", JSON.stringify(updatedDocs));
+    
+    // Bump document version to mandate re-confirmation from users
+    const newVersion = `v_${Date.now()}_${encodeURIComponent(editLastUpdated || new Date().toLocaleDateString('ru-RU'))}`;
+    localStorage.setItem("legal_docs_version", newVersion);
+    
     setIsEditing(false);
-    window.dispatchEvent(new Event("legal-docs-updated"));
+    window.dispatchEvent(new CustomEvent("legal-docs-updated", { detail: { version: newVersion, docKey: selectedDoc } }));
   };
 
   const handleReset = () => {
@@ -197,8 +280,12 @@ export function LegalTabContent({ currentTheme, isAdmin }: LegalTabContentProps)
       };
       setDocs(updatedDocs);
       localStorage.setItem("custom_legal_docs", JSON.stringify(updatedDocs));
+      
+      const newVersion = `v_${Date.now()}_reset`;
+      localStorage.setItem("legal_docs_version", newVersion);
+      
       setIsEditing(false);
-      window.dispatchEvent(new Event("legal-docs-updated"));
+      window.dispatchEvent(new CustomEvent("legal-docs-updated", { detail: { version: newVersion } }));
     }
   };
 

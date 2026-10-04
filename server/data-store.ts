@@ -546,6 +546,7 @@ export class DataStore {
       await this.pool.query(`ALTER TABLE completed_checklists ADD COLUMN IF NOT EXISTS owner_rating_comment TEXT;`);
       await this.pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS commissioning_date TEXT;`);
       await this.pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS last_notification_date VARCHAR(100);`);
+      await this.pool.query(`ALTER TABLE schedules ADD COLUMN IF NOT EXISTS scheduled_date VARCHAR(100);`);
       await this.pool.query(`ALTER TABLE building_objects ADD COLUMN IF NOT EXISTS yandex_disk_url TEXT;`);
       await this.pool.query(`ALTER TABLE building_objects ADD COLUMN IF NOT EXISTS object_type TEXT;`);
     } catch (e: any) {
@@ -957,7 +958,12 @@ export class DataStore {
         allowedSpecialistIds: r.allowedSpecialistIds ? r.allowedSpecialistIds.split(",").filter((s: string) => s.trim() !== "") : []
       }));
     }
-    return this.data.objects.map(o => ({ ...o, allowedSpecialistIds: o.allowedSpecialistIds || [] }));
+    return this.data.objects.map((o, idx) => ({
+      ...o,
+      allowedSpecialistIds: o.allowedSpecialistIds || [],
+      objectType: o.objectType || 'house',
+      createdAt: o.createdAt || new Date(Date.now() - (this.data.objects.length - idx) * 86400000 * 4).toISOString()
+    }));
   }
 
   public async getObjectById(objId: string): Promise<BuildingObject | null> {
@@ -1231,8 +1237,9 @@ export class DataStore {
           notes = COALESCE($8, notes), 
           checklist_template_id = CASE WHEN $9 = 'CLEAR' THEN NULL ELSE COALESCE($10, checklist_template_id) END,
           commissioning_date = COALESCE($11, commissioning_date),
-          last_notification_date = COALESCE($12, last_notification_date)
-         WHERE id = $13`,
+          last_notification_date = COALESCE($12, last_notification_date),
+          scheduled_date = COALESCE($13, scheduled_date)
+         WHERE id = $14`,
         [
           objId || null, 
           updated.category, 
@@ -1246,6 +1253,7 @@ export class DataStore {
           tplId || null, 
           updated.commissioningDate === undefined ? null : updated.commissioningDate,
           updated.lastNotificationDate === undefined ? null : updated.lastNotificationDate,
+          updated.scheduledDate === undefined ? null : updated.scheduledDate,
           schId
         ]
       );
@@ -1458,6 +1466,7 @@ export class DataStore {
     if (s.supportTelegram === undefined) s.supportTelegram = "";
     if (s.supportWhatsapp === undefined) s.supportWhatsapp = "";
     if (s.supportMax === undefined) s.supportMax = "";
+    if (s.autoAdminEmailOnOverdue5Days === undefined) s.autoAdminEmailOnOverdue5Days = true;
     return s;
   }
 

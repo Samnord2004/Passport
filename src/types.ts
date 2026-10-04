@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'owner' | 'specialist';
+export type UserRole = 'admin' | 'owner' | 'specialist' | 'family' | 'manager';
 
 export interface User {
   id: string;
@@ -19,6 +19,22 @@ export interface User {
   ratingCount?: number;
   avatarUrl?: string;
   hideContactsFromSpecialist?: boolean;
+  legalConsentAcceptedAt?: string;
+  legalConsentVersion?: string;
+}
+
+export interface LegalConsentRecord {
+  userId: string;
+  userEmail: string;
+  role: UserRole;
+  acceptedAt: string;
+  docVersion: string;
+  agreedDocs: {
+    user_agreement: boolean;
+    privacy_policy: boolean;
+    data_consent: boolean;
+    public_offer: boolean;
+  };
 }
 
 export interface FamilyMemberAccess {
@@ -31,6 +47,8 @@ export interface FamilyMemberAccess {
   addedAt: string;
   notes?: string;
   shareContactsWithSpecialist?: boolean; // Галочка об открытии доступа к контактам для специалистов
+  userId?: string;
+  initialPassword?: string;
 }
 
 export interface BuildingObject {
@@ -48,6 +66,7 @@ export interface BuildingObject {
   objectType?: 'house' | 'admin_building' | 'land' | 'dacha' | 'other';
   familyAccessList?: FamilyMemberAccess[]; // Family and Manager access
   hideOwnerContactsFromSpecialists?: boolean; // Скрыть контакты собственника от специалистов ТО
+  createdAt?: string; // Дата создания / регистрации объекта (ISO)
 }
 
 export interface ScheduleItem {
@@ -62,6 +81,8 @@ export interface ScheduleItem {
   checklistTemplateId: string; // Reference to checklist template
   commissioningDate?: string | null; // Date of commissioning
   lastNotificationDate?: string | null; // ISO Date "yyyy-mm-dd" of last sent alert
+  lastOverdueAdminEmailDate?: string | null; // ISO Date "yyyy-mm-dd" of last sent >5 days overdue email to admins
+  scheduledDate?: string | null; // Плановая дата проведения ТО (yyyy-mm-dd)
 }
 
 export type QuestionType = 'boolean' | 'number' | 'text' | 'select' | 'photo';
@@ -138,6 +159,7 @@ export interface SystemSettings {
   appBackgroundType?: 'default' | 'villa' | 'blueprint' | 'custom' | 'sakura';
   appBackgroundUrl?: string; // Standard URL, Base64 or Unsplash image of custom background
   cardOpacity?: number; // percentage from 10 to 100
+  autoAdminEmailOnOverdue5Days?: boolean; // Автоматические email-уведомления администраторам при просрочке ТО более чем на 5 дней
   smtpHost?: string;
   smtpPort?: number;
   smtpUser?: string;
@@ -149,7 +171,7 @@ export interface SupportTicket {
   id: string;
   timestamp: string;
   userId: string;
-  userRole: 'specialist' | 'owner' | 'admin' | 'operator';
+  userRole: UserRole | 'operator';
   userName: string;
   userEmail: string;
   userPhone: string;

@@ -1,34 +1,60 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import {
   X,
   Check,
   Plus,
-  Trash2,
-  RotateCw,
-  Maximize2,
   Printer,
   Layers,
+  FileSpreadsheet,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  RotateCw,
+  ChevronLeft,
+  ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Box,
+  Flame,
   Zap,
   Droplets,
-  Wind,
-  Flame,
-  Armchair,
-  DoorOpen,
-  Info,
-  Grid,
-  FileSpreadsheet
+  Eye,
+  EyeOff
 } from "lucide-react";
 import {
   BuildingFloorPlan,
   PlanRoom,
+  FloorPartition,
+  FloorOpening,
   FloorPlanElement,
-  FloorElementType,
-  FloorElementCategory,
-  ROOM_PRESETS,
-  ELEMENT_CATALOG,
+  RoomPreset,
   ElementCatalogItem,
-  createDefaultFloorPlan
+  createDefaultFloorPlan,
+  createDefaultElectricalPanels,
+  createDefaultCollectorSchemes,
+  UnderfloorHeatingLoop,
+  EngineeringRoute,
+  RouteSystem,
+  RoutePoint,
+  EngineeringLayerVisibility,
+  DEFAULT_LAYER_VISIBILITY
 } from "../types/architecturalTypes";
+import { FloorPlanCanvas } from "./floorplan/FloorPlanCanvas";
+import { FloorPlanSidebar, WorkflowStep } from "./floorplan/FloorPlanSidebar";
+import { FloorPlanInspector } from "./floorplan/FloorPlanInspector";
+import { FloorPlanSpecTable } from "./floorplan/FloorPlanSpecTable";
+import { FloorPlanAxonometry } from "./floorplan/FloorPlanAxonometry";
+import { FloorPlanElectricScheme } from "./floorplan/FloorPlanElectricScheme";
+import { FloorPlanCollectorScheme } from "./floorplan/FloorPlanCollectorScheme";
+import {
+  autoGenerateRoomsFromPartitions,
+  snapVal,
+  findMagneticWallSnap,
+  calculateRouteLength,
+  generateUnderfloorHeatingSvg
+} from "./floorplan/floorPlanUtils";
 
 interface FloorPlanModalProps {
   buildingLabel: string;
@@ -49,35 +75,89 @@ export const FloorPlanModal: React.FC<FloorPlanModalProps> = ({
   onSave,
   onClose,
 }) => {
-  // Ensure valid dimensions
-  const W = Math.max(2, wMeters || 6);
-  const H = Math.max(2, hMeters || 6);
+  // Ensure valid base dimensions
+  const [W, setW] = useState<number>(() => Math.max(3, Math.round((wMeters || 6) * 10) / 10));
+  const [H, setH] = useState<number>(() => Math.max(3, Math.round((hMeters || 6) * 10) / 10));
+  const [outerWallThickness, setOuterWallThickness] = useState<number>(() => {
+    return initialFloorPlan?.outerWallThicknessMeters || 0.35;
+  });
 
-  // Floor plan state
+  // Collapsible sidebars state
+  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState<boolean>(true);
+  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState<boolean>(true);
+
+  // Layer Visibility State (Слои проекта)
+  const [layerVisibility, setLayerVisibility] = useState<EngineeringLayerVisibility>(DEFAULT_LAYER_VISIBILITY);
+
+  // Main Floor Plan State
   const [floorPlan, setFloorPlan] = useState<BuildingFloorPlan>(() => {
     if (initialFloorPlan && initialFloorPlan.floors && initialFloorPlan.floors.length > 0) {
-      return initialFloorPlan;
+      return {
+        ...initialFloorPlan,
+        outerWallThicknessMeters: initialFloorPlan.outerWallThicknessMeters || 0.35,
+        partitions: initialFloorPlan.partitions || [],
+        openings: initialFloorPlan.openings || [],
+        elements: initialFloorPlan.elements || [],
+        routes: initialFloorPlan.routes || [],
+        heatingLoops: initialFloorPlan.heatingLoops || [],
+        electricalPanels:
+          initialFloorPlan.electricalPanels && initialFloorPlan.electricalPanels.length > 0
+            ? initialFloorPlan.electricalPanels
+            : createDefaultElectricalPanels(),
+        collectorSchemes:
+          initialFloorPlan.collectorSchemes && initialFloorPlan.collectorSchemes.length > 0
+            ? initialFloorPlan.collectorSchemes
+            : createDefaultCollectorSchemes()
+      };
     }
     return createDefaultFloorPlan(W, H, subType);
   });
 
   const [currentFloor, setCurrentFloor] = useState<number>(floorPlan.currentFloor || 1);
-  const [activeCategory, setActiveCategory] = useState<
-    "rooms" | "electric" | "plumbing" | "hvac" | "heating" | "furniture" | "doors"
-  >("rooms");
+  const [workflowStep, setWorkflowStep] = useState<WorkflowStep>("step1_perimeter");
+  const [activeTab, setActiveTab] = useState<
+    "editor" | "axonometry" | "electric_scheme" | "collector_scheme" | "spec"
+  >("editor");
 
+  // Selection states
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+  const [selectedPartitionId, setSelectedPartitionId] = useState<string | null>(null);
+  const [selectedOpeningId, setSelectedOpeningId] = useState<string | null>(null);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [selectedHeatingLoopId, setSelectedHeatingLoopId] = useState<string | null>(null);
 
-  // Canvas zoom and pan
-  const [snapToGrid, setSnapToGrid] = useState<boolean>(true);
-  const [gridStepMeters, setGridStepMeters] = useState<number>(0.25);
+  // Active route drawing state (Прокладка трасс)
+  const [drawingRoute, setDrawingRoute] = useState<{
+    system: RouteSystem;
+    points: RoutePoint[];
+    name: string;
+    cableCores?: string;
+    diameterMm?: number;
+    color?: string;
+  } | null>(null);
+
+  // Active heating loop drawing state
+  const [drawingHeatingLoop, setDrawingHeatingLoop] = useState<boolean>(false);
+
+  // Active element placement / stamp state
+  const [placingElement, setPlacingElement] = useState<ElementCatalogItem | null>(null);
+
+  // Zoom & Display options (from 50% to 350%)
+  const [zoomScale, setZoomScale] = useState<number>(1.0);
   const [showRulers, setShowRulers] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<"editor" | "spec">("editor");
 
-  // Dragging state for canvas
+  // Snapped wall feedback while dragging
+  const [snappedWallFeedback, setSnappedWallFeedback] = useState<{
+    label: string;
+    x?: number;
+    y?: number;
+    orientation?: "horizontal" | "vertical";
+  } | null>(null);
+
+  // Dragging interaction state
   const [draggingItem, setDraggingItem] = useState<{
-    type: "room" | "element";
+    type: "room" | "partition" | "opening" | "element" | "heating_loop";
     id: string;
     startX: number;
     startY: number;
@@ -85,279 +165,1055 @@ export const FloorPlanModal: React.FC<FloorPlanModalProps> = ({
     origY: number;
   } | null>(null);
 
-  const svgRef = useRef<SVGSVGElement | null>(null);
+  // Underfloor heating loop edge & corner resizing state
+  const [resizingHeatingLoop, setResizingHeatingLoop] = useState<{
+    id: string;
+    handle: "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+    origW: number;
+    origH: number;
+  } | null>(null);
 
-  // Calculate pixels per meter to fit comfortably in viewport
-  // Default canvas bounds
-  const canvasPadding = 40;
-  const pixelsPerMeter = 55; // 1 meter = 55 pixels
-  const svgWidth = W * pixelsPerMeter + canvasPadding * 2;
-  const svgHeight = H * pixelsPerMeter + canvasPadding * 2;
-
-  // Filter items for current floor
+  // Filter current floor items
   const currentRooms = floorPlan.rooms.filter((r) => r.floorLevel === currentFloor);
+  const currentPartitions = (floorPlan.partitions || []).filter((p) => p.floorLevel === currentFloor);
+  const currentOpenings = (floorPlan.openings || []).filter((o) => o.floorLevel === currentFloor);
   const currentElements = floorPlan.elements.filter((e) => e.floorLevel === currentFloor);
+  const currentHeatingLoops = (floorPlan.heatingLoops || []).filter((h) => h.floorLevel === currentFloor);
+  const currentRoutes = (floorPlan.routes || []).filter((r) => r.floorLevel === currentFloor);
 
-  // Compute total area of current floor rooms
-  const totalFloorArea = currentRooms.reduce((acc, r) => acc + r.wMeters * r.hMeters, 0);
+  // Selected item references for Inspector
+  const activeRoom = currentRooms.find((r) => r.id === selectedRoomId);
+  const activePartition = currentPartitions.find((p) => p.id === selectedPartitionId);
+  const activeOpening = currentOpenings.find((o) => o.id === selectedOpeningId);
+  const activeElement = currentElements.find((e) => e.id === selectedElementId);
+  const activeHeatingLoop = currentHeatingLoops.find((h) => h.id === selectedHeatingLoopId);
+  const activeRoute = currentRoutes.find((r) => r.id === selectedRouteId);
 
-  // Snap helper
-  const snapVal = (val: number, step: number = gridStepMeters) => {
-    if (!snapToGrid) return Math.round(val * 100) / 100;
-    return Math.round(val / step) * step;
+  // Layer Visibility Handlers
+  const handleToggleLayer = (layer: keyof EngineeringLayerVisibility) => {
+    setLayerVisibility((prev) => ({ ...prev, [layer]: !prev[layer] }));
   };
 
-  // Add Room
-  const handleAddRoom = (preset: typeof ROOM_PRESETS[0]) => {
-    const rw = Math.min(preset.defaultW, W);
-    const rh = Math.min(preset.defaultH, H);
-    // Find next empty spot or place at origin
-    const existing = currentRooms;
-    let placeX = 0;
-    let placeY = 0;
-    if (existing.length > 0) {
-      const last = existing[existing.length - 1];
-      placeX = Math.min(W - rw, last.xMeters + 0.5);
-      placeY = Math.min(H - rh, last.yMeters + 0.5);
+  const handleSetSoloLayer = (layer: keyof EngineeringLayerVisibility | "all") => {
+    if (layer === "all") {
+      setLayerVisibility(DEFAULT_LAYER_VISIBILITY);
+    } else {
+      setLayerVisibility({
+        architecture: layer === "architecture",
+        furniture: layer === "furniture",
+        electric: layer === "electric",
+        plumbing: layer === "plumbing",
+        heating: layer === "heating",
+        ventilation: layer === "ventilation"
+      });
+    }
+  };
+
+  // Route Drawing Handlers
+  const handleStartDrawingRoute = (
+    system: RouteSystem,
+    name: string,
+    coresOrDia?: string,
+    color?: string
+  ) => {
+    setDrawingRoute({
+      system,
+      name,
+      cableCores: system === "electric" ? coresOrDia || "3x2.5" : undefined,
+      diameterMm: system !== "electric" ? parseInt(coresOrDia || "16") || 16 : undefined,
+      color:
+        color ||
+        (system === "electric"
+          ? "#f59e0b"
+          : system === "plumbing_cold"
+          ? "#0284c7"
+          : system === "plumbing_hot"
+          ? "#ef4444"
+          : system === "sewer"
+          ? "#475569"
+          : "#ea580c"),
+      points: []
+    });
+    setSelectedRouteId(null);
+    setSelectedHeatingLoopId(null);
+    setSelectedElementId(null);
+    setSelectedRoomId(null);
+    setSelectedPartitionId(null);
+    setSelectedOpeningId(null);
+  };
+
+  const handleAddRoutePoint = (x: number, y: number) => {
+    if (!drawingRoute) return;
+    setDrawingRoute((prev) => {
+      if (!prev) return null;
+      const defaultZ =
+        prev.system === "electric"
+          ? 2.5
+          : prev.system === "sewer"
+          ? 0.08
+          : prev.system === "plumbing_hot"
+          ? 0.25
+          : 0.18;
+      const newPt: RoutePoint = { x, y, z: defaultZ };
+      return {
+        ...prev,
+        points: [...prev.points, newPt]
+      };
+    });
+  };
+
+  const handleFinishDrawingRoute = () => {
+    if (!drawingRoute || drawingRoute.points.length < 2) {
+      setDrawingRoute(null);
+      return;
+    }
+    const newRoute: EngineeringRoute = {
+      id: `route_${Date.now()}`,
+      floorLevel: currentFloor,
+      system: drawingRoute.system,
+      name: drawingRoute.name,
+      points: drawingRoute.points,
+      cableCores: drawingRoute.cableCores,
+      diameterMm: drawingRoute.diameterMm,
+      color: drawingRoute.color
+    };
+    setFloorPlan((prev) => ({
+      ...prev,
+      routes: [...(prev.routes || []), newRoute]
+    }));
+    setDrawingRoute(null);
+    setSelectedRouteId(newRoute.id);
+  };
+
+  const handleCancelDrawingRoute = () => {
+    setDrawingRoute(null);
+  };
+
+  const handleUndoRoutePoint = () => {
+    if (!drawingRoute) return;
+    setDrawingRoute((prev) => {
+      if (!prev || prev.points.length === 0) return prev;
+      return {
+        ...prev,
+        points: prev.points.slice(0, -1)
+      };
+    });
+  };
+
+  // Underfloor Heating Handlers
+  const handleStartDrawingHeatingLoop = () => {
+    setDrawingHeatingLoop(true);
+    setDrawingRoute(null);
+    setPlacingElement(null);
+    setSelectedHeatingLoopId(null);
+  };
+
+  const handleFinishDrawingHeatingLoop = (x: number, y: number, w: number, h: number) => {
+    const count = (floorPlan.heatingLoops || []).filter((l) => l.floorLevel === currentFloor).length;
+    const newLoop: UnderfloorHeatingLoop = {
+      id: `loop_${Date.now()}`,
+      floorLevel: currentFloor,
+      name: `Контур ТП #${count + 1}`,
+      xMeters: x,
+      yMeters: y,
+      wMeters: w,
+      hMeters: h,
+      stepMm: 150,
+      wallOffsetMm: 100,
+      pattern: "snail",
+      pipeDiameterMm: 16
+    };
+    const { lengthMeters } = generateUnderfloorHeatingSvg(newLoop, 1, 0);
+    newLoop.pipeLengthMeters = lengthMeters;
+
+    setFloorPlan((prev) => ({
+      ...prev,
+      heatingLoops: [...(prev.heatingLoops || []), newLoop]
+    }));
+    setDrawingHeatingLoop(false);
+    setSelectedHeatingLoopId(newLoop.id);
+  };
+
+  const handleCancelDrawingHeatingLoop = () => {
+    setDrawingHeatingLoop(false);
+  };
+
+  // Element Placement & Stamping Handlers
+  const handleStartPlacingElement = (catItem: ElementCatalogItem) => {
+    setPlacingElement(catItem);
+    setDrawingRoute(null);
+    setDrawingHeatingLoop(false);
+    setSelectedElementId(null);
+  };
+
+  const handlePlaceElementAt = (catItem: ElementCatalogItem, x: number, y: number) => {
+    const newEl: FloorPlanElement = {
+      id: "el_" + Date.now(),
+      type: catItem.type,
+      floorLevel: currentFloor,
+      xMeters: Math.max(0, Math.min(W - catItem.defaultW, Math.round(x * 20) / 20)),
+      yMeters: Math.max(0, Math.min(H - catItem.defaultH, Math.round(y * 20) / 20)),
+      wMeters: catItem.defaultW,
+      hMeters: catItem.defaultH,
+      rotation: 0,
+      label: catItem.label,
+      circuitNumber: catItem.category === "electric" ? "Гр-1" : catItem.category === "plumbing" ? "ХВС" : undefined
+    };
+
+    setFloorPlan((prev) => ({
+      ...prev,
+      elements: [...prev.elements, newEl]
+    }));
+    setSelectedElementId(newEl.id);
+  };
+
+  const handleCancelPlacingElement = () => {
+    setPlacingElement(null);
+  };
+
+  const handleAddHeatingLoop = (loop: UnderfloorHeatingLoop) => {
+    setFloorPlan((prev) => ({
+      ...prev,
+      heatingLoops: [...(prev.heatingLoops || []), loop]
+    }));
+    setSelectedHeatingLoopId(loop.id);
+  };
+
+  const handleUpdateHeatingLoop = (updated: UnderfloorHeatingLoop) => {
+    setFloorPlan((prev) => ({
+      ...prev,
+      heatingLoops: (prev.heatingLoops || []).map((h) => (h.id === updated.id ? updated : h))
+    }));
+  };
+
+  const handleDeleteHeatingLoop = (id: string) => {
+    setFloorPlan((prev) => ({
+      ...prev,
+      heatingLoops: (prev.heatingLoops || []).filter((h) => h.id !== id)
+    }));
+    if (selectedHeatingLoopId === id) setSelectedHeatingLoopId(null);
+  };
+
+  // Engineering Route Handlers
+  const handleUpdateRoute = (updated: EngineeringRoute) => {
+    setFloorPlan((prev) => ({
+      ...prev,
+      routes: (prev.routes || []).map((r) => (r.id === updated.id ? updated : r))
+    }));
+  };
+
+  const handleDeleteRoute = (id: string) => {
+    setFloorPlan((prev) => ({
+      ...prev,
+      routes: (prev.routes || []).filter((r) => r.id !== id)
+    }));
+    if (selectedRouteId === id) setSelectedRouteId(null);
+  };
+
+  // Step 1: Update Perimeter
+  const handleUpdatePerimeter = (newW: number, newH: number, newThick: number) => {
+    setW(newW);
+    setH(newH);
+    setOuterWallThickness(newThick);
+    setFloorPlan((prev) => ({
+      ...prev,
+      outerWallThicknessMeters: newThick
+    }));
+  };
+
+  // Step 1: Quick Templates
+  const handleApplyTemplate = (type: "open_space" | "house" | "banya") => {
+    const freshPlan = createDefaultFloorPlan(W, H, type === "open_space" ? "generic" : type);
+    setFloorPlan(freshPlan);
+    setSelectedRoomId(null);
+    setSelectedPartitionId(null);
+    setSelectedOpeningId(null);
+    setSelectedElementId(null);
+  };
+
+  // Step 2: Add Partition
+  const handleAddPartition = (orientation: "vertical" | "horizontal") => {
+    const newPartition: FloorPartition = {
+      id: "part_" + Date.now(),
+      floorLevel: currentFloor,
+      orientation,
+      x1: orientation === "vertical" ? Math.round((W / 2) * 10) / 10 : 0,
+      y1: orientation === "vertical" ? 0 : Math.round((H / 2) * 10) / 10,
+      x2: orientation === "vertical" ? Math.round((W / 2) * 10) / 10 : W,
+      y2: orientation === "vertical" ? H : Math.round((H / 2) * 10) / 10,
+      thicknessMeters: 0.12,
+      wallType: "partition",
+      label: orientation === "vertical" ? "Вертикальная стена" : "Горизонтальная стена"
+    };
+
+    setFloorPlan((prev) => ({
+      ...prev,
+      partitions: [...(prev.partitions || []), newPartition]
+    }));
+    setSelectedPartitionId(newPartition.id);
+    setSelectedRoomId(null);
+    setSelectedOpeningId(null);
+    setSelectedElementId(null);
+  };
+
+  // Step 2: Split space
+  const handleSplitSpace = (mode: "half_v" | "half_h" | "hallway" | "entry") => {
+    let p: FloorPartition;
+    if (mode === "half_v") {
+      const x = Math.round((W / 2) * 10) / 10;
+      p = {
+        id: "part_v_" + Date.now(),
+        floorLevel: currentFloor,
+        orientation: "vertical",
+        x1: x,
+        y1: 0,
+        x2: x,
+        y2: H,
+        thicknessMeters: 0.15,
+        wallType: "bearing",
+        label: "Стена по центру"
+      };
+    } else if (mode === "half_h") {
+      const y = Math.round((H / 2) * 10) / 10;
+      p = {
+        id: "part_h_" + Date.now(),
+        floorLevel: currentFloor,
+        orientation: "horizontal",
+        x1: 0,
+        y1: y,
+        x2: W,
+        y2: y,
+        thicknessMeters: 0.15,
+        wallType: "bearing",
+        label: "Стена поперек"
+      };
+    } else if (mode === "hallway") {
+      p = {
+        id: "part_hall_" + Date.now(),
+        floorLevel: currentFloor,
+        orientation: "horizontal",
+        x1: 0,
+        y1: 1.5,
+        x2: W,
+        y2: 1.5,
+        thicknessMeters: 0.12,
+        wallType: "partition",
+        label: "Стена коридора"
+      };
+    } else {
+      p = {
+        id: "part_entry_" + Date.now(),
+        floorLevel: currentFloor,
+        orientation: "vertical",
+        x1: 2.0,
+        y1: 0,
+        x2: 2.0,
+        y2: Math.min(3.0, H),
+        thicknessMeters: 0.12,
+        wallType: "partition",
+        label: "Перегородка прихожей"
+      };
     }
 
+    setFloorPlan((prev) => ({
+      ...prev,
+      partitions: [...(prev.partitions || []), p]
+    }));
+    setSelectedPartitionId(p.id);
+  };
+
+  // Step 3: Auto-generate rooms from partitions
+  const handleAutoGenerateRooms = () => {
+    const generated = autoGenerateRoomsFromPartitions(W, H, floorPlan.partitions || [], currentFloor);
+    setFloorPlan((prev) => ({
+      ...prev,
+      rooms: [...prev.rooms.filter((r) => r.floorLevel !== currentFloor), ...generated]
+    }));
+    if (generated.length > 0) {
+      setSelectedRoomId(generated[0].id);
+    }
+  };
+
+  // Step 3: Add Room Preset
+  const handleAddRoomPreset = (preset: RoomPreset) => {
+    const rw = Math.min(preset.defaultW, W);
+    const rh = Math.min(preset.defaultH, H);
     const newRoom: PlanRoom = {
       id: "room_" + Date.now(),
       name: preset.label,
       type: preset.type,
-      xMeters: Math.round(placeX * 10) / 10,
-      yMeters: Math.round(placeY * 10) / 10,
+      xMeters: 0,
+      yMeters: 0,
       wMeters: rw,
       hMeters: rh,
       floorLevel: currentFloor,
       color: preset.color,
+      floorFinish: "Ламинат 33 класс",
+      ceilingHeight: 2.8
     };
 
     setFloorPlan((prev) => ({
       ...prev,
-      rooms: [...prev.rooms, newRoom],
+      rooms: [...prev.rooms, newRoom]
     }));
     setSelectedRoomId(newRoom.id);
-    setSelectedElementId(null);
   };
 
-  // Add Floor Element (Socket, Water, AC, Furniture, Door)
-  const handleAddElement = (catalogItem: ElementCatalogItem) => {
-    const newElement: FloorPlanElement = {
-      id: "el_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
-      type: catalogItem.type,
+  // Step 4: Add Door / Window Opening (directly onto partition or wall)
+  const handleAddOpening = (
+    type: "door_interior" | "door_entrance" | "window_standard" | "window_panoramic",
+    targetPartitionId?: string
+  ) => {
+    const isDoor = type.includes("door");
+    const width =
+      type === "window_panoramic"
+        ? 2.4
+        : type === "window_standard"
+        ? 1.4
+        : type === "door_entrance"
+        ? 1.0
+        : 0.85;
+
+    // Check if there is a target partition or currently selected partition
+    const targetPart =
+      (floorPlan.partitions || []).find(
+        (p) => p.id === (targetPartitionId || selectedPartitionId) && p.floorLevel === currentFloor
+      ) || (floorPlan.partitions || []).find((p) => p.floorLevel === currentFloor);
+
+    let newX = Math.round((W / 2 - width / 2) * 20) / 20;
+    let newY = isDoor ? 0 : H;
+    let orientation: "horizontal" | "vertical" = "horizontal";
+    let rotation = 0;
+    let wallId: string | undefined = undefined;
+    let wallThick = 0.15;
+
+    if (targetPart) {
+      const isVert = targetPart.orientation === "vertical" || Math.abs(targetPart.x1 - targetPart.x2) < 0.05;
+      wallId = targetPart.id;
+      wallThick = targetPart.thicknessMeters || 0.12;
+
+      if (isVert) {
+        orientation = "vertical";
+        rotation = 90;
+        newX = targetPart.x1;
+        const midY = (targetPart.y1 + targetPart.y2) / 2;
+        newY = Math.round((midY - width / 2) * 20) / 20;
+      } else {
+        orientation = "horizontal";
+        rotation = 0;
+        newY = targetPart.y1;
+        const midX = (targetPart.x1 + targetPart.x2) / 2;
+        newX = Math.round((midX - width / 2) * 20) / 20;
+      }
+    } else {
+      // Default to outer bottom wall (e.g. entrance door or facade window)
+      newY = H;
+      wallId = "outer_bottom";
+      wallThick = outerWallThickness;
+    }
+
+    const newOpening: FloorOpening = {
+      id: "op_" + Date.now(),
       floorLevel: currentFloor,
-      xMeters: Math.min(W - catalogItem.defaultW, 1.0),
-      yMeters: Math.min(H - catalogItem.defaultH, 1.0),
-      wMeters: catalogItem.defaultW,
-      hMeters: catalogItem.defaultH,
-      rotation: 0,
-      label: catalogItem.label,
-      circuitNumber:
-        catalogItem.category === "electric"
-          ? "ЭЛ-" + (currentElements.filter((e) => e.type.includes("socket")).length + 1)
-          : catalogItem.category === "plumbing"
-          ? "В-" + (currentElements.filter((e) => e.type.includes("water")).length + 1)
-          : catalogItem.category === "hvac"
-          ? "К-" + (currentElements.filter((e) => e.type.includes("ac")).length + 1)
-          : undefined,
+      type,
+      xMeters: newX,
+      yMeters: newY,
+      widthMeters: width,
+      orientation,
+      rotation,
+      swingDirection: "right_in",
+      wallId,
+      wallThickness: wallThick,
+      label:
+        type === "door_entrance"
+          ? "Входная дверь"
+          : isDoor
+          ? "Межкомнатная дверь"
+          : type === "window_panoramic"
+          ? "Панорамное окно"
+          : "Окно"
     };
 
     setFloorPlan((prev) => ({
       ...prev,
-      elements: [...prev.elements, newElement],
+      openings: [...(prev.openings || []), newOpening]
     }));
-    setSelectedElementId(newElement.id);
-    setSelectedRoomId(null);
+    setSelectedOpeningId(newOpening.id);
   };
 
-  // Add new Floor level (e.g. 2nd floor, attic, basement)
-  const handleAddFloor = () => {
-    const nextLevel = floorPlan.floors.length + 1;
-    const name = nextLevel === 2 ? "2 этаж" : nextLevel === 3 ? "3 этаж" : `Этаж ${nextLevel}`;
-    const newFloors = [...floorPlan.floors, { level: nextLevel, name, heightMeters: 2.7 }];
-    setFloorPlan((prev) => ({ ...prev, floors: newFloors }));
-    setCurrentFloor(nextLevel);
-  };
-
-  // Remove Floor
-  const handleRemoveCurrentFloor = () => {
-    if (floorPlan.floors.length <= 1) return;
-    const remainingFloors = floorPlan.floors.filter((f) => f.level !== currentFloor);
-    const remainingRooms = floorPlan.rooms.filter((r) => r.floorLevel !== currentFloor);
-    const remainingElements = floorPlan.elements.filter((e) => e.floorLevel !== currentFloor);
-    const targetFloor = remainingFloors[0].level;
-    setFloorPlan({
-      currentFloor: targetFloor,
-      floors: remainingFloors,
-      rooms: remainingRooms,
-      elements: remainingElements,
-    });
-    setCurrentFloor(targetFloor);
-  };
-
-  // Drag handlers
-  const handleMouseDown = (
-    e: React.MouseEvent,
-    type: "room" | "element",
-    id: string,
-    origX: number,
-    origY: number
+  // Direct 1-click install onto specific partition
+  const handleInstallOpeningOnPartition = (
+    partitionId: string,
+    type: "door_interior" | "door_entrance" | "window_standard" | "window_panoramic"
   ) => {
-    e.stopPropagation();
-    if (type === "room") {
-      setSelectedRoomId(id);
-      setSelectedElementId(null);
+    handleAddOpening(type, partitionId);
+  };
+
+  // Step 4: Add MEP Element
+  const handleAddElement = (catItem: ElementCatalogItem) => {
+    let newX = 1.0;
+    let newY = 1.0;
+    if (activeRoom) {
+      const roomEls = currentElements.filter(
+        (e) =>
+          e.xMeters >= activeRoom.xMeters &&
+          e.xMeters <= activeRoom.xMeters + activeRoom.wMeters &&
+          e.yMeters >= activeRoom.yMeters &&
+          e.yMeters <= activeRoom.yMeters + activeRoom.hMeters
+      );
+      const off = (roomEls.length % 5) * 0.35;
+      newX = Math.max(
+        activeRoom.xMeters,
+        Math.min(activeRoom.xMeters + activeRoom.wMeters - catItem.defaultW, activeRoom.xMeters + 0.4 + off)
+      );
+      newY = Math.max(
+        activeRoom.yMeters,
+        Math.min(activeRoom.yMeters + activeRoom.hMeters - catItem.defaultH, activeRoom.yMeters + 0.4 + off)
+      );
     } else {
-      setSelectedElementId(id);
-      setSelectedRoomId(null);
+      const count = currentElements.length;
+      newX = Math.min(W - catItem.defaultW - 0.3, 1.0 + (count % 8) * 0.4);
+      newY = Math.min(H - catItem.defaultH - 0.3, 1.0 + (Math.floor(count / 8) % 6) * 0.4);
     }
-    setDraggingItem({
-      type,
-      id,
-      startX: e.clientX,
-      startY: e.clientY,
-      origX,
-      origY,
-    });
+
+    const newEl: FloorPlanElement = {
+      id: "el_" + Date.now(),
+      type: catItem.type,
+      floorLevel: currentFloor,
+      xMeters: Math.round(newX * 20) / 20,
+      yMeters: Math.round(newY * 20) / 20,
+      wMeters: catItem.defaultW,
+      hMeters: catItem.defaultH,
+      rotation: 0,
+      label: catItem.label,
+      circuitNumber: catItem.category === "electric" ? "Гр-1" : catItem.category === "plumbing" ? "ХВС" : undefined
+    };
+
+    setFloorPlan((prev) => ({
+      ...prev,
+      elements: [...prev.elements, newEl]
+    }));
+    setSelectedElementId(newEl.id);
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!draggingItem) return;
-    const dx = (e.clientX - draggingItem.startX) / pixelsPerMeter;
-    const dy = (e.clientY - draggingItem.startY) / pixelsPerMeter;
-
-    if (draggingItem.type === "room") {
-      const room = floorPlan.rooms.find((r) => r.id === draggingItem.id);
-      if (!room) return;
-      let newX = snapVal(Math.max(0, Math.min(W - room.wMeters, draggingItem.origX + dx)));
-      let newY = snapVal(Math.max(0, Math.min(H - room.hMeters, draggingItem.origY + dy)));
-      setFloorPlan((prev) => ({
-        ...prev,
-        rooms: prev.rooms.map((r) => (r.id === draggingItem.id ? { ...r, xMeters: newX, yMeters: newY } : r)),
-      }));
-    } else {
-      const el = floorPlan.elements.find((e) => e.id === draggingItem.id);
-      if (!el) return;
-      let newX = snapVal(Math.max(0, Math.min(W - el.wMeters, draggingItem.origX + dx)));
-      let newY = snapVal(Math.max(0, Math.min(H - el.hMeters, draggingItem.origY + dy)));
-      setFloorPlan((prev) => ({
-        ...prev,
-        elements: prev.elements.map((e) =>
-          e.id === draggingItem.id ? { ...e, xMeters: newX, yMeters: newY } : e
-        ),
-      }));
-    }
+  // Rotate Opening 90 degrees
+  const handleRotateOpening = (id: string) => {
+    setFloorPlan((prev) => ({
+      ...prev,
+      openings: (prev.openings || []).map((o) => {
+        if (o.id !== id) return o;
+        return { ...o, rotation: ((o.rotation || 0) + 90) % 360 };
+      })
+    }));
   };
 
-  const handleMouseUp = () => {
-    setDraggingItem(null);
-  };
-
-  // Rotate selected element by 90 degrees
+  // Rotate Element 90 degrees
   const handleRotateElement = (id: string) => {
     setFloorPlan((prev) => ({
       ...prev,
       elements: prev.elements.map((el) => {
         if (el.id !== id) return el;
-        const newRot = (el.rotation + 90) % 360;
-        // Swap w and h for 90/270 deg
-        return {
-          ...el,
-          rotation: newRot,
-        };
-      }),
+        return { ...el, rotation: ((el.rotation || 0) + 90) % 360 };
+      })
     }));
   };
 
-  // Delete selected item
-  const handleDeleteSelected = () => {
-    if (selectedElementId) {
-      setFloorPlan((prev) => ({
-        ...prev,
-        elements: prev.elements.filter((e) => e.id !== selectedElementId),
-      }));
+  // Mouse drag coordination
+  const handleMouseDownItem = (
+    e: React.MouseEvent,
+    type: "room" | "partition" | "opening" | "element" | "heating_loop" | "route",
+    id: string,
+    origX: number,
+    origY: number
+  ) => {
+    // If currently routing, drawing heating loop, or placing items, ignore dragging
+    if (drawingRoute || drawingHeatingLoop || placingElement) {
+      return;
+    }
+    e.stopPropagation();
+    if (type === "room") {
+      setSelectedRoomId(id);
+      setSelectedPartitionId(null);
+      setSelectedOpeningId(null);
       setSelectedElementId(null);
-    } else if (selectedRoomId) {
-      setFloorPlan((prev) => ({
-        ...prev,
-        rooms: prev.rooms.filter((r) => r.id !== selectedRoomId),
-      }));
+      setSelectedHeatingLoopId(null);
+      setSelectedRouteId(null);
+    } else if (type === "partition") {
+      setSelectedPartitionId(id);
       setSelectedRoomId(null);
+      setSelectedOpeningId(null);
+      setSelectedElementId(null);
+      setSelectedHeatingLoopId(null);
+      setSelectedRouteId(null);
+    } else if (type === "opening") {
+      setSelectedOpeningId(id);
+      setSelectedRoomId(null);
+      setSelectedPartitionId(null);
+      setSelectedElementId(null);
+      setSelectedHeatingLoopId(null);
+      setSelectedRouteId(null);
+    } else if (type === "heating_loop") {
+      setSelectedHeatingLoopId(id);
+      setSelectedRoomId(null);
+      setSelectedPartitionId(null);
+      setSelectedOpeningId(null);
+      setSelectedElementId(null);
+      setSelectedRouteId(null);
+    } else if (type === "route") {
+      setSelectedRouteId(id);
+      setSelectedRoomId(null);
+      setSelectedPartitionId(null);
+      setSelectedOpeningId(null);
+      setSelectedElementId(null);
+      setSelectedHeatingLoopId(null);
+    } else {
+      setSelectedElementId(id);
+      setSelectedRoomId(null);
+      setSelectedPartitionId(null);
+      setSelectedOpeningId(null);
+      setSelectedHeatingLoopId(null);
+      setSelectedRouteId(null);
+    }
+
+    if (type !== "route") {
+      setDraggingItem({
+        type,
+        id,
+        startX: e.clientX,
+        startY: e.clientY,
+        origX,
+        origY
+      });
     }
   };
 
-  // Save changes
+  // Heating loop edge and corner resizing handler
+  const handleMouseDownResizeHeatingLoop = (
+    e: React.MouseEvent,
+    id: string,
+    handle: "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se",
+    initialLoop: UnderfloorHeatingLoop
+  ) => {
+    if (drawingRoute || drawingHeatingLoop || placingElement) {
+      return;
+    }
+    e.stopPropagation();
+    setSelectedHeatingLoopId(id);
+    setSelectedRoomId(null);
+    setSelectedPartitionId(null);
+    setSelectedOpeningId(null);
+    setSelectedElementId(null);
+    setSelectedRouteId(null);
+
+    setResizingHeatingLoop({
+      id,
+      handle,
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: initialLoop.xMeters,
+      origY: initialLoop.yMeters,
+      origW: initialLoop.wMeters,
+      origH: initialLoop.hMeters
+    });
+  };
+
+  // Unified drag and resize processor
+  const processDragOrResize = (clientX: number, clientY: number) => {
+    const basePpm = 60 * zoomScale;
+
+    // A. RESIZING HEATING LOOP
+    if (resizingHeatingLoop) {
+      const dx = (clientX - resizingHeatingLoop.startX) / basePpm;
+      const dy = (clientY - resizingHeatingLoop.startY) / basePpm;
+      const { id, handle, origX, origY, origW, origH } = resizingHeatingLoop;
+
+      let newX = origX;
+      let newY = origY;
+      let newW = origW;
+      let newH = origH;
+
+      // Handle Horizontal (East / West / Corners)
+      if (handle === "e" || handle === "ne" || handle === "se") {
+        const maxAllowedW = Math.max(0.4, W - origX);
+        newW = Math.max(0.4, Math.min(maxAllowedW, Math.round((origW + dx) * 20) / 20));
+      } else if (handle === "w" || handle === "nw" || handle === "sw") {
+        const clampedDx = Math.max(-origX, Math.min(origW - 0.4, dx));
+        const snappedNewX = Math.round((origX + clampedDx) * 20) / 20;
+        newW = Math.max(0.4, Math.round((origW - (snappedNewX - origX)) * 20) / 20);
+        newX = snappedNewX;
+      }
+
+      // Handle Vertical (North / South / Corners)
+      if (handle === "s" || handle === "se" || handle === "sw") {
+        const maxAllowedH = Math.max(0.4, H - origY);
+        newH = Math.max(0.4, Math.min(maxAllowedH, Math.round((origH + dy) * 20) / 20));
+      } else if (handle === "n" || handle === "ne" || handle === "nw") {
+        const clampedDy = Math.max(-origY, Math.min(origH - 0.4, dy));
+        const snappedNewY = Math.round((origY + clampedDy) * 20) / 20;
+        newH = Math.max(0.4, Math.round((origH - (snappedNewY - origY)) * 20) / 20);
+        newY = snappedNewY;
+      }
+
+      setFloorPlan((prev) => {
+        const loop = (prev.heatingLoops || []).find((l) => l.id === id);
+        if (!loop) return prev;
+        const updated: UnderfloorHeatingLoop = {
+          ...loop,
+          xMeters: newX,
+          yMeters: newY,
+          wMeters: newW,
+          hMeters: newH
+        };
+        const { lengthMeters } = generateUnderfloorHeatingSvg(updated, 1, 0);
+        updated.pipeLengthMeters = lengthMeters;
+
+        return {
+          ...prev,
+          heatingLoops: (prev.heatingLoops || []).map((l) => (l.id === id ? updated : l))
+        };
+      });
+      return;
+    }
+
+    // B. DRAGGING ITEMS
+    if (!draggingItem) return;
+    const dx = (clientX - draggingItem.startX) / basePpm;
+    const dy = (clientY - draggingItem.startY) / basePpm;
+
+    if (draggingItem.type === "room") {
+      const room = currentRooms.find((r) => r.id === draggingItem.id);
+      if (!room) return;
+      const newX = snapVal(Math.max(0, Math.min(W - room.wMeters, draggingItem.origX + dx)));
+      const newY = snapVal(Math.max(0, Math.min(H - room.hMeters, draggingItem.origY + dy)));
+      setFloorPlan((prev) => ({
+        ...prev,
+        rooms: prev.rooms.map((r) => (r.id === draggingItem.id ? { ...r, xMeters: newX, yMeters: newY } : r))
+      }));
+    } else if (draggingItem.type === "partition") {
+      const p = currentPartitions.find((x) => x.id === draggingItem.id);
+      if (!p) return;
+      const isVert = p.orientation === "vertical" || Math.abs(p.x1 - p.x2) < 0.05;
+      if (isVert) {
+        const newX = snapVal(Math.max(0, Math.min(W, draggingItem.origX + dx)));
+        setFloorPlan((prev) => ({
+          ...prev,
+          partitions: (prev.partitions || []).map((item) =>
+            item.id === p.id ? { ...item, x1: newX, x2: newX } : item
+          )
+        }));
+      } else {
+        const newY = snapVal(Math.max(0, Math.min(H, draggingItem.origY + dy)));
+        setFloorPlan((prev) => ({
+          ...prev,
+          partitions: (prev.partitions || []).map((item) =>
+            item.id === p.id ? { ...item, y1: newY, y2: newY } : item
+          )
+        }));
+      }
+    } else if (draggingItem.type === "opening") {
+      const op = currentOpenings.find((o) => o.id === draggingItem.id);
+      if (!op) return;
+      const rawX = draggingItem.origX + dx;
+      const rawY = draggingItem.origY + dy;
+
+      const snap = findMagneticWallSnap(
+        rawX,
+        rawY,
+        op.widthMeters,
+        currentPartitions,
+        currentFloor,
+        W,
+        H,
+        outerWallThickness,
+        0.45
+      );
+
+      if (snap) {
+        setSnappedWallFeedback({
+          label: snap.wallLabel,
+          x: snap.orientation === "vertical" ? snap.xMeters : undefined,
+          y: snap.orientation === "horizontal" ? snap.yMeters : undefined,
+          orientation: snap.orientation
+        });
+        setFloorPlan((prev) => ({
+          ...prev,
+          openings: (prev.openings || []).map((o) =>
+            o.id === op.id
+              ? {
+                  ...o,
+                  xMeters: snap.xMeters,
+                  yMeters: snap.yMeters,
+                  orientation: snap.orientation,
+                  rotation: snap.rotation,
+                  wallId: snap.wallId,
+                  wallThickness: snap.thicknessMeters
+                }
+              : o
+          )
+        }));
+      } else {
+        setSnappedWallFeedback(null);
+        const newX = Math.round(Math.max(0, Math.min(W - op.widthMeters, rawX)) * 20) / 20;
+        const newY = Math.round(Math.max(0, Math.min(H, rawY)) * 20) / 20;
+        setFloorPlan((prev) => ({
+          ...prev,
+          openings: (prev.openings || []).map((o) =>
+            o.id === op.id ? { ...o, xMeters: newX, yMeters: newY, wallId: undefined } : o
+          )
+        }));
+      }
+    } else if (draggingItem.type === "element") {
+      const el = currentElements.find((item) => item.id === draggingItem.id);
+      if (!el) return;
+      const newX = snapVal(Math.max(0, Math.min(W - el.wMeters, draggingItem.origX + dx)));
+      const newY = snapVal(Math.max(0, Math.min(H - el.hMeters, draggingItem.origY + dy)));
+      setFloorPlan((prev) => ({
+        ...prev,
+        elements: prev.elements.map((item) =>
+          item.id === el.id ? { ...item, xMeters: newX, yMeters: newY } : item
+        )
+      }));
+    } else if (draggingItem.type === "heating_loop") {
+      const loop = currentHeatingLoops.find((item) => item.id === draggingItem.id);
+      if (!loop) return;
+      const newX = snapVal(Math.max(0, Math.min(W - loop.wMeters, draggingItem.origX + dx)));
+      const newY = snapVal(Math.max(0, Math.min(H - loop.hMeters, draggingItem.origY + dy)));
+      setFloorPlan((prev) => ({
+        ...prev,
+        heatingLoops: (prev.heatingLoops || []).map((l) =>
+          l.id === loop.id ? { ...l, xMeters: newX, yMeters: newY } : l
+        )
+      }));
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    processDragOrResize(e.clientX, e.clientY);
+  };
+
+  const handleMouseUp = () => {
+    setDraggingItem(null);
+    setResizingHeatingLoop(null);
+    setSnappedWallFeedback(null);
+  };
+
+  // Global window mouse listeners during drag or resize for 100% reliable tracking
+  useEffect(() => {
+    if (!draggingItem && !resizingHeatingLoop) return;
+
+    const onGlobalMouseMove = (e: MouseEvent) => {
+      processDragOrResize(e.clientX, e.clientY);
+    };
+
+    const onGlobalMouseUp = () => {
+      setDraggingItem(null);
+      setResizingHeatingLoop(null);
+      setSnappedWallFeedback(null);
+    };
+
+    window.addEventListener("mousemove", onGlobalMouseMove);
+    window.addEventListener("mouseup", onGlobalMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onGlobalMouseMove);
+      window.removeEventListener("mouseup", onGlobalMouseUp);
+    };
+  }, [draggingItem, resizingHeatingLoop, zoomScale, W, H, outerWallThickness, currentFloor]);
+
+  // Delete selected item
+  const handleDeleteSelected = () => {
+    if (selectedPartitionId) {
+      setFloorPlan((prev) => ({
+        ...prev,
+        partitions: (prev.partitions || []).filter((p) => p.id !== selectedPartitionId)
+      }));
+      setSelectedPartitionId(null);
+    } else if (selectedRoomId) {
+      setFloorPlan((prev) => ({
+        ...prev,
+        rooms: prev.rooms.filter((r) => r.id !== selectedRoomId)
+      }));
+      setSelectedRoomId(null);
+    } else if (selectedOpeningId) {
+      setFloorPlan((prev) => ({
+        ...prev,
+        openings: (prev.openings || []).filter((o) => o.id !== selectedOpeningId)
+      }));
+      setSelectedOpeningId(null);
+    } else if (selectedElementId) {
+      setFloorPlan((prev) => ({
+        ...prev,
+        elements: prev.elements.filter((e) => e.id !== selectedElementId)
+      }));
+      setSelectedElementId(null);
+    } else if (selectedHeatingLoopId) {
+      handleDeleteHeatingLoop(selectedHeatingLoopId);
+    } else if (selectedRouteId) {
+      handleDeleteRoute(selectedRouteId);
+    }
+  };
+
+  // Add floor
+  const handleAddFloor = () => {
+    const nextLevel = floorPlan.floors.length + 1;
+    setFloorPlan((prev) => ({
+      ...prev,
+      floors: [...prev.floors, { level: nextLevel, name: `${nextLevel} этаж`, heightMeters: 2.7 }]
+    }));
+    setCurrentFloor(nextLevel);
+  };
+
+  // Save & close
   const handleSave = () => {
-    onSave(floorPlan);
+    onSave({
+      ...floorPlan,
+      outerWallThicknessMeters: outerWallThickness
+    });
     onClose();
   };
 
-  // Selected item details for inspector
-  const activeRoom = floorPlan.rooms.find((r) => r.id === selectedRoomId);
-  const activeElement = floorPlan.elements.find((e) => e.id === selectedElementId);
-
-  // Statistics
-  const socketCount = currentElements.filter((e) => e.type.includes("socket")).length;
-  const plumbingCount = currentElements.filter(
-    (e) => e.type.includes("water") || e.type.includes("drain") || e.type.includes("heater")
-  ).length;
-  const hvacCount = currentElements.filter(
-    (e) => e.type.includes("ac") || e.type.includes("vent")
-  ).length;
-  const heatingCount = currentElements.filter(
-    (e) => e.type.includes("radiator") || e.type.includes("boiler") || e.type.includes("heating")
-  ).length;
-
   return (
     <div
-      className="fixed inset-0 z-[125] bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 overflow-hidden"
+      className="fixed inset-0 z-[125] bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-3 overflow-hidden"
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
     >
-      <div className="bg-neutral-900 border border-neutral-700/80 rounded-2xl w-full max-w-[1240px] h-[94vh] shadow-2xl flex flex-col overflow-hidden text-neutral-100">
+      <div className="bg-neutral-900 border border-neutral-700/80 rounded-2xl w-full max-w-[1440px] h-[96vh] shadow-2xl flex flex-col overflow-hidden text-neutral-100">
         
         {/* Top Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-neutral-800 bg-neutral-950/80">
+        <div className="flex items-center justify-between px-5 py-2.5 border-b border-neutral-800 bg-neutral-950">
           <div className="flex items-center gap-3">
             <span className="text-2xl">📐</span>
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-black text-white">
-                  Планировка этажей и инженерные сети: {buildingLabel || "Строение"}
+                  Архитектурный план помещений: {buildingLabel || "Строение"}
                 </h2>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-neutral-800 text-amber-400 font-mono font-bold">
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-neutral-800 text-amber-400 font-mono font-bold">
                   {W}м × {H}м ({Math.round(W * H * 10) / 10} м² пятно)
                 </span>
               </div>
               <span className="text-[11px] text-neutral-400">
-                Моделирование помещений в точных размерах, расстановка электрики, ХВС/ГВС, кондиционирования и мебели
+                1. Периметр строения → 2. Расстановка перегородок → 3. Формирование комнат и площадей → 4. Двери, мебель и оборудование
               </span>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Sidebar toggle buttons */}
             <button
-              onClick={() => setActiveTab(activeTab === "editor" ? "spec" : "editor")}
-              className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
-                activeTab === "spec"
-                  ? "border-amber-500 bg-amber-500/20 text-amber-300"
-                  : "border-neutral-800 bg-neutral-900 text-neutral-300 hover:text-white"
+              type="button"
+              onClick={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)}
+              className={`p-1.5 px-2.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                isLeftSidebarOpen
+                  ? "border-sky-500/40 bg-sky-500/10 text-sky-300"
+                  : "border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-white"
               }`}
+              title={isLeftSidebarOpen ? "Свернуть панель инструментов" : "Показать панель инструментов"}
             >
-              <FileSpreadsheet className="w-4 h-4" />
-              <span>{activeTab === "spec" ? "Вернуться к чертежу" : "Экспликация и ведомость"}</span>
+              {isLeftSidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+              <span>{isLeftSidebarOpen ? "Панель" : "Панель"}</span>
             </button>
 
             <button
+              type="button"
+              onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
+              className={`p-1.5 px-2.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                isRightSidebarOpen
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                  : "border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-white"
+              }`}
+              title={isRightSidebarOpen ? "Свернуть инспектор свойств" : "Показать инспектор свойств"}
+            >
+              {isRightSidebarOpen ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
+              <span>{isRightSidebarOpen ? "Свойства" : "Свойства"}</span>
+            </button>
+
+            {/* View Mode Tabs: 2D Plan / Electrical Board / Collector Schemes / 3D Axonometry / Specification */}
+            <div className="flex items-center gap-1 bg-neutral-900 border border-neutral-800 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setActiveTab("editor")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                  activeTab === "editor"
+                    ? "bg-amber-500 text-neutral-950 font-black shadow-sm"
+                    : "text-neutral-400 hover:text-white"
+                }`}
+              >
+                <span>📐</span>
+                <span>2D Чертёж</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("electric_scheme")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                  activeTab === "electric_scheme"
+                    ? "bg-amber-400 text-neutral-950 font-black shadow-sm"
+                    : "text-neutral-400 hover:text-white"
+                }`}
+                title="Схема электрощита (DIN-рейки, автоматы, УЗО, реле напряжения, балансировка фаз)"
+              >
+                <Zap className="w-3.5 h-3.5 text-amber-500" />
+                <span>Электрощит (DIN)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("collector_scheme")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                  activeTab === "collector_scheme"
+                    ? "bg-rose-500 text-white font-black shadow-sm"
+                    : "text-neutral-400 hover:text-white"
+                }`}
+                title="Коллекторные схемы (Тёплый пол со смесительным узлом, Радиаторы, Водопровод)"
+              >
+                <Flame className="w-3.5 h-3.5 text-rose-400" />
+                <span>Коллекторы (ТП/Рад/Вода)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("axonometry")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                  activeTab === "axonometry"
+                    ? "bg-sky-500 text-neutral-950 font-black shadow-sm"
+                    : "text-neutral-400 hover:text-white"
+                }`}
+                title="3D Аксонометрическая схема слоёв и коммуникаций"
+              >
+                <Box className="w-3.5 h-3.5 text-sky-400" />
+                <span>3D Аксонометрия</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("spec")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                  activeTab === "spec"
+                    ? "bg-emerald-500 text-neutral-950 font-black shadow-sm"
+                    : "text-neutral-400 hover:text-white"
+                }`}
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Экспликация</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
               onClick={handleSave}
               className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-950 transition cursor-pointer"
             >
               <Check className="w-4 h-4" />
-              <span>Сохранить планировку</span>
+              <span>Сохранить</span>
             </button>
 
             <button
+              type="button"
               onClick={onClose}
               className="p-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white transition cursor-pointer"
               title="Закрыть"
@@ -367,9 +1223,9 @@ export const FloorPlanModal: React.FC<FloorPlanModalProps> = ({
           </div>
         </div>
 
-        {/* Floor Switcher & Controls Bar */}
-        <div className="px-5 py-2 border-b border-neutral-800/80 bg-neutral-950/50 flex flex-wrap items-center justify-between gap-3 text-xs">
-          {/* Floors list */}
+        {/* Floor Switcher, Layer Toggles, Zoom & Quick Rotation Bar */}
+        <div className="px-5 py-2 border-b border-neutral-800 bg-neutral-950/60 flex flex-wrap items-center justify-between gap-3 text-xs">
+          {/* Floors switcher */}
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] font-black uppercase text-neutral-400 flex items-center gap-1 mr-1">
               <Layers className="w-3.5 h-3.5 text-amber-500" />
@@ -379,15 +1235,20 @@ export const FloorPlanModal: React.FC<FloorPlanModalProps> = ({
             {floorPlan.floors.map((fl) => (
               <button
                 key={fl.level}
+                type="button"
                 onClick={() => {
                   setCurrentFloor(fl.level);
                   setSelectedRoomId(null);
+                  setSelectedPartitionId(null);
+                  setSelectedOpeningId(null);
                   setSelectedElementId(null);
+                  setSelectedRouteId(null);
+                  setSelectedHeatingLoopId(null);
                 }}
                 className={`px-3 py-1 rounded-lg font-bold text-xs transition cursor-pointer ${
                   currentFloor === fl.level
                     ? "bg-amber-500 text-neutral-950 shadow-md font-black"
-                    : "bg-neutral-800/80 text-neutral-300 hover:bg-neutral-700"
+                    : "bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
                 }`}
               >
                 {fl.name}
@@ -395,951 +1256,413 @@ export const FloorPlanModal: React.FC<FloorPlanModalProps> = ({
             ))}
 
             <button
+              type="button"
               onClick={handleAddFloor}
               className="p-1 px-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
-              title="Добавить следующий этаж"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Добавить этаж</span>
             </button>
+          </div>
 
-            {floorPlan.floors.length > 1 && (
+          {/* Layer Visibility Pills on Top Bar */}
+          <div className="flex items-center gap-1 overflow-x-auto text-[10px]">
+            <span className="text-[9px] font-mono uppercase text-neutral-400 mr-1 font-bold">
+              Слои:
+            </span>
+            {[
+              { key: "architecture" as const, label: "Стены", icon: "🏛️" },
+              { key: "electric" as const, label: "Электрика", icon: "⚡" },
+              { key: "heating" as const, label: "Тёплый пол", icon: "🔥" },
+              { key: "plumbing" as const, label: "Сантехника", icon: "💧" },
+              { key: "furniture" as const, label: "Мебель", icon: "🛋️" }
+            ].map((l) => {
+              const active = layerVisibility[l.key];
+              return (
+                <button
+                  key={l.key}
+                  type="button"
+                  onClick={() => handleToggleLayer(l.key)}
+                  className={`px-2 py-0.5 rounded-md font-bold transition cursor-pointer border flex items-center gap-1 ${
+                    active
+                      ? "bg-neutral-800 border-neutral-700 text-white shadow-sm"
+                      : "bg-neutral-950 border-neutral-900 text-neutral-500 line-through opacity-70"
+                  }`}
+                  title={active ? `Скрыть слой ${l.label}` : `Показать слой ${l.label}`}
+                >
+                  <span>{l.icon}</span>
+                  <span>{l.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Quick Rotation Action Bar if Door, Window, or Furniture is Selected */}
+          {(selectedOpeningId || selectedElementId) && (
+            <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 px-3 py-1 rounded-lg">
+              <span className="text-[11px] text-amber-300 font-bold">Выбран элемент:</span>
               <button
-                onClick={handleRemoveCurrentFloor}
-                className="p-1 px-2 rounded-lg bg-red-900/30 hover:bg-red-800/50 text-red-400 text-xs font-bold cursor-pointer"
-                title="Удалить текущий этаж"
+                type="button"
+                onClick={() => {
+                  if (selectedOpeningId) handleRotateOpening(selectedOpeningId);
+                  else if (selectedElementId) handleRotateElement(selectedElementId);
+                }}
+                className="px-2.5 py-0.5 rounded bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs flex items-center gap-1 cursor-pointer transition shadow-sm"
+                title="Повернуть на 90 градусов"
               >
-                Удалить этаж
+                <RotateCw className="w-3.5 h-3.5" />
+                <span>Повернуть на 90°</span>
               </button>
-            )}
-          </div>
+            </div>
+          )}
 
-          {/* Quick stats on current floor */}
-          <div className="flex items-center gap-3 text-[11px] font-mono">
-            <span className="text-neutral-400">
-              Комнат: <strong className="text-white">{currentRooms.length}</strong> ({Math.round(totalFloorArea * 10) / 10} м²)
-            </span>
-            <span className="text-neutral-600">|</span>
-            <span className="text-amber-400 font-bold" title="Розетки 220В">
-              🔌 {socketCount} роз.
-            </span>
-            <span className="text-blue-400 font-bold" title="Точки ХВС / ГВС">
-              💧 {plumbingCount} сан.
-            </span>
-            <span className="text-cyan-400 font-bold" title="Кондиционеры и вентиляция">
-              ❄️ {hvacCount} клим.
-            </span>
-            <span className="text-orange-400 font-bold" title="Отопление">
-              🔥 {heatingCount} отоп.
-            </span>
-          </div>
+          {/* Enhanced Zoom Controls */}
+          <div className="flex items-center gap-1.5 bg-neutral-900 border border-neutral-800 p-1 rounded-lg">
+            <button
+              type="button"
+              onClick={() => setZoomScale((z) => Math.max(0.5, Math.round((z - 0.2) * 100) / 100))}
+              className="p-1 rounded hover:bg-neutral-800 text-neutral-300 hover:text-white cursor-pointer"
+              title="Уменьшить масштаб (Ctrl + колесико мыши)"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </button>
 
-          {/* Grid snap & rulers toggles */}
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-1.5 cursor-pointer text-neutral-400 hover:text-white text-[11px]">
-              <input
-                type="checkbox"
-                checked={snapToGrid}
-                onChange={(e) => setSnapToGrid(e.target.checked)}
-                className="accent-amber-500 rounded"
-              />
-              <span>Привязка к сетке (0.25м)</span>
-            </label>
+            {/* Quick scale buttons */}
+            {[
+              { val: 0.75, label: "75%" },
+              { val: 1.0, label: "100%" },
+              { val: 1.5, label: "150%" },
+              { val: 2.0, label: "200%" }
+            ].map((s) => (
+              <button
+                key={s.label}
+                type="button"
+                onClick={() => setZoomScale(s.val)}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold cursor-pointer transition ${
+                  Math.abs(zoomScale - s.val) < 0.05
+                    ? "bg-amber-500 text-neutral-950 font-black"
+                    : "text-neutral-400 hover:text-white"
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
 
             <button
-              onClick={() => window.print()}
-              className="px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-              title="Печать чертежа"
+              type="button"
+              onClick={() => setZoomScale((z) => Math.min(3.5, Math.round((z + 0.2) * 100) / 100))}
+              className="p-1 rounded hover:bg-neutral-800 text-neutral-300 hover:text-white cursor-pointer"
+              title="Увеличить масштаб (Ctrl + колесико мыши)"
             >
-              <Printer className="w-3.5 h-3.5" />
-              <span>Печать</span>
+              <ZoomIn className="w-4 h-4" />
+            </button>
+
+            <span className="text-neutral-600">|</span>
+
+            {/* Fit button */}
+            <button
+              type="button"
+              onClick={() => {
+                const fitScale = Math.min(1.2, Math.max(0.6, Math.min(12 / W, 8 / H)));
+                setZoomScale(Math.round(fitScale * 100) / 100);
+              }}
+              className="px-2 py-0.5 rounded hover:bg-neutral-800 text-[10px] font-mono text-sky-400 hover:text-sky-300 font-bold cursor-pointer"
+              title="Вписать план в окно"
+            >
+              Вписать
             </button>
           </div>
         </div>
 
-        {/* Main Content Area */}
+        {/* Main Body */}
         {activeTab === "editor" ? (
-          <div className="flex-1 flex overflow-hidden">
-            
-            {/* LEFT PALETTE: CATALOG & ADDING */}
-            <div className="w-64 sm:w-72 border-r border-neutral-800 bg-neutral-950/60 flex flex-col overflow-hidden">
-              {/* Category tabs */}
-              <div className="p-2 border-b border-neutral-800/80 grid grid-cols-4 gap-1">
-                {[
-                  { id: "rooms", label: "Комнаты", icon: "🏠" },
-                  { id: "electric", label: "Электрика", icon: "🔌" },
-                  { id: "plumbing", label: "Вода / Слив", icon: "💧" },
-                  { id: "hvac", label: "Климат / Вент", icon: "❄️" },
-                  { id: "heating", label: "Отопление", icon: "🔥" },
-                  { id: "furniture", label: "Мебель", icon: "🛋️" },
-                  { id: "doors", label: "Двери", icon: "🚪" },
-                ].map((cat) => (
-                  <button
-                    key={cat.id}
-                    onClick={() => setActiveCategory(cat.id as any)}
-                    className={`p-1.5 rounded-lg text-center transition cursor-pointer flex flex-col items-center justify-center ${
-                      activeCategory === cat.id
-                        ? "bg-amber-500/20 border border-amber-500/40 text-amber-400 font-bold"
-                        : "hover:bg-neutral-800/60 text-neutral-400 border border-transparent"
-                    }`}
-                    title={cat.label}
-                  >
-                    <span className="text-base">{cat.icon}</span>
-                    <span className="text-[9px] mt-0.5 truncate max-w-full">{cat.label}</span>
-                  </button>
-                ))}
-              </div>
-
-              {/* Items List for active category */}
-              <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                {activeCategory === "rooms" && (
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] font-black uppercase text-amber-500 tracking-wider block mb-1">
-                      Добавить помещение:
-                    </span>
-                    {ROOM_PRESETS.map((rp) => (
-                      <button
-                        key={rp.type}
-                        onClick={() => handleAddRoom(rp)}
-                        className="w-full p-2 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-amber-500/50 hover:bg-neutral-850 text-left transition flex items-center justify-between cursor-pointer group"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="text-lg">{rp.emoji}</span>
-                          <div>
-                            <div className="font-bold text-xs text-white group-hover:text-amber-400">
-                              {rp.label}
-                            </div>
-                            <div className="text-[9px] text-neutral-500 font-mono">
-                              Стандарт {rp.defaultW}×{rp.defaultH}м ({Math.round(rp.defaultW * rp.defaultH * 10) / 10} м²)
-                            </div>
-                          </div>
-                        </div>
-                        <Plus className="w-4 h-4 text-neutral-500 group-hover:text-amber-400" />
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {activeCategory !== "rooms" && (
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] font-black uppercase text-amber-500 tracking-wider block mb-1">
-                      Разместить на плане:
-                    </span>
-                    {ELEMENT_CATALOG.filter((item) => {
-                      if (activeCategory === "electric") return item.category === "electric";
-                      if (activeCategory === "plumbing") return item.category === "plumbing";
-                      if (activeCategory === "hvac") return item.category === "hvac";
-                      if (activeCategory === "heating") return item.category === "heating";
-                      if (activeCategory === "furniture") return item.category === "furniture";
-                      if (activeCategory === "doors") return item.category === "interior_door";
-                      return false;
-                    }).map((el) => (
-                      <button
-                        key={el.type}
-                        onClick={() => handleAddElement(el)}
-                        className="w-full p-2 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-amber-500/50 hover:bg-neutral-850 text-left transition flex items-center justify-between cursor-pointer group"
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-lg shrink-0">{el.emoji}</span>
-                          <div className="min-w-0">
-                            <div className="font-bold text-xs text-white group-hover:text-amber-400 truncate">
-                              {el.label}
-                            </div>
-                            <div className="text-[9px] text-neutral-400 font-mono truncate">
-                              {el.defaultW}×{el.defaultH}м • {el.desc}
-                            </div>
-                          </div>
-                        </div>
-                        <Plus className="w-4 h-4 text-neutral-500 group-hover:text-amber-400 shrink-0" />
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Bottom Quick Instructions */}
-              <div className="p-3 border-t border-neutral-800 bg-neutral-950/80 text-[10px] text-neutral-400 space-y-1">
-                <div className="font-bold text-neutral-300 flex items-center gap-1">
-                  <Info className="w-3 h-3 text-amber-500" />
-                  <span>Управление:</span>
-                </div>
-                <p>• Перетаскивайте комнаты и розетки мышью</p>
-                <p>• Клик по объекту открывает точные настройки</p>
-              </div>
-            </div>
-
-            {/* CENTER BLUEPRINT CAD CANVAS */}
-            <div className="flex-1 bg-neutral-950 overflow-auto p-4 flex items-center justify-center relative select-none">
-              
-              <div className="relative shadow-2xl rounded-xl border border-neutral-800 bg-[#0d1527] overflow-hidden">
-                
-                {/* Canvas Blueprint Grid SVG */}
-                <svg
-                  ref={svgRef}
-                  width={svgWidth}
-                  height={svgHeight}
-                  className="cursor-crosshair block"
-                  onClick={() => {
-                    setSelectedRoomId(null);
-                    setSelectedElementId(null);
+          <div className="flex-1 flex overflow-hidden relative">
+            {/* 1. LEFT SIDEBAR OR COLLAPSED TAB */}
+            {isLeftSidebarOpen ? (
+              <div className="relative flex shrink-0 h-full">
+                <FloorPlanSidebar
+                  workflowStep={workflowStep}
+                  setWorkflowStep={setWorkflowStep}
+                  W={W}
+                  H={H}
+                  outerWallThickness={outerWallThickness}
+                  onUpdatePerimeter={handleUpdatePerimeter}
+                  onApplyTemplate={handleApplyTemplate}
+                  currentPartitions={currentPartitions}
+                  onAddPartition={handleAddPartition}
+                  onSplitSpace={handleSplitSpace}
+                  onDeletePartition={(id) => {
+                    setFloorPlan((prev) => ({
+                      ...prev,
+                      partitions: (prev.partitions || []).filter((p) => p.id !== id)
+                    }));
+                    if (selectedPartitionId === id) setSelectedPartitionId(null);
                   }}
+                  onSelectPartition={(id) => {
+                    setSelectedPartitionId(id);
+                    setSelectedRoomId(null);
+                    setSelectedOpeningId(null);
+                    setSelectedElementId(null);
+                    setSelectedRouteId(null);
+                    setSelectedHeatingLoopId(null);
+                  }}
+                  currentRooms={currentRooms}
+                  onAutoGenerateRooms={handleAutoGenerateRooms}
+                  onAddRoomPreset={handleAddRoomPreset}
+                  onDeleteRoom={(id) => {
+                    setFloorPlan((prev) => ({
+                      ...prev,
+                      rooms: prev.rooms.filter((r) => r.id !== id)
+                    }));
+                    if (selectedRoomId === id) setSelectedRoomId(null);
+                  }}
+                  onSelectRoom={(id) => {
+                    setSelectedRoomId(id);
+                    setSelectedPartitionId(null);
+                    setSelectedOpeningId(null);
+                    setSelectedElementId(null);
+                    setSelectedRouteId(null);
+                    setSelectedHeatingLoopId(null);
+                  }}
+                  onAddOpening={handleAddOpening}
+                  onAddElement={handleAddElement}
+                  onInstallOpeningOnPartition={handleInstallOpeningOnPartition}
+                  layerVisibility={layerVisibility}
+                  onToggleLayer={handleToggleLayer}
+                  onSetSoloLayer={handleSetSoloLayer}
+                  currentHeatingLoops={currentHeatingLoops}
+                  currentRoutes={currentRoutes}
+                  onAddHeatingLoop={handleAddHeatingLoop}
+                  onDeleteHeatingLoop={handleDeleteHeatingLoop}
+                  onSelectHeatingLoop={setSelectedHeatingLoopId}
+                  onStartDrawingHeatingLoop={handleStartDrawingHeatingLoop}
+                  onStartPlacingElement={handleStartPlacingElement}
+                  onStartDrawingRoute={handleStartDrawingRoute}
+                  onDeleteRoute={handleDeleteRoute}
+                  onSelectRoute={setSelectedRouteId}
+                  isDrawingRoute={!!drawingRoute}
+                  onCancelDrawingRoute={handleCancelDrawingRoute}
+                />
+                {/* Collapse button on edge */}
+                <button
+                  type="button"
+                  onClick={() => setIsLeftSidebarOpen(false)}
+                  className="absolute top-3 right-[-14px] z-20 w-7 h-7 rounded-full bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white border border-neutral-700 shadow-md flex items-center justify-center cursor-pointer transition"
+                  title="Свернуть панель инструментов"
                 >
-                  <defs>
-                    {/* Small grid pattern (0.5 meter) */}
-                    <pattern
-                      id="smallGrid"
-                      width={0.5 * pixelsPerMeter}
-                      height={0.5 * pixelsPerMeter}
-                      patternUnits="userSpaceOnUse"
-                    >
-                      <path
-                        d={`M ${0.5 * pixelsPerMeter} 0 L 0 0 0 ${0.5 * pixelsPerMeter}`}
-                        fill="none"
-                        stroke="rgba(255, 255, 255, 0.04)"
-                        strokeWidth="0.8"
-                      />
-                    </pattern>
-                    {/* Large grid pattern (1 meter) */}
-                    <pattern
-                      id="grid"
-                      width={pixelsPerMeter}
-                      height={pixelsPerMeter}
-                      patternUnits="userSpaceOnUse"
-                    >
-                      <rect width={pixelsPerMeter} height={pixelsPerMeter} fill="url(#smallGrid)" />
-                      <path
-                        d={`M ${pixelsPerMeter} 0 L 0 0 0 ${pixelsPerMeter}`}
-                        fill="none"
-                        stroke="rgba(56, 189, 248, 0.15)"
-                        strokeWidth="1.2"
-                      />
-                    </pattern>
-                  </defs>
-
-                  {/* Background grid */}
-                  <rect width="100%" height="100%" fill="#090e1a" />
-                  <rect width="100%" height="100%" fill="url(#grid)" />
-
-                  {/* Rulers along top & left */}
-                  {showRulers && (
-                    <g className="text-[9px] font-mono fill-sky-400/60 select-none">
-                      {Array.from({ length: Math.ceil(W) + 1 }).map((_, i) => (
-                        <g key={`rx_${i}`}>
-                          <line
-                            x1={canvasPadding + i * pixelsPerMeter}
-                            y1={canvasPadding - 8}
-                            x2={canvasPadding + i * pixelsPerMeter}
-                            y2={canvasPadding}
-                            stroke="rgba(56, 189, 248, 0.4)"
-                            strokeWidth="1"
-                          />
-                          <text
-                            x={canvasPadding + i * pixelsPerMeter}
-                            y={canvasPadding - 12}
-                            textAnchor="middle"
-                          >
-                            {i}м
-                          </text>
-                        </g>
-                      ))}
-
-                      {Array.from({ length: Math.ceil(H) + 1 }).map((_, j) => (
-                        <g key={`ry_${j}`}>
-                          <line
-                            x1={canvasPadding - 8}
-                            y1={canvasPadding + j * pixelsPerMeter}
-                            x2={canvasPadding}
-                            y2={canvasPadding + j * pixelsPerMeter}
-                            stroke="rgba(56, 189, 248, 0.4)"
-                            strokeWidth="1"
-                          />
-                          <text
-                            x={canvasPadding - 12}
-                            y={canvasPadding + j * pixelsPerMeter + 3}
-                            textAnchor="end"
-                          >
-                            {j}м
-                          </text>
-                        </g>
-                      ))}
-                    </g>
-                  )}
-
-                  {/* Outer Perimeter Walls of Building */}
-                  <g>
-                    <rect
-                      x={canvasPadding}
-                      y={canvasPadding}
-                      width={W * pixelsPerMeter}
-                      height={H * pixelsPerMeter}
-                      fill="rgba(15, 23, 42, 0.7)"
-                      stroke="#38bdf8"
-                      strokeWidth="5"
-                      strokeLinejoin="round"
-                    />
-                    {/* Dimension labels on perimeter */}
-                    <text
-                      x={canvasPadding + (W * pixelsPerMeter) / 2}
-                      y={canvasPadding + H * pixelsPerMeter + 22}
-                      textAnchor="middle"
-                      className="fill-sky-400 font-mono text-xs font-bold"
-                    >
-                      {W} м
-                    </text>
-                    <text
-                      x={canvasPadding + W * pixelsPerMeter + 22}
-                      y={canvasPadding + (H * pixelsPerMeter) / 2}
-                      textAnchor="middle"
-                      transform={`rotate(90 ${canvasPadding + W * pixelsPerMeter + 22} ${
-                        canvasPadding + (H * pixelsPerMeter) / 2
-                      })`}
-                      className="fill-sky-400 font-mono text-xs font-bold"
-                    >
-                      {H} м
-                    </text>
-                  </g>
-
-                  {/* Render ROOMS on current floor */}
-                  {currentRooms.map((room) => {
-                    const rx = canvasPadding + room.xMeters * pixelsPerMeter;
-                    const ry = canvasPadding + room.yMeters * pixelsPerMeter;
-                    const rw = room.wMeters * pixelsPerMeter;
-                    const rh = room.hMeters * pixelsPerMeter;
-                    const isSelected = selectedRoomId === room.id;
-                    const area = Math.round(room.wMeters * room.hMeters * 10) / 10;
-
-                    return (
-                      <g
-                        key={room.id}
-                        onMouseDown={(e) =>
-                          handleMouseDown(e, "room", room.id, room.xMeters, room.yMeters)
-                        }
-                        className="cursor-move"
-                      >
-                        {/* Room Area Rectangle */}
-                        <rect
-                          x={rx}
-                          y={ry}
-                          width={rw}
-                          height={rh}
-                          fill={room.color || "#fef3c7"}
-                          fillOpacity={isSelected ? 0.35 : 0.2}
-                          stroke={isSelected ? "#f59e0b" : "#475569"}
-                          strokeWidth={isSelected ? 3 : 2}
-                          strokeDasharray={isSelected ? "none" : "none"}
-                        />
-
-                        {/* Room Text Label */}
-                        <text
-                          x={rx + rw / 2}
-                          y={ry + rh / 2 - 8}
-                          textAnchor="middle"
-                          className="font-bold text-[11px] fill-white pointer-events-none select-none drop-shadow"
-                        >
-                          {room.name}
-                        </text>
-                        <text
-                          x={rx + rw / 2}
-                          y={ry + rh / 2 + 10}
-                          textAnchor="middle"
-                          className="font-mono font-bold text-[10px] fill-amber-400 pointer-events-none select-none"
-                        >
-                          {room.wMeters}×{room.hMeters}м ({area} м²)
-                        </text>
-                      </g>
-                    );
-                  })}
-
-                  {/* Render ELEMENTS (Sockets, Water Inlets, AC, Furniture, Doors) */}
-                  {currentElements.map((el) => {
-                    const ex = canvasPadding + el.xMeters * pixelsPerMeter;
-                    const ey = canvasPadding + el.yMeters * pixelsPerMeter;
-                    const ew = el.wMeters * pixelsPerMeter;
-                    const eh = el.hMeters * pixelsPerMeter;
-                    const isSelected = selectedElementId === el.id;
-                    const catItem = ELEMENT_CATALOG.find((c) => c.type === el.type);
-                    const color = catItem?.color || "#f59e0b";
-                    const isDoor = el.type.includes("door");
-
-                    return (
-                      <g
-                        key={el.id}
-                        transform={`rotate(${el.rotation} ${ex + ew / 2} ${ey + eh / 2})`}
-                        onMouseDown={(e) =>
-                          handleMouseDown(e, "element", el.id, el.xMeters, el.yMeters)
-                        }
-                        className="cursor-move"
-                      >
-                        {isDoor ? (
-                          // Door graphic with opening arc
-                          <g>
-                            <rect
-                              x={ex}
-                              y={ey}
-                              width={ew}
-                              height={Math.max(4, eh)}
-                              fill="#a16207"
-                              stroke="#000"
-                              strokeWidth="1"
-                            />
-                            <path
-                              d={`M ${ex} ${ey} A ${ew} ${ew} 0 0 1 ${ex + ew} ${ey + ew}`}
-                              fill="none"
-                              stroke="rgba(245, 158, 11, 0.4)"
-                              strokeWidth="1.5"
-                              strokeDasharray="3 3"
-                            />
-                          </g>
-                        ) : (
-                          // Standard Element Body
-                          <rect
-                            x={ex}
-                            y={ey}
-                            width={ew}
-                            height={eh}
-                            rx="3"
-                            fill={color}
-                            fillOpacity="0.85"
-                            stroke={isSelected ? "#fff" : "#000"}
-                            strokeWidth={isSelected ? 2 : 1}
-                            className="drop-shadow-md"
-                          />
-                        )}
-
-                        {/* Emoji icon inside element */}
-                        <text
-                          x={ex + ew / 2}
-                          y={ey + eh / 2 + 4}
-                          textAnchor="middle"
-                          className="text-[10px] pointer-events-none select-none font-bold fill-white"
-                        >
-                          {catItem?.emoji || "⚡"}
-                        </text>
-
-                        {/* Small circuit number or label badge */}
-                        {el.circuitNumber && (
-                          <text
-                            x={ex + ew / 2}
-                            y={ey - 3}
-                            textAnchor="middle"
-                            className="text-[8px] font-mono font-bold fill-sky-300 pointer-events-none select-none"
-                          >
-                            {el.circuitNumber}
-                          </text>
-                        )}
-                      </g>
-                    );
-                  })}
-                </svg>
-
-                {/* Overlay helper legend */}
-                <div className="absolute bottom-2 left-2 bg-neutral-900/90 backdrop-blur-md px-3 py-1.5 rounded-lg border border-neutral-800 text-[10px] text-neutral-300 flex items-center gap-3">
-                  <span className="flex items-center gap-1">
-                    <span className="w-2.5 h-2.5 rounded bg-amber-500 inline-block" />
-                    <span>Электрика</span>
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-2.5 h-2.5 rounded bg-blue-500 inline-block" />
-                    <span>Водопровод</span>
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-2.5 h-2.5 rounded bg-cyan-500 inline-block" />
-                    <span>Кондиционер / Вент</span>
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-2.5 h-2.5 rounded bg-orange-500 inline-block" />
-                    <span>Отопление</span>
-                  </span>
-                </div>
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
               </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsLeftSidebarOpen(true)}
+                className="w-9 h-full bg-neutral-950/80 hover:bg-neutral-900 border-r border-neutral-800 flex flex-col items-center py-4 gap-3 text-neutral-400 hover:text-amber-400 transition cursor-pointer select-none shrink-0"
+                title="Развернуть панель инструментов"
+              >
+                <ChevronRight className="w-4 h-4 text-amber-500" />
+                <span className="[writing-mode:vertical-lr] rotate-180 text-[10px] font-bold uppercase tracking-wider">
+                  Инструменты
+                </span>
+              </button>
+            )}
 
-            </div>
+            {/* 2. CENTER CANVAS: Full Building Floor Plan View with Zoom & Rotation */}
+            <FloorPlanCanvas
+              W={W}
+              H={H}
+              outerWallThickness={outerWallThickness}
+              currentFloor={currentFloor}
+              currentRooms={currentRooms}
+              currentPartitions={currentPartitions}
+              currentOpenings={currentOpenings}
+              currentElements={currentElements}
+              currentRoutes={currentRoutes}
+              currentHeatingLoops={currentHeatingLoops}
+              layerVisibility={layerVisibility}
+              selectedRoomId={selectedRoomId}
+              selectedPartitionId={selectedPartitionId}
+              selectedOpeningId={selectedOpeningId}
+              selectedElementId={selectedElementId}
+              selectedRouteId={selectedRouteId}
+              selectedHeatingLoopId={selectedHeatingLoopId}
+              drawingRoute={drawingRoute}
+              drawingHeatingLoop={drawingHeatingLoop}
+              placingElement={placingElement}
+              showRulers={showRulers}
+              zoomScale={zoomScale}
+              snappedWallInfo={snappedWallFeedback}
+              onZoomChange={setZoomScale}
+              onSelectRoom={setSelectedRoomId}
+              onSelectPartition={setSelectedPartitionId}
+              onSelectOpening={setSelectedOpeningId}
+              onSelectElement={setSelectedElementId}
+              onSelectRoute={setSelectedRouteId}
+              onSelectHeatingLoop={setSelectedHeatingLoopId}
+              onAddRoutePoint={handleAddRoutePoint}
+              onFinishDrawingRoute={handleFinishDrawingRoute}
+              onCancelDrawingRoute={handleCancelDrawingRoute}
+              onUndoRoutePoint={handleUndoRoutePoint}
+              onFinishDrawingHeatingLoop={handleFinishDrawingHeatingLoop}
+              onCancelDrawingHeatingLoop={handleCancelDrawingHeatingLoop}
+              onPlaceElementAt={handlePlaceElementAt}
+              onCancelPlacingElement={handleCancelPlacingElement}
+              onStartPlacingElement={handleStartPlacingElement}
+              onStartDrawingHeatingLoop={handleStartDrawingHeatingLoop}
+              onStartDrawingRoute={handleStartDrawingRoute}
+              onMouseDownItem={handleMouseDownItem}
+              onMouseDownResizeHeatingLoop={handleMouseDownResizeHeatingLoop}
+              onRotateOpening={handleRotateOpening}
+            />
 
-            {/* RIGHT INSPECTOR PANEL: SELECTED OBJECT PROPERTIES */}
-            <div className="w-72 border-l border-neutral-800 bg-neutral-950/70 p-4 flex flex-col justify-between overflow-y-auto">
-              {activeElement ? (
-                <div className="space-y-4">
-                  <div className="border-b border-neutral-800 pb-2">
-                    <span className="text-[10px] font-black uppercase text-amber-500 block">
-                      Свойства элемента:
-                    </span>
-                    <h3 className="font-extrabold text-sm text-white flex items-center gap-1.5 mt-0.5">
-                      <span>{ELEMENT_CATALOG.find((c) => c.type === activeElement.type)?.emoji}</span>
-                      <span>{activeElement.label}</span>
-                    </h3>
-                  </div>
-
-                  {/* Coordinates & Dimensions */}
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-[9px] text-neutral-500 block uppercase font-mono">
-                          X от угла (м):
-                        </span>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="0"
-                          max={W - activeElement.wMeters}
-                          value={activeElement.xMeters}
-                          onChange={(e) => {
-                            const val = parseFloat(e.target.value) || 0;
-                            setFloorPlan((prev) => ({
-                              ...prev,
-                              elements: prev.elements.map((el) =>
-                                el.id === activeElement.id ? { ...el, xMeters: val } : el
-                              ),
-                            }));
-                          }}
-                          className="w-full p-1.5 rounded bg-neutral-900 border border-neutral-800 font-mono font-bold text-amber-400"
-                        />
-                      </div>
-
-                      <div>
-                        <span className="text-[9px] text-neutral-500 block uppercase font-mono">
-                          Y от угла (м):
-                        </span>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="0"
-                          max={H - activeElement.hMeters}
-                          value={activeElement.yMeters}
-                          onChange={(e) => {
-                            const val = parseFloat(e.target.value) || 0;
-                            setFloorPlan((prev) => ({
-                              ...prev,
-                              elements: prev.elements.map((el) =>
-                                el.id === activeElement.id ? { ...el, yMeters: val } : el
-                              ),
-                            }));
-                          }}
-                          className="w-full p-1.5 rounded bg-neutral-900 border border-neutral-800 font-mono font-bold text-amber-400"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-[9px] text-neutral-500 block uppercase font-mono">
-                          Ширина (м):
-                        </span>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="0.2"
-                          max="4.0"
-                          value={activeElement.wMeters}
-                          onChange={(e) => {
-                            const val = parseFloat(e.target.value) || 0.5;
-                            setFloorPlan((prev) => ({
-                              ...prev,
-                              elements: prev.elements.map((el) =>
-                                el.id === activeElement.id ? { ...el, wMeters: val } : el
-                              ),
-                            }));
-                          }}
-                          className="w-full p-1.5 rounded bg-neutral-900 border border-neutral-800 font-mono font-bold text-white"
-                        />
-                      </div>
-
-                      <div>
-                        <span className="text-[9px] text-neutral-500 block uppercase font-mono">
-                          Глубина (м):
-                        </span>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="0.2"
-                          max="4.0"
-                          value={activeElement.hMeters}
-                          onChange={(e) => {
-                            const val = parseFloat(e.target.value) || 0.5;
-                            setFloorPlan((prev) => ({
-                              ...prev,
-                              elements: prev.elements.map((el) =>
-                                el.id === activeElement.id ? { ...el, hMeters: val } : el
-                              ),
-                            }));
-                          }}
-                          className="w-full p-1.5 rounded bg-neutral-900 border border-neutral-800 font-mono font-bold text-white"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Circuit / Line number */}
-                  <div>
-                    <label className="text-[9px] text-neutral-500 block uppercase font-mono mb-1">
-                      Обозначение / Номер линии или стояка:
-                    </label>
-                    <input
-                      type="text"
-                      value={activeElement.circuitNumber || ""}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setFloorPlan((prev) => ({
-                          ...prev,
-                          elements: prev.elements.map((el) =>
-                            el.id === activeElement.id ? { ...el, circuitNumber: val } : el
-                          ),
-                        }));
-                      }}
-                      placeholder="напр. Розетки кухня / ЩР-1 / Стояк 1"
-                      className="w-full p-1.5 rounded bg-neutral-900 border border-neutral-800 text-xs font-mono font-bold text-white"
-                    />
-                  </div>
-
-                  {/* Rotation button */}
-                  <div>
-                    <button
-                      onClick={() => handleRotateElement(activeElement.id)}
-                      className="w-full py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition"
-                    >
-                      <RotateCw className="w-4 h-4 text-amber-500" />
-                      <span>Повернуть на 90° ({activeElement.rotation}°)</span>
-                    </button>
-                  </div>
-
-                  {/* Delete button */}
-                  <div>
-                    <button
-                      onClick={handleDeleteSelected}
-                      className="w-full py-2 rounded-xl bg-red-950/40 border border-red-800/40 hover:bg-red-900/60 text-red-400 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      <span>Удалить с плана</span>
-                    </button>
-                  </div>
-                </div>
-              ) : activeRoom ? (
-                <div className="space-y-4">
-                  <div className="border-b border-neutral-800 pb-2">
-                    <span className="text-[10px] font-black uppercase text-amber-500 block">
-                      Свойства помещения:
-                    </span>
-                    <h3 className="font-extrabold text-sm text-white mt-0.5">
-                      🏠 {activeRoom.name}
-                    </h3>
-                    <span className="text-[10px] font-mono text-amber-400 block mt-0.5">
-                      Площадь: {Math.round(activeRoom.wMeters * activeRoom.hMeters * 10) / 10} м²
-                    </span>
-                  </div>
-
-                  {/* Room Name */}
-                  <div>
-                    <label className="text-[9px] text-neutral-500 block uppercase font-mono mb-1">
-                      Название комнаты:
-                    </label>
-                    <input
-                      type="text"
-                      value={activeRoom.name}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setFloorPlan((prev) => ({
-                          ...prev,
-                          rooms: prev.rooms.map((r) =>
-                            r.id === activeRoom.id ? { ...r, name: val } : r
-                          ),
-                        }));
-                      }}
-                      className="w-full p-1.5 rounded bg-neutral-900 border border-neutral-800 text-xs font-bold text-white"
-                    />
-                  </div>
-
-                  {/* Room Dimensions */}
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <span className="text-[9px] text-neutral-500 block uppercase font-mono">
-                        Ширина (м):
-                      </span>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="1"
-                        max={W}
-                        value={activeRoom.wMeters}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 1;
-                          setFloorPlan((prev) => ({
-                            ...prev,
-                            rooms: prev.rooms.map((r) =>
-                              r.id === activeRoom.id ? { ...r, wMeters: val } : r
-                            ),
-                          }));
-                        }}
-                        className="w-full p-1.5 rounded bg-neutral-900 border border-neutral-800 font-mono font-bold text-white"
-                      />
-                    </div>
-
-                    <div>
-                      <span className="text-[9px] text-neutral-500 block uppercase font-mono">
-                        Длина (м):
-                      </span>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="1"
-                        max={H}
-                        value={activeRoom.hMeters}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 1;
-                          setFloorPlan((prev) => ({
-                            ...prev,
-                            rooms: prev.rooms.map((r) =>
-                              r.id === activeRoom.id ? { ...r, hMeters: val } : r
-                            ),
-                          }));
-                        }}
-                        className="w-full p-1.5 rounded bg-neutral-900 border border-neutral-800 font-mono font-bold text-white"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Position */}
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <span className="text-[9px] text-neutral-500 block uppercase font-mono">
-                        Смещение X (м):
-                      </span>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        max={W - activeRoom.wMeters}
-                        value={activeRoom.xMeters}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 0;
-                          setFloorPlan((prev) => ({
-                            ...prev,
-                            rooms: prev.rooms.map((r) =>
-                              r.id === activeRoom.id ? { ...r, xMeters: val } : r
-                            ),
-                          }));
-                        }}
-                        className="w-full p-1.5 rounded bg-neutral-900 border border-neutral-800 font-mono font-bold text-amber-400"
-                      />
-                    </div>
-
-                    <div>
-                      <span className="text-[9px] text-neutral-500 block uppercase font-mono">
-                        Смещение Y (м):
-                      </span>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        max={H - activeRoom.hMeters}
-                        value={activeRoom.yMeters}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 0;
-                          setFloorPlan((prev) => ({
-                            ...prev,
-                            rooms: prev.rooms.map((r) =>
-                              r.id === activeRoom.id ? { ...r, yMeters: val } : r
-                            ),
-                          }));
-                        }}
-                        className="w-full p-1.5 rounded bg-neutral-900 border border-neutral-800 font-mono font-bold text-amber-400"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Color tint */}
-                  <div>
-                    <label className="text-[9px] text-neutral-500 block uppercase font-mono mb-1">
-                      Цветовая заливка помещения:
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="color"
-                        value={activeRoom.color || "#fef3c7"}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setFloorPlan((prev) => ({
-                            ...prev,
-                            rooms: prev.rooms.map((r) =>
-                              r.id === activeRoom.id ? { ...r, color: val } : r
-                            ),
-                          }));
-                        }}
-                        className="w-7 h-7 rounded cursor-pointer border border-neutral-700 bg-transparent p-0"
-                      />
-                      <span className="font-mono text-xs text-neutral-400">
-                        {activeRoom.color || "#fef3c7"}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Delete Room */}
-                  <div>
-                    <button
-                      onClick={handleDeleteSelected}
-                      className="w-full py-2 rounded-xl bg-red-950/40 border border-red-800/40 hover:bg-red-900/60 text-red-400 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      <span>Удалить комнату</span>
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center text-center p-4 text-neutral-500 space-y-2">
-                  <Grid className="w-8 h-8 text-neutral-700 animate-pulse" />
-                  <div className="text-xs font-bold text-neutral-400">Ничего не выбрано</div>
-                  <p className="text-[11px] leading-relaxed">
-                    Кликните на комнату или значок инженерной точки на плане для редактирования размеров и параметров
-                  </p>
-                </div>
-              )}
-
-              {/* Bottom Quick Info */}
-              <div className="p-3 bg-neutral-900/70 border border-neutral-800 rounded-xl text-[10px] text-neutral-400 space-y-1">
-                <div className="font-bold text-neutral-300">План этажа:</div>
-                <div className="flex justify-between">
-                  <span>Общая площадь:</span>
-                  <span className="font-mono text-white font-bold">{Math.round(W * H * 10) / 10} м²</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Жилая/полезная:</span>
-                  <span className="font-mono text-amber-400 font-bold">{Math.round(totalFloorArea * 10) / 10} м²</span>
-                </div>
+            {/* 3. RIGHT INSPECTOR OR COLLAPSED TAB */}
+            {isRightSidebarOpen ? (
+              <div className="relative flex shrink-0 h-full">
+                {/* Collapse button on edge */}
+                <button
+                  type="button"
+                  onClick={() => setIsRightSidebarOpen(false)}
+                  className="absolute top-3 left-[-14px] z-20 w-7 h-7 rounded-full bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white border border-neutral-700 shadow-md flex items-center justify-center cursor-pointer transition"
+                  title="Свернуть инспектор"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+                <FloorPlanInspector
+                  W={W}
+                  H={H}
+                  outerWallThickness={outerWallThickness}
+                  activeRoom={activeRoom}
+                  activePartition={activePartition}
+                  activeOpening={activeOpening}
+                  activeElement={activeElement}
+                  activeHeatingLoop={activeHeatingLoop}
+                  activeRoute={activeRoute}
+                  currentRooms={currentRooms}
+                  currentPartitions={currentPartitions}
+                  currentElements={currentElements}
+                  onUpdateRoom={(updated) => {
+                    setFloorPlan((prev) => ({
+                      ...prev,
+                      rooms: prev.rooms.map((r) => (r.id === updated.id ? updated : r))
+                    }));
+                  }}
+                  onUpdatePartition={(updated) => {
+                    setFloorPlan((prev) => ({
+                      ...prev,
+                      partitions: (prev.partitions || []).map((p) => (p.id === updated.id ? updated : p))
+                    }));
+                  }}
+                  onUpdateOpening={(updated) => {
+                    setFloorPlan((prev) => ({
+                      ...prev,
+                      openings: (prev.openings || []).map((o) => (o.id === updated.id ? updated : o))
+                    }));
+                  }}
+                  onUpdateElement={(updated) => {
+                    setFloorPlan((prev) => ({
+                      ...prev,
+                      elements: prev.elements.map((el) => (el.id === updated.id ? updated : el))
+                    }));
+                  }}
+                  onUpdateHeatingLoop={handleUpdateHeatingLoop}
+                  onUpdateRoute={handleUpdateRoute}
+                  onDeleteSelected={handleDeleteSelected}
+                  onRotateElement={handleRotateElement}
+                  onInstallOpeningOnPartition={handleInstallOpeningOnPartition}
+                  onOpenTab={(tab) => setActiveTab(tab)}
+                />
               </div>
-            </div>
-
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsRightSidebarOpen(true)}
+                className="w-9 h-full bg-neutral-950/80 hover:bg-neutral-900 border-l border-neutral-800 flex flex-col items-center py-4 gap-3 text-neutral-400 hover:text-amber-400 transition cursor-pointer select-none shrink-0"
+                title="Развернуть инспектор свойств"
+              >
+                <ChevronLeft className="w-4 h-4 text-amber-500" />
+                <span className="[writing-mode:vertical-lr] text-[10px] font-bold uppercase tracking-wider">
+                  Свойства
+                </span>
+              </button>
+            )}
           </div>
+        ) : activeTab === "electric_scheme" ? (
+          /* ELECTRICAL PANEL SCHEMATICS (DIN-RAIL MODULAR LAYOUT & BREAKER NUMBERING) */
+          <FloorPlanElectricScheme
+            panels={floorPlan.electricalPanels || createDefaultElectricalPanels()}
+            onUpdatePanels={(updatedPanels) => {
+              setFloorPlan((prev) => ({
+                ...prev,
+                electricalPanels: updatedPanels
+              }));
+            }}
+            onClose={() => setActiveTab("editor")}
+          />
+        ) : activeTab === "collector_scheme" ? (
+          /* COLLECTOR SCHEMATICS (UNDERFLOOR HEATING, RADIATORS & WATER SUPPLY) */
+          <FloorPlanCollectorScheme
+            schemes={floorPlan.collectorSchemes || createDefaultCollectorSchemes()}
+            onUpdateSchemes={(updatedSchemes) => {
+              setFloorPlan((prev) => ({
+                ...prev,
+                collectorSchemes: updatedSchemes
+              }));
+            }}
+            onClose={() => setActiveTab("editor")}
+          />
+        ) : activeTab === "axonometry" ? (
+          /* 3D AXONOMETRY VIEW OF LAYERS */
+          <FloorPlanAxonometry
+            W={W}
+            H={H}
+            outerWallThickness={outerWallThickness}
+            floorPlan={floorPlan}
+            currentFloor={currentFloor}
+            layerVisibility={layerVisibility}
+            onToggleLayer={handleToggleLayer}
+            onSetSoloLayer={handleSetSoloLayer}
+            onClose={() => setActiveTab("editor")}
+          />
         ) : (
-          /* TAB 2: SPECIFICATION & ROOM EXPLICATION TABLE */
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
-            <div className="max-w-4xl mx-auto space-y-6">
-              
-              {/* Room Schedule (Экспликация) */}
-              <div className="p-5 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-3">
-                <h3 className="font-extrabold text-sm text-white flex items-center gap-2">
-                  <span>📋 Экспликация помещений ({floorPlan.floors.find((f) => f.level === currentFloor)?.name}):</span>
-                </h3>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-neutral-800 text-neutral-500 font-mono text-[10px] uppercase">
-                        <th className="py-2">№</th>
-                        <th className="py-2">Наименование помещения</th>
-                        <th className="py-2">Размеры (м)</th>
-                        <th className="py-2 text-right">Площадь (м²)</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-neutral-850">
-                      {currentRooms.map((r, idx) => (
-                        <tr key={r.id} className="hover:bg-neutral-900/50">
-                          <td className="py-2.5 font-mono text-neutral-500">{idx + 1}</td>
-                          <td className="py-2.5 font-bold text-white flex items-center gap-2">
-                            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: r.color || "#ccc" }} />
-                            <span>{r.name}</span>
-                          </td>
-                          <td className="py-2.5 font-mono text-neutral-400">
-                            {r.wMeters} × {r.hMeters}
-                          </td>
-                          <td className="py-2.5 font-mono font-bold text-amber-400 text-right">
-                            {Math.round(r.wMeters * r.hMeters * 10) / 10} м²
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr className="border-t-2 border-neutral-700 font-black text-xs text-white">
-                        <td colSpan={3} className="py-3">ИТОГО полезная площадь помещений этажа:</td>
-                        <td className="py-3 font-mono text-amber-400 text-right text-sm">
-                          {Math.round(totalFloorArea * 10) / 10} м²
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              </div>
-
-              {/* Engineering Equipment Schedule (Ведомость оборудования и коммуникаций) */}
-              <div className="p-5 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-3">
-                <h3 className="font-extrabold text-sm text-white flex items-center gap-2">
-                  <span>⚡ Ведомость инженерных точек и коммуникаций ({floorPlan.floors.find((f) => f.level === currentFloor)?.name}):</span>
-                </h3>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                  {[
-                    { title: "Розетки 220В", icon: "🔌", count: socketCount, color: "text-amber-400" },
-                    { title: "Водорозетки и сливы", icon: "💧", count: plumbingCount, color: "text-blue-400" },
-                    { title: "Кондиционеры и вент.", icon: "❄️", count: hvacCount, color: "text-cyan-400" },
-                    { title: "Отопление (радиаторы)", icon: "🔥", count: heatingCount, color: "text-orange-400" },
-                    { title: "Мебель и сантехника", icon: "🛋️", count: currentElements.filter((e) => e.type.includes("bed") || e.type.includes("sofa") || e.type.includes("table") || e.type.includes("bath") || e.type.includes("toilet")).length, color: "text-purple-400" },
-                    { title: "Межкомнатные двери", icon: "🚪", count: currentElements.filter((e) => e.type.includes("door")).length, color: "text-emerald-400" },
-                  ].map((stat, i) => (
-                    <div key={i} className="p-3 rounded-xl bg-neutral-900 border border-neutral-800 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xl">{stat.icon}</span>
-                        <span className="text-xs font-bold text-neutral-300">{stat.title}</span>
-                      </div>
-                      <span className={`text-base font-black font-mono ${stat.color}`}>
-                        {stat.count} шт
-                      </span>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Detailed element list */}
-                <div className="mt-4 overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-neutral-800 text-neutral-500 font-mono text-[10px] uppercase">
-                        <th className="py-2">№</th>
-                        <th className="py-2">Тип элемента</th>
-                        <th className="py-2">Линия / Стояк</th>
-                        <th className="py-2">Позиция X, Y</th>
-                        <th className="py-2 text-right">Поворот</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-neutral-850">
-                      {currentElements.map((el, idx) => (
-                        <tr key={el.id} className="hover:bg-neutral-900/50">
-                          <td className="py-2 font-mono text-neutral-500">{idx + 1}</td>
-                          <td className="py-2 font-bold text-white flex items-center gap-1.5">
-                            <span>{ELEMENT_CATALOG.find((c) => c.type === el.type)?.emoji}</span>
-                            <span>{el.label}</span>
-                          </td>
-                          <td className="py-2 font-mono text-sky-400">{el.circuitNumber || "—"}</td>
-                          <td className="py-2 font-mono text-neutral-400">
-                            X: {el.xMeters}м, Y: {el.yMeters}м
-                          </td>
-                          <td className="py-2 font-mono text-neutral-400 text-right">{el.rotation}°</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-            </div>
-          </div>
+          /* SPECIFICATION & EXPLICATION TABLE */
+          <FloorPlanSpecTable
+            buildingLabel={buildingLabel}
+            W={W}
+            H={H}
+            currentFloor={currentFloor}
+            currentRooms={currentRooms}
+            currentPartitions={currentPartitions}
+            currentOpenings={currentOpenings}
+            currentElements={currentElements}
+            currentHeatingLoops={currentHeatingLoops}
+            currentRoutes={currentRoutes}
+            onBackToEditor={() => setActiveTab("editor")}
+          />
         )}
 
-        {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-3 border-t border-neutral-800 bg-neutral-950/80">
-          <div className="text-[11px] text-neutral-400 flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            <span>Данные планировки сохраняются в объекте здания и доступны в 3D просмотре</span>
+        {/* Footer info bar */}
+        <div className="flex items-center justify-between px-5 py-2.5 border-t border-neutral-800 bg-neutral-950 text-[11px] text-neutral-400">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span>
+              Масштабирование {Math.round(zoomScale * 100)}% (Ctrl + колесико мыши) · Поворот окон и дверей на 90° · Сворачиваемые панели для черчения
+            </span>
           </div>
-
           <div className="flex items-center gap-3">
             <button
+              type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold text-xs transition cursor-pointer"
+              className="px-4 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold text-xs transition cursor-pointer"
             >
               Отмена
             </button>
             <button
+              type="button"
               onClick={handleSave}
-              className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs shadow-lg transition cursor-pointer flex items-center gap-1.5"
+              className="px-5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs shadow-md transition cursor-pointer flex items-center gap-1.5"
             >
               <Check className="w-4 h-4" />
-              <span>Применить планировку</span>
+              <span>Сохранить в паспорт объекта</span>
             </button>
           </div>
         </div>
@@ -1348,3 +1671,4 @@ export const FloorPlanModal: React.FC<FloorPlanModalProps> = ({
     </div>
   );
 };
+
