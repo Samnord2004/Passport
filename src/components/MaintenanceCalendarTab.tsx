@@ -111,9 +111,23 @@ export const MaintenanceCalendarTab: React.FC<MaintenanceCalendarTabProps> = ({
     }
   };
 
+  // Real today date (current actual time)
+  const realToday = useMemo(() => new Date(), []);
+  const realTodayStr = useMemo(() => {
+    const y = realToday.getFullYear();
+    const m = String(realToday.getMonth() + 1).padStart(2, "0");
+    const d = String(realToday.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }, [realToday]);
+
+  const handleRealTodayClick = () => {
+    setCurrentYear(realToday.getFullYear());
+    setCurrentMonth(realToday.getMonth());
+  };
+
   const handleTodayClick = () => {
-    setCurrentYear(initialDate.getFullYear());
-    setCurrentMonth(initialDate.getMonth());
+    setCurrentYear(realToday.getFullYear());
+    setCurrentMonth(realToday.getMonth());
   };
 
   // Helper to determine the target calendar date of a schedule
@@ -416,23 +430,71 @@ export const MaintenanceCalendarTab: React.FC<MaintenanceCalendarTabProps> = ({
             {/* Today Quick Button */}
             <button
               type="button"
-              onClick={handleTodayClick}
-              className="px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 hover:bg-neutral-100 dark:hover:bg-zinc-800 text-neutral-700 dark:text-neutral-200 text-xs font-bold shadow-sm cursor-pointer transition-colors flex items-center gap-1.5"
-              title="Перейти к текущей контрольной дате"
+              onClick={handleRealTodayClick}
+              className="px-3 py-1.5 rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 text-xs font-black shadow-xs cursor-pointer transition-all flex items-center gap-1.5"
+              title="Перейти к сегодняшней календарной дате"
             >
-              <RotateCcw className="w-3.5 h-3.5 text-blue-500" />
-              <span>Сегодня ({new Date(referenceDate).toLocaleDateString("ru-RU", { day: 'numeric', month: 'short' })})</span>
+              <RotateCcw className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+              <span>Сегодня: {realToday.toLocaleDateString("ru-RU", { day: 'numeric', month: 'short' })}</span>
             </button>
 
             {onNavigateToScheduleTab && (
               <button
                 type="button"
                 onClick={onNavigateToScheduleTab}
-                className="px-3 py-1.5 rounded-xl border border-blue-200 dark:border-blue-900/50 bg-blue-50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-blue-700 dark:text-blue-300 text-xs font-bold shadow-sm cursor-pointer transition-colors flex items-center gap-1.5"
+                className="px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 hover:bg-neutral-100 dark:hover:bg-zinc-800 text-neutral-700 dark:text-neutral-200 text-xs font-bold shadow-xs cursor-pointer transition-colors flex items-center gap-1.5"
                 title="Перейти к табличной структуре регламентов"
               >
-                <Layers className="w-3.5 h-3.5" />
+                <Layers className="w-3.5 h-3.5 text-indigo-500" />
                 <span className="hidden sm:inline">Табличный реестр</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Prominent Current Date "СЕГОДНЯ" Information Card */}
+        <div className="p-3 sm:p-3.5 rounded-xl bg-gradient-to-r from-blue-600/10 via-indigo-500/10 to-emerald-500/10 border-2 border-blue-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2.5">
+            <span className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black text-sm shrink-0 shadow-xs">
+              📅
+            </span>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded-full bg-blue-600 text-white tracking-wider animate-pulse">
+                  ● СЕГОДНЯ
+                </span>
+                <span className="font-extrabold text-xs sm:text-sm text-neutral-900 dark:text-neutral-100 capitalize">
+                  {realToday.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+                </span>
+              </div>
+              <p className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5">
+                Текущий день визуально выделен в интерактивной сетке календаря яркой меткой <strong>«★ Сегодня»</strong>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleRealTodayClick}
+              className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs cursor-pointer transition-all flex items-center gap-1.5 shrink-0"
+              title="Перейти к сегодняшней дате в календаре"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Показать Сегодня в сетке</span>
+            </button>
+            {referenceDate && referenceDate !== realTodayStr && (
+              <button
+                type="button"
+                onClick={() => {
+                  const d = new Date(referenceDate);
+                  setCurrentYear(d.getFullYear());
+                  setCurrentMonth(d.getMonth());
+                }}
+                className="px-2.5 py-1.5 rounded-xl border border-neutral-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-neutral-600 dark:text-neutral-300 text-xs font-medium hover:bg-neutral-100 dark:hover:bg-zinc-800 transition-colors"
+                title="Перейти к контрольной дате тестовых данных (Май 2026)"
+              >
+                <span>Контрольная дата ТО (24 мая 2026)</span>
               </button>
             )}
           </div>
@@ -594,7 +656,9 @@ export const MaintenanceCalendarTab: React.FC<MaintenanceCalendarTabProps> = ({
           <div className="grid grid-cols-7 divide-x divide-y divide-neutral-200/70 dark:divide-zinc-800/80 auto-rows-fr">
             {calendarGrid.map((dayObj, cellIdx) => {
               const { dayNumber, dateStr, isCurrentMonth, isPrevMonth, isNextMonth } = dayObj;
-              const isToday = dateStr === referenceDate;
+              const isRealToday = dateStr === realTodayStr;
+              const isRefDate = dateStr === referenceDate && realTodayStr !== referenceDate;
+              const isToday = isRealToday || isRefDate;
               const isDragOver = dragOverDayStr === dateStr;
               const daySchedules = schedulesByDate.get(dateStr) || [];
 
@@ -613,25 +677,40 @@ export const MaintenanceCalendarTab: React.FC<MaintenanceCalendarTabProps> = ({
                       ? "bg-blue-100/80 dark:bg-blue-900/40 ring-2 ring-blue-500 ring-inset shadow-inner" 
                       : ""
                   } ${
-                    isToday 
-                      ? "ring-2 ring-blue-600/70 dark:ring-blue-500/70 ring-inset bg-blue-50/20 dark:bg-blue-950/10" 
-                      : ""
+                    isRealToday 
+                      ? "ring-2 ring-blue-600 dark:ring-blue-500 ring-inset bg-blue-50/40 dark:bg-blue-950/25 shadow-xs" 
+                      : isRefDate
+                        ? "ring-2 ring-amber-500/60 ring-inset bg-amber-50/20 dark:bg-amber-950/10"
+                        : ""
                   }`}
                 >
                   {/* Day Header (Date number and badges) */}
                   <div className="flex items-center justify-between gap-1 mb-1">
-                    <span 
-                      className={`text-xs font-black rounded-lg px-1.5 py-0.5 inline-block ${
-                        isToday 
-                          ? "bg-blue-600 text-white shadow-sm" 
-                          : isCurrentMonth 
-                            ? "text-neutral-800 dark:text-neutral-200" 
-                            : "text-neutral-400 dark:text-zinc-500"
-                      }`}
-                    >
-                      {dayNumber}
-                      {isToday && <span className="ml-1 text-[9px] uppercase font-bold tracking-tighter">Сегодня</span>}
-                    </span>
+                    <div className="flex items-center gap-1">
+                      <span 
+                        className={`text-xs font-black rounded-lg px-1.5 py-0.5 inline-block ${
+                          isRealToday 
+                            ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-sm ring-1 ring-blue-400" 
+                            : isRefDate
+                              ? "bg-amber-600 text-white shadow-sm"
+                              : isCurrentMonth 
+                                ? "text-neutral-800 dark:text-neutral-200" 
+                                : "text-neutral-400 dark:text-zinc-500"
+                        }`}
+                      >
+                        {dayNumber}
+                      </span>
+                      {isRealToday && (
+                        <span className="text-[9px] uppercase font-black tracking-tight px-1.5 py-0.5 rounded-full bg-blue-600 text-white shadow-xs animate-pulse">
+                          ★ Сегодня
+                        </span>
+                      )}
+                      {isRefDate && (
+                        <span className="text-[8px] uppercase font-bold tracking-tight px-1 py-0.2 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                          Контроль ТО
+                        </span>
+                      )}
+                    </div>
 
                     {daySchedules.length > 0 && (
                       <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-neutral-200/70 dark:bg-zinc-800 text-neutral-700 dark:text-zinc-300">
@@ -716,7 +795,9 @@ export const MaintenanceCalendarTab: React.FC<MaintenanceCalendarTabProps> = ({
             .map(dayObj => {
               const { dateStr } = dayObj;
               const daySchedules = schedulesByDate.get(dateStr) || [];
-              const isToday = dateStr === referenceDate;
+              const isRealToday = dateStr === realTodayStr;
+              const isRefDate = dateStr === referenceDate && realTodayStr !== referenceDate;
+              const isToday = isRealToday || isRefDate;
               const formattedDate = new Date(dateStr).toLocaleDateString("ru-RU", {
                 weekday: "long",
                 day: "numeric",
@@ -733,22 +814,29 @@ export const MaintenanceCalendarTab: React.FC<MaintenanceCalendarTabProps> = ({
                   className={`p-4 rounded-2xl border transition-all ${
                     dragOverDayStr === dateStr 
                       ? "border-blue-500 bg-blue-500/10 ring-2 ring-blue-500" 
-                      : isToday 
-                        ? "border-blue-300 dark:border-blue-800 bg-blue-50/30 dark:bg-blue-950/20" 
-                        : "border-neutral-200 dark:border-zinc-800 bg-white dark:bg-zinc-900"
+                      : isRealToday 
+                        ? "border-blue-400 dark:border-blue-700 bg-blue-50/40 dark:bg-blue-950/25 ring-2 ring-blue-500/30" 
+                        : isRefDate
+                          ? "border-amber-300 dark:border-amber-800 bg-amber-50/20 dark:bg-amber-950/10"
+                          : "border-neutral-200 dark:border-zinc-800 bg-white dark:bg-zinc-900"
                   }`}
                 >
                   <div className="flex items-center justify-between pb-2 mb-3 border-b border-neutral-200/60 dark:border-zinc-800">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="p-1 rounded-lg bg-neutral-200 dark:bg-zinc-800 text-neutral-700 dark:text-zinc-300">
                         <Clock className="w-4 h-4 text-blue-500" />
                       </span>
                       <h4 className="font-extrabold text-sm text-neutral-850 dark:text-neutral-100 capitalize">
                         {formattedDate}
                       </h4>
-                      {isToday && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-600 text-white uppercase">
-                          Сегодня
+                      {isRealToday && (
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-600 text-white uppercase shadow-xs animate-pulse">
+                          ★ Сегодня
+                        </span>
+                      )}
+                      {isRefDate && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 uppercase">
+                          Контрольная дата ТО
                         </span>
                       )}
                     </div>

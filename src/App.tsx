@@ -78,6 +78,8 @@ import {
   Server,
   Globe,
   Eye,
+  Maximize2,
+  ZoomIn,
   EyeOff,
   ArrowUpDown,
   SlidersHorizontal
@@ -485,6 +487,9 @@ export default function App() {
   const [objDiskPath, setObjDiskPath] = useState("");
   const [objAllowedSpecialistIds, setObjAllowedSpecialistIds] = useState<string[]>([]);
   const [objObjectType, setObjObjectType] = useState<'house' | 'admin_building' | 'land' | 'dacha' | 'other'>('house');
+  const [objPhotoUrl, setObjPhotoUrl] = useState<string>("");
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState<boolean>(false);
+  const [lightboxPhoto, setLightboxPhoto] = useState<{ url: string; title: string; address?: string } | null>(null);
 
   // QR Modal options
   const [qrSelectedSpecId, setQrSelectedSpecId] = useState<string>("new-specialist");
@@ -1035,6 +1040,17 @@ export default function App() {
     return () => window.removeEventListener("legal-docs-updated", evaluateConsent);
   }, [currentUser]);
 
+  // ESC key listener to close fullsize lightbox photo modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && lightboxPhoto) {
+        setLightboxPhoto(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [lightboxPhoto]);
+
   const openUserProfile = () => {
     if (!currentUser) return;
     setProfileFullname(currentUser.fullname || "");
@@ -1385,7 +1401,8 @@ export default function App() {
       specs: specsPayload,
       equipmentSpecs: equipmentPayload,
       info: objInfo,
-      objectType: objObjectType
+      objectType: objObjectType,
+      photoUrl: objPhotoUrl || ""
     };
 
     try {
@@ -1433,6 +1450,7 @@ export default function App() {
     setObjEquipmentSpecs(o.equipmentSpecs || "");
     setObjInfo(o.info || "");
     setObjObjectType(o.objectType || "house");
+    setObjPhotoUrl(o.photoUrl || "");
 
     // Populate structured states
     const specsData = parseSpecs(o.specs);
@@ -1461,12 +1479,35 @@ export default function App() {
     setObjEquipmentSpecs("");
     setObjInfo("");
     setObjObjectType("house");
+    setObjPhotoUrl("");
 
     setObjTotalArea("");
     setObjFloorsCount("");
     setObjMaterial("");
     setObjFoundation("");
     setObjEquipmentRows([]);
+  };
+
+  const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      showToast("Размер фотографии не должен превышать 5 МБ", "error");
+      return;
+    }
+    setIsUploadingPhoto(true);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const result = event.target?.result as string;
+      setObjPhotoUrl(result);
+      setIsUploadingPhoto(false);
+      showToast("Фотография объекта успешно прикреплена", "success");
+    };
+    reader.onerror = () => {
+      setIsUploadingPhoto(false);
+      showToast("Ошибка при чтении файла изображения", "error");
+    };
+    reader.readAsDataURL(file);
   };
 
   // Specialist Profiles CRUD for Owners & Admins
@@ -3673,40 +3714,79 @@ export default function App() {
                             : null;
                           return (
                             <div key={obj.id} className="p-4 rounded-xl border border-neutral-300/15 bg-neutral-100/5 hover:bg-neutral-100/10 transition-colors flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                              <div className="space-y-1.5 flex-1 min-w-0">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <Building className="w-4 h-4 text-blue-500 shrink-0" />
-                                  <span className="font-extrabold text-sm text-neutral-900 dark:text-white">{obj.name}</span>
-                                  <span className={`px-2 py-0.5 text-[9px] font-bold rounded-full border ${typeMeta.class}`}>
-                                    {typeMeta.label}
-                                  </span>
-                                  <span className="text-[10px] text-zinc-400 font-mono">ID: {obj.id}</span>
-                                </div>
-                                <p className="text-xs opacity-85 text-neutral-700 dark:text-zinc-300">{obj.address}</p>
-                                {obj.description && (
-                                  <p className="text-[11px] text-zinc-500 italic line-clamp-2">{obj.description}</p>
+                              <div className="flex items-start sm:items-center gap-3.5 flex-1 min-w-0">
+                                {/* Visual Object Photo Thumbnail (Click to Expand / Fullsize Lightbox) */}
+                                {obj.photoUrl ? (
+                                  <div 
+                                    onClick={() => setLightboxPhoto({ url: obj.photoUrl!, title: obj.name, address: obj.address })}
+                                    className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden border-2 border-blue-500/30 hover:border-blue-500 dark:border-blue-400/40 bg-neutral-200 dark:bg-zinc-800 shadow-sm relative group cursor-pointer hover:shadow-md transition-all shrink-0 select-none"
+                                    title="Нажмите для полноразмерного просмотра фотографии объекта"
+                                  >
+                                    <img 
+                                      src={obj.photoUrl} 
+                                      alt={obj.name}
+                                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                                      loading="lazy"
+                                    />
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white">
+                                      <Maximize2 className="w-5 h-5 drop-shadow-md" />
+                                      <span className="text-[8px] font-bold mt-0.5">В полный размер</span>
+                                    </div>
+                                    <span className="absolute bottom-1 right-1 bg-black/70 text-white text-[8px] font-bold px-1 rounded backdrop-blur-xs flex items-center gap-0.5">
+                                      <ZoomIn className="w-2.5 h-2.5" /> Фото
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div 
+                                    onClick={() => {
+                                      startEditObject(obj);
+                                      setTimeout(() => {
+                                        document.getElementById("object-photo-uploader")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                                      }, 150);
+                                    }}
+                                    className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl border-2 border-dashed border-neutral-300 dark:border-zinc-750 bg-neutral-100/60 dark:bg-zinc-850/60 hover:bg-blue-50/50 dark:hover:bg-blue-950/20 hover:border-blue-400 flex flex-col items-center justify-center text-neutral-400 hover:text-blue-600 transition-all cursor-pointer shrink-0 p-1 text-center group"
+                                    title="Нажмите, чтобы прикрепить фотографию объекта"
+                                  >
+                                    <Camera className="w-5 h-5 mb-0.5 group-hover:scale-110 transition-transform text-neutral-400 group-hover:text-blue-500" />
+                                    <span className="text-[9px] font-bold leading-tight">+ Фото</span>
+                                  </div>
                                 )}
-                                <div className="flex flex-wrap items-center gap-2 pt-1 text-[10px]">
-                                  {createdDateStr && (
-                                    <span className="bg-neutral-500/10 text-neutral-600 dark:text-neutral-400 px-1.5 py-0.5 rounded font-mono flex items-center gap-1" title="Дата регистрации объекта">
-                                      <Clock className="w-3 h-3 text-neutral-400" />
-                                      <span>Создан: {createdDateStr}</span>
+
+                                <div className="space-y-1.5 flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <Building className="w-4 h-4 text-blue-500 shrink-0" />
+                                    <span className="font-extrabold text-sm text-neutral-900 dark:text-white">{obj.name}</span>
+                                    <span className={`px-2 py-0.5 text-[9px] font-bold rounded-full border ${typeMeta.class}`}>
+                                      {typeMeta.label}
                                     </span>
+                                    <span className="text-[10px] text-zinc-400 font-mono">ID: {obj.id}</span>
+                                  </div>
+                                  <p className="text-xs opacity-85 text-neutral-700 dark:text-zinc-300">{obj.address}</p>
+                                  {obj.description && (
+                                    <p className="text-[11px] text-zinc-500 italic line-clamp-2">{obj.description}</p>
                                   )}
-                                  <span className="bg-blue-500/10 text-blue-500 px-1.5 py-0.5 rounded font-medium">
-                                    Собственник: {getOwnerName(obj.ownerId)}
-                                  </span>
-                                  <span className="bg-sky-500/10 text-sky-600 dark:text-sky-400 px-1.5 py-0.5 rounded font-medium">
-                                    📋 Регламентов: {matchingSchCount}
-                                  </span>
-                                  {specCount > 0 && (
-                                    <span className="bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-medium">
-                                      👷 Инженеров: {specCount}
+                                  <div className="flex flex-wrap items-center gap-2 pt-1 text-[10px]">
+                                    {createdDateStr && (
+                                      <span className="bg-neutral-500/10 text-neutral-600 dark:text-neutral-400 px-1.5 py-0.5 rounded font-mono flex items-center gap-1" title="Дата регистрации объекта">
+                                        <Clock className="w-3 h-3 text-neutral-400" />
+                                        <span>Создан: {createdDateStr}</span>
+                                      </span>
+                                    )}
+                                    <span className="bg-blue-500/10 text-blue-500 px-1.5 py-0.5 rounded font-medium">
+                                      Собственник: {getOwnerName(obj.ownerId)}
                                     </span>
-                                  )}
-                                  <span className="bg-slate-500/10 text-slate-500 px-1.5 py-0.5 rounded font-mono select-all truncate max-w-xs" title={obj.yandexDiskPath}>
-                                    Диск: {obj.yandexDiskPath}
-                                  </span>
+                                    <span className="bg-sky-500/10 text-sky-600 dark:text-sky-400 px-1.5 py-0.5 rounded font-medium">
+                                      📋 Регламентов: {matchingSchCount}
+                                    </span>
+                                    {specCount > 0 && (
+                                      <span className="bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-medium">
+                                        👷 Инженеров: {specCount}
+                                      </span>
+                                    )}
+                                    <span className="bg-slate-500/10 text-slate-500 px-1.5 py-0.5 rounded font-mono select-all truncate max-w-xs" title={obj.yandexDiskPath}>
+                                      Диск: {obj.yandexDiskPath}
+                                    </span>
+                                  </div>
                                 </div>
                               </div>
 
@@ -3793,6 +3873,110 @@ export default function App() {
                           placeholder="Площадь, особенности ввода коммуникаций"
                           className={getInputStyle()} 
                         />
+                      </div>
+
+                      {/* Photo Upload & Preview Container */}
+                      <div id="object-photo-uploader" className="p-3.5 rounded-xl border border-neutral-200 dark:border-zinc-700 bg-neutral-50/70 dark:bg-zinc-800/40 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold uppercase tracking-wider text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5">
+                            <Camera className="w-4 h-4 text-blue-500" />
+                            <span>Фотография объекта (Миниатюра и полный размер)</span>
+                          </label>
+                          {objPhotoUrl && (
+                            <button
+                              type="button"
+                              onClick={() => setObjPhotoUrl("")}
+                              className="text-[11px] text-rose-500 hover:text-rose-600 font-bold flex items-center gap-1 cursor-pointer"
+                              title="Удалить прикрепленную фотографию"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Удалить</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {objPhotoUrl ? (
+                          <div className="flex items-center gap-3 p-2 bg-white dark:bg-zinc-900 rounded-xl border border-neutral-200 dark:border-zinc-750">
+                            {/* Thumbnail preview */}
+                            <div 
+                              onClick={() => setLightboxPhoto({ url: objPhotoUrl, title: objName || "Объект", address: objAddress })}
+                              className="w-20 h-20 rounded-lg overflow-hidden border border-neutral-200 dark:border-zinc-700 relative group cursor-pointer shadow-xs shrink-0"
+                              title="Нажмите для полноразмерного просмотра"
+                            >
+                              <img 
+                                src={objPhotoUrl} 
+                                alt="Превью объекта" 
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                              />
+                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                                <Maximize2 className="w-4 h-4" />
+                              </div>
+                            </div>
+
+                            <div className="flex-1 min-w-0 space-y-1.5 text-xs">
+                              <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold text-[11px]">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>Фотография прикреплена</span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setLightboxPhoto({ url: objPhotoUrl, title: objName || "Объект", address: objAddress })}
+                                  className="px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/40 dark:hover:bg-blue-900/60 text-blue-600 dark:text-blue-400 font-bold text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
+                                >
+                                  <ZoomIn className="w-3 h-3" />
+                                  <span>Раскрыть на весь экран</span>
+                                </button>
+                                <label className="px-2.5 py-1 rounded-lg border border-neutral-200 dark:border-zinc-700 hover:bg-neutral-100 dark:hover:bg-zinc-800 text-neutral-700 dark:text-neutral-300 font-bold text-[11px] flex items-center gap-1 transition-colors cursor-pointer">
+                                  <Camera className="w-3 h-3 text-neutral-500" />
+                                  <span>Заменить...</span>
+                                  <input 
+                                    type="file" 
+                                    accept="image/*" 
+                                    onChange={handlePhotoFileChange} 
+                                    className="hidden" 
+                                  />
+                                </label>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {/* File Upload Drop Area */}
+                            <label className="border-2 border-dashed border-neutral-300 dark:border-zinc-700 hover:border-blue-500 dark:hover:border-blue-400 rounded-xl p-3.5 flex flex-col items-center justify-center gap-1.5 cursor-pointer bg-white/50 dark:bg-zinc-900/40 hover:bg-blue-50/20 transition-all text-center group">
+                              <Camera className="w-6 h-6 text-neutral-400 group-hover:text-blue-500 transition-colors" />
+                              <div className="text-xs font-bold text-neutral-700 dark:text-neutral-300">
+                                <span>Нажмите для выбора фото с устройства</span>
+                              </div>
+                              <span className="text-[10px] text-neutral-400">
+                                PNG, JPG, WEBP до 5 МБ (сохраняется в миниатюре и для полноразмерного просмотра)
+                              </span>
+                              <input 
+                                type="file" 
+                                accept="image/*" 
+                                onChange={handlePhotoFileChange} 
+                                className="hidden" 
+                              />
+                            </label>
+
+                            {/* Or enter Direct URL */}
+                            <div className="flex items-center gap-2 pt-0.5">
+                              <span className="text-[10px] uppercase font-bold text-neutral-400 shrink-0">Или URL:</span>
+                              <input 
+                                type="url"
+                                value={objPhotoUrl}
+                                onChange={(e) => setObjPhotoUrl(e.target.value)}
+                                placeholder="https://images.unsplash.com/photo-..."
+                                className="flex-1 px-2.5 py-1 text-xs rounded-lg border border-neutral-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-neutral-800 dark:text-neutral-100 placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                              />
+                            </div>
+                          </div>
+                        )}
+                        {isUploadingPhoto && (
+                          <div className="text-[11px] text-blue-500 font-bold animate-pulse flex items-center gap-1">
+                            <span>Загрузка и обработка изображения...</span>
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex flex-col gap-1">
@@ -10952,6 +11136,90 @@ export default function App() {
           }}
           onLogout={handleLogout}
         />
+      )}
+
+      {/* FULLSCREEN LIGHTBOX PHOTO MODAL */}
+      {lightboxPhoto && (
+        <div 
+          className="fixed inset-0 bg-black/90 backdrop-blur-md z-[999999] flex flex-col items-center justify-between p-3 sm:p-6 animate-fadeIn select-none"
+          onClick={() => setLightboxPhoto(null)}
+        >
+          {/* Top Bar with Title, Address, and Action Controls */}
+          <div 
+            className="w-full max-w-5xl flex items-center justify-between pb-3 text-white shrink-0 border-b border-white/10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <span className="p-2.5 rounded-xl bg-blue-600 text-white shadow-md">
+                <Building className="w-5 h-5" />
+              </span>
+              <div>
+                <h3 className="font-extrabold text-sm sm:text-base text-white truncate max-w-sm sm:max-w-md">
+                  {lightboxPhoto.title}
+                </h3>
+                {lightboxPhoto.address && (
+                  <p className="text-xs text-neutral-300 truncate max-w-sm sm:max-w-md">
+                    📍 {lightboxPhoto.address}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <a
+                href={lightboxPhoto.url}
+                target="_blank"
+                rel="noreferrer"
+                download={`object-${lightboxPhoto.title}.jpg`}
+                className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                title="Открыть оригинал в новой вкладке"
+              >
+                <Download className="w-4 h-4" />
+                <span className="hidden sm:inline">Скачать фото</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => setLightboxPhoto(null)}
+                className="p-2 rounded-xl bg-white/10 hover:bg-rose-600 text-white transition-colors cursor-pointer"
+                title="Закрыть полноразмерный просмотр (ESC)"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Central High-Resolution Image Container */}
+          <div 
+            className="flex-1 flex items-center justify-center max-w-5xl w-full p-2 sm:p-4 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img 
+              src={lightboxPhoto.url} 
+              alt={lightboxPhoto.title}
+              className="max-h-[75vh] max-w-full object-contain rounded-2xl shadow-2xl border border-white/20 animate-scaleUp"
+            />
+          </div>
+
+          {/* Bottom Caption and Guidance */}
+          <div 
+            className="text-center pt-2 text-xs text-neutral-400 shrink-0 border-t border-white/10 w-full max-w-5xl flex items-center justify-between"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="hidden sm:inline text-neutral-500">
+              Визуальный паспорт объекта капитального строительства
+            </span>
+            <span className="text-[11px] text-neutral-300 mx-auto sm:mx-0">
+              Нажмите в любую свободную область экрана или клавишу <strong>ESC</strong> для закрытия
+            </span>
+            <button
+              type="button"
+              onClick={() => setLightboxPhoto(null)}
+              className="px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold"
+            >
+              Закрыть
+            </button>
+          </div>
+        </div>
       )}
 
     </div>

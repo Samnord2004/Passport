@@ -67,6 +67,7 @@ export interface BuildingObject {
   familyAccessList?: FamilyMemberAccess[]; // Family and Manager access
   hideOwnerContactsFromSpecialists?: boolean; // Скрыть контакты собственника от специалистов ТО
   createdAt?: string; // Дата создания / регистрации объекта (ISO)
+  photoUrl?: string; // Фотография объекта (URL или Data URL) для миниатюр и полноразмерного просмотра
 }
 
 export interface ScheduleItem {

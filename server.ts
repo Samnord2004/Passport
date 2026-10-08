@@ -839,7 +839,8 @@ app.post("/api/objects", objectValidators, async (req, res) => {
     yandexDiskUrl: req.body.yandexDiskUrl || "",
     allowedSpecialistIds: req.body.allowedSpecialistIds || [],
     objectType: req.body.objectType || "other",
-    createdAt: req.body.createdAt || new Date().toISOString()
+    createdAt: req.body.createdAt || new Date().toISOString(),
+    photoUrl: req.body.photoUrl || ""
   };
   await dbStore.addObject(newObj);
 
