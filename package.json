@@ -7,6 +7,11 @@
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node server.ts",
+    "start:prod": "node dist/server.cjs",
+    "tunnel": "npx --yes localtunnel --port 5000",
+    "tunnel:cloudflared": "cloudflared tunnel --url http://localhost:5000",
+    "tunnel:localtunnel": "npx --yes localtunnel --port 5000",
+    "tunnel:ngrok": "ngrok http 5000",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
   },

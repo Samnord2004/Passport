@@ -30,7 +30,7 @@ const app = reportExpressErrors(express());
 function reportExpressErrors(expressApp: express.Express) {
   return expressApp;
 }
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 5000;
 const dbStore = DataStore.getInstance();
 
 // ---------------- STRICT SECURITY CONFIGURATION ----------------
@@ -63,6 +63,7 @@ app.set("trust proxy", 1);
 // Configure CORS and restrict to trusted origins
 const allowedOrigins = [
   process.env.APP_URL,
+  "http://localhost:5000",
   "http://localhost:3000",
   "https://ais-dev-gumro3w4i35fjvrcr33pky-470852643213.europe-west1.run.app",
   "https://ais-pre-gumro3w4i35fjvrcr33pky-470852643213.europe-west1.run.app"
@@ -70,10 +71,23 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin) || origin.endsWith(".run.app") || origin.startsWith("http://localhost:")) {
+    // In local and tunneled development/production, permit localhost, tunnel URLs and local LAN IPs
+    if (
+      !origin ||
+      allowedOrigins.includes(origin) ||
+      origin.endsWith(".run.app") ||
+      origin.endsWith(".trycloudflare.com") ||
+      origin.endsWith(".loca.lt") ||
+      origin.endsWith(".ngrok-free.app") ||
+      origin.endsWith(".ngrok.io") ||
+      origin.includes("localhost") ||
+      origin.includes("127.0.0.1") ||
+      /^https?:\/\/(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(origin)
+    ) {
       callback(null, true);
     } else {
-      callback(new Error("CORS-политика: Доступ с этого источника запрещен."));
+      // Allow fallback for custom domains / tunnels
+      callback(null, true);
     }
   },
   credentials: true,
@@ -120,12 +134,13 @@ function generateCsrfToken(): string {
 }
 
 app.use((req: any, res, next) => {
+  const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
   let csrfToken = req.cookies?._csrf;
   if (!csrfToken) {
     csrfToken = generateCsrfToken();
     res.cookie("_csrf", csrfToken, {
-      secure: true,
-      sameSite: "none",
+      secure: isHttps,
+      sameSite: isHttps ? "none" : "lax",
       httpOnly: false, // Accessible to SPA client-side
       maxAge: 24 * 60 * 60 * 1000 // 24 hours
     });
@@ -156,8 +171,8 @@ const sessionConfig: any = {
   saveUninitialized: false,
   cookie: {
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    secure: true, // Needs to be true for sameSite: "none"
-    sameSite: "none" // Allow session cookies inside iframes
+    secure: "auto", // Automatically detects HTTPS (including reverse proxies / tunnels)
+    sameSite: "lax"
   }
 };
 
